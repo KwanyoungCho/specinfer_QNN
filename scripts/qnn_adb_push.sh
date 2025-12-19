@@ -1,0 +1,1 @@
+adb push build-android/bin/llama-simple-qnn /data/local/tmp/chokwans99/executorch/QNN_test
