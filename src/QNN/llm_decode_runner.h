@@ -117,6 +117,8 @@ class LLMDecodeRunner {
   int prefill_cache_len_;
   int kv_cache_len_;
   int layers_per_shard_;        // For multi-context: n_layers / num_shards
+  int32_t n_past_;               // Internal position tracking for qnn_decode
+  bool prefill_done_;             // Flag to track prefill→decode transition
   
   // KV cache
   std::unique_ptr<LLMKVCacheManager> kv_manager_;
@@ -166,16 +168,17 @@ class LLMDecodeRunner {
                        int32_t& token_out,
                        llama_context * llama_ctx = nullptr);
   
-  // Multi-context execution
-  bool run_multi_context_prefill(const std::vector<int32_t>& tokens,
-                                 int32_t& next_token,
-                                 int32_t& n_update,
-                                 llama_context * llama_ctx = nullptr);
+  // Multi-context execution (llama_batch interface)
+  bool run_multi_context_prefill(llama_context * ctx, llama_batch batch);
+  bool run_multi_context_decode_step(llama_context * ctx, llama_batch batch);
   
-  bool run_multi_context_decode_step(int32_t token_in,
-                                     int32_t n_past,
-                                     int32_t& token_out,
-                                     llama_context * llama_ctx = nullptr);
+  /**
+   * @brief llama_decode-compatible interface for QNN execution
+   * @param ctx llama_context for logits injection
+   * @param batch llama_batch containing tokens to process
+   * @return 0 on success, non-zero on failure (matches llama_decode semantics)
+   */
+  int qnn_decode(llama_context * ctx, llama_batch batch);
 
  private:
   // Shard execution helpers

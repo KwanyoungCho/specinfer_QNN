@@ -22,7 +22,9 @@ LLMDecodeRunner::LLMDecodeRunner(const LLMDecodeConfig& config)
       kv_ar_len_(0),
       prefill_cache_len_(0),
       kv_cache_len_(0),
-      layers_per_shard_(0) {
+      layers_per_shard_(0),
+      n_past_(0),
+      prefill_done_(false) {
 }
 
 LLMDecodeRunner::~LLMDecodeRunner() = default;

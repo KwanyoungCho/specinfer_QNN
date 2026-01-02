@@ -123,8 +123,6 @@ int main(int argc, char ** argv) {
 
     // If QNN is enabled, run generation via QNN using prompt_tokens
     if (params.use_qnn) {
-        std::vector<int32_t> prompt_ids(prompt_tokens.begin(), prompt_tokens.end());
-
         const auto t_init_start = ggml_time_us();
         llama_qnn::LLMDecodeRunner runner(qnn_config);
         if (!runner.initialize()) {
@@ -137,18 +135,16 @@ int main(int argc, char ** argv) {
         const auto t_init_end = ggml_time_us();
         printf("[QNN] Initialize time: %f ms\n", (t_init_end - t_init_start) / 1000.0); 
 
-        // QNN Prefill: run once on the full prompt, write logits into llama ctx
+        // QNN Prefill: use qnn_decode with batch (same interface as llama_decode)
         const auto t_inference_start = ggml_time_us();
-        int32_t next_token = 0;
-        int32_t n_update = 0;
-        if (qnn_config.use_multi_context) { // [TODO] multi-context / single-context 합치기
-            if(!runner.run_multi_context_prefill(prompt_ids, next_token, n_update, ctx)) {
-                printf("[QNN] run_multi_context_prefill failed!!!");
-            }
-        } else {
-            if(!runner.run_prefill(prompt_ids, next_token, n_update, ctx)) {
-                printf("[QNN] run_prefill failed!!!");
-            }
+        llama_batch prefill_batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
+        
+        if (runner.qnn_decode(ctx, prefill_batch)) {
+            fprintf(stderr, "[QNN] qnn_decode (prefill) failed: %s\n", runner.get_error().c_str());
+            llama_sampler_free(smpl);
+            llama_free(ctx);
+            llama_model_free(model);
+            return 1;
         }
         const auto t_inference_end = ggml_time_us();
         printf("[QNN] Prefill time: %f ms\n", (t_inference_end - t_inference_start) / 1000.0);
@@ -172,23 +168,16 @@ int main(int argc, char ** argv) {
             fflush(stdout);
         }
 
-        // Decode loop using QNN for logits and llama sampler for sampling
-        int32_t n_past = n_update;
+        // Decode loop using qnn_decode with batch (same interface as llama_decode)
         int n_decode_qnn = 1;
 
         for (int i = 0; i < n_predict - 1; ++i) {
-            int32_t token_out = 0;
-
-            if (qnn_config.use_multi_context) {
-                if (!runner.run_multi_context_decode_step(cur_token, n_past, token_out, ctx)) {
-                    printf("[QNN] run_multi_context_decode_step failed!!!");
-                    break;
-                }
-            } else {
-                if (!runner.run_decode_step(cur_token, n_past, token_out, ctx)) {
-                    printf("[QNN] run_decode_step failed!!!");
-                    break;
-                }
+            // Create batch with single token (same as llama_decode usage)
+            llama_batch decode_batch = llama_batch_get_one(&cur_token, 1);
+            
+            if (runner.qnn_decode(ctx, decode_batch)) {
+                fprintf(stderr, "[QNN] qnn_decode (decode) failed: %s\n", runner.get_error().c_str());
+                break;
             }
 
             // sample next token from llama sampler using QNN-provided logits
@@ -211,7 +200,6 @@ int main(int argc, char ** argv) {
             printf("%s", s.c_str());
             fflush(stdout);
 
-            n_past += 1;
             n_decode_qnn += 1;
         }
 

@@ -400,10 +400,13 @@ bool LLMDecodeRunner::allocate_shared_buffers() {
   return true;
 }
 
-bool LLMDecodeRunner::run_multi_context_prefill(const std::vector<int32_t>& tokens,
-                                                int32_t& next_token,
-                                                int32_t& n_update,
-                                                llama_context * llama_ctx) {
+bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch batch) {
+  // Extract tokens from batch
+  std::vector<int32_t> tokens(batch.n_tokens);
+  for (int i = 0; i < batch.n_tokens; ++i) {
+    tokens[i] = batch.token[i];
+  }
+  
   if (config_.log_level >= 1) {
     std::cout << "[Multi-Context Prefill] Starting with " << tokens.size() << " tokens\n";
   }
@@ -628,8 +631,8 @@ bool LLMDecodeRunner::run_multi_context_prefill(const std::vector<int32_t>& toke
 
   size_t last_token_offset = (size_t) last_token_index * (size_t) vocab_size;
 
-  // Calculate n_update: total tokens processed (not just last chunk)
-  n_update = num_tokens;
+  // Update n_past_: total tokens processed
+  n_past_ = num_tokens;
   
   // // Original greedy argmax on uint16_t logits
   // uint16_t max_val = logits_u16[last_token_offset];
@@ -642,7 +645,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(const std::vector<int32_t>& toke
   // }
 
   // Inject logits into llama_context for external sampling if provided
-  if (llama_ctx != nullptr) {
+  if (ctx != nullptr) {
     std::vector<float> last_row_f32(vocab_size);
 
     // Use quantization parameters if they are sane; otherwise fall back to simple cast
@@ -655,26 +658,32 @@ bool LLMDecodeRunner::run_multi_context_prefill(const std::vector<int32_t>& toke
       last_row_f32[i] = (q + offset) * scale;
     }
 
-    llama_set_logits_external(llama_ctx, last_row_f32.data(), 1);
+    llama_set_logits_external(ctx, last_row_f32.data(), 1);
   }
-  
-  if (config_.log_level >= 2) {
-    std::cout << "[Multi-Context Prefill] Next token: " << next_token << "\n";
-  }
-  
-  // Rearrange cache: 480 → 511
-  kv_manager_->rearrange_cache(prefill_ar_len_, kv_ar_len_);
   
   return true;
 }
 
-bool LLMDecodeRunner::run_multi_context_decode_step(int32_t token_in,
-                                                    int32_t n_past,
-                                                    int32_t& token_out,
-                                                    llama_context * llama_ctx) {
+bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_batch batch) {
+  // Extract token from batch
+  if (batch.n_tokens != 1) {
+    error_msg_ = "Decode step expects exactly 1 token in batch";
+    return false;
+  }
+  int32_t token_in = batch.token[0];
+  
+  // Rearrange cache on first decode (prefill→decode transition)
+  if (!prefill_done_) {
+    if (config_.log_level >= 1) {
+      std::cout << "[Multi-Context Decode] First decode - rearranging cache\n";
+    }
+    kv_manager_->rearrange_cache(prefill_ar_len_, kv_ar_len_);
+    prefill_done_ = true;
+  }
+  
   if (config_.log_level >= 2) {
     std::cout << "[Multi-Context Decode] Step: token=" << token_in 
-              << ", n_past=" << n_past << "\n";
+              << ", n_past=" << n_past_ << "\n";
   }
   
   // Prepare shard 0 inputs: token, position, attention_mask
@@ -697,9 +706,9 @@ bool LLMDecodeRunner::run_multi_context_decode_step(int32_t token_in,
     }
     // Position
     else if (name_lower.find("pos") != std::string::npos && t.data_type.find("INT_32") != std::string::npos) {
-      std::memcpy(it->second, &n_past, sizeof(int32_t));
+      std::memcpy(it->second, &n_past_, sizeof(int32_t));
       if (config_.log_level >= 2) {
-        std::cout << "[Decode Shard 0] Position filled: " << n_past << "\n";
+        std::cout << "[Decode Shard 0] Position filled: " << n_past_ << "\n";
       }
     }
     // Attention mask
@@ -707,15 +716,15 @@ bool LLMDecodeRunner::run_multi_context_decode_step(int32_t token_in,
       uint16_t* attn_mask = reinterpret_cast<uint16_t*>(it->second);
       std::memset(attn_mask, 0, context_len_ * sizeof(uint16_t));
       
-      // Attend to past tokens [0..n_past-1]
-      for (int32_t i = 0; i < n_past; ++i) {
+      // Attend to past tokens [0..n_past_-1]
+      for (int32_t i = 0; i < n_past_; ++i) {
         attn_mask[i] = 65535;
       }
       // Attend to current token (last position in rearranged cache)
       attn_mask[context_len_ - 1] = 65535;
       
       if (config_.log_level >= 2) {
-        std::cout << "[Decode Shard 0] Attention mask: attend to [0, " << (n_past - 1) << "] and [" << (context_len_ - 1) << "] (" << (n_past + 1) << " tokens)\n";
+        std::cout << "[Decode Shard 0] Attention mask: attend to [0, " << (n_past_ - 1) << "] and [" << (context_len_ - 1) << "] (" << (n_past_ + 1) << " tokens)\n";
       }
       
       // Also copy to shared buffer for other shards
@@ -728,7 +737,7 @@ bool LLMDecodeRunner::run_multi_context_decode_step(int32_t token_in,
     if (config_.log_level >= 2) {
       std::cout << "[Multi-Context Decode] Running shard " << shard_idx << "...\n";
     }
-    if (!run_shard_decode(shard_idx, n_past)) {
+    if (!run_shard_decode(shard_idx, n_past_)) {
       return false;
     }
     if (config_.log_level >= 2) {
@@ -739,7 +748,7 @@ bool LLMDecodeRunner::run_multi_context_decode_step(int32_t token_in,
   // Update KV cache: copy decode outputs to inputs for next step
   // Manual memcpy (exactly like single-context)
   if (config_.log_level >= 2) {
-    std::cout << "[Multi-Context Decode] Updating KV cache at position " << n_past << "...\n";
+    std::cout << "[Multi-Context Decode] Updating KV cache at position " << n_past_ << "...\n";
   }
   
   int total_v_updated = 0, total_k_updated = 0;
@@ -773,7 +782,7 @@ bool LLMDecodeRunner::run_multi_context_decode_step(int32_t token_in,
       
       const auto& v_buf = kv_manager_->get_v_cache(global_layer, head);
       uint8_t* src = reinterpret_cast<uint8_t*>(v_outputs[i]);
-      uint8_t* dst = reinterpret_cast<uint8_t*>(v_buf.input_buffer) + n_past * head_dim_;
+      uint8_t* dst = reinterpret_cast<uint8_t*>(v_buf.input_buffer) + n_past_ * head_dim_;
       std::memcpy(dst, src, 1 * head_dim_);
       total_v_updated++;
     }
@@ -788,7 +797,7 @@ bool LLMDecodeRunner::run_multi_context_decode_step(int32_t token_in,
       
       const auto& k_buf = kv_manager_->get_k_cache(global_layer, head);
       uint8_t* src = reinterpret_cast<uint8_t*>(k_outputs[i]);
-      uint8_t* dst = reinterpret_cast<uint8_t*>(k_buf.input_buffer) + n_past;
+      uint8_t* dst = reinterpret_cast<uint8_t*>(k_buf.input_buffer) + n_past_;
       
       // K cache: copy with stride (transposed layout)
       for (int32_t dim = 0; dim < head_dim_; ++dim) {
@@ -891,24 +900,23 @@ bool LLMDecodeRunner::run_multi_context_decode_step(int32_t token_in,
   // }
 
   // Inject logits into llama_context for external sampling if provided
-  if (llama_ctx != nullptr) {
+  if (ctx != nullptr) {
     std::vector<float> row_f32(vocab_size);
 
     float scale = logits_desc->quant_scale;
     int32_t offset = logits_desc->quant_offset;
     GGML_ASSERT(scale != 0.0f && "Quantization scale should not be zero");
-    // if (scale == 0.0f) {
-    //   scale  = 1.0f;
-    //   offset = 0;
-    // }
 
     for (int32_t i = 0; i < vocab_size; ++i) {
       float q = (float) logits_u16[i];
       row_f32[i] = (q + offset) * scale;
     }
 
-    llama_set_logits_external(llama_ctx, row_f32.data(), 1);
+    llama_set_logits_external(ctx, row_f32.data(), 1);
   }
+  
+  // Update n_past_ for next decode step
+  n_past_ += 1;
   
   return true;
 }
@@ -1310,6 +1318,53 @@ bool LLMDecodeRunner::run_shard_decode(int shard_idx,
   }
   
   return true;
+}
+
+int LLMDecodeRunner::qnn_decode(llama_context * ctx, llama_batch batch) {
+  if (batch.n_tokens <= 0) {
+    error_msg_ = "Empty batch";
+    return -1;
+  }
+  
+  bool is_prefill = (batch.n_tokens > 1);
+  
+  if (is_prefill) {
+    // Prefill: process all tokens (n_past_ updated inside)
+    if (config_.use_multi_context) {
+      if (!run_multi_context_prefill(ctx, batch)) {
+        return -1;
+      }
+    } else {
+      // Single-context fallback (legacy interface)
+      std::vector<int32_t> tokens(batch.n_tokens);
+      for (int i = 0; i < batch.n_tokens; ++i) {
+        tokens[i] = batch.token[i];
+      }
+      int32_t next_token = 0;
+      int32_t n_update = 0;
+      if (!run_prefill(tokens, next_token, n_update, ctx)) {
+        return -1;
+      }
+      n_past_ = n_update;
+    }
+  } else {
+    // Decode: single token step (n_past_ updated inside)
+    if (config_.use_multi_context) {
+      if (!run_multi_context_decode_step(ctx, batch)) {
+        return -1;
+      }
+    } else {
+      // Single-context fallback (legacy interface)
+      int32_t token_out = 0;
+      int32_t token_in = batch.token[0];
+      if (!run_decode_step(token_in, n_past_, token_out, ctx)) {
+        return -1;
+      }
+      n_past_ += 1;
+    }
+  }
+  
+  return 0;  // Success (matches llama_decode return semantics)
 }
 
 } // namespace llama_qnn
