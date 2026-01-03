@@ -367,7 +367,8 @@ bool QnnLoader::enable_htp_performance_mode() {
       return false;
   }
   
-  std::cout << "HTP Performance Mode Enabled (Burst + RPC Polling)\n";
+
+  // std::cout << "HTP Performance Mode Enabled (Burst + RPC Polling)\n";
   return true;
 }
 

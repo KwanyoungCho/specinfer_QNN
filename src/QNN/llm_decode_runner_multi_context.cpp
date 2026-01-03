@@ -48,13 +48,14 @@ bool LLMDecodeRunner::load_multi_context_graphs() { // [spagetti] blob 고려 / 
       
       bool ctx_exists = ctx_test.good();
       bool json_exists = json_test.good();
-      
-      std::cout << "[Multi-Context] Shard " << i << ": "
-                << "bin=" << (ctx_exists ? "✓" : "✗") << " "
-                << "json=" << (json_exists ? "✓" : "✗");
+      if (config_.log_level >= 2) {
+        std::cout << "[Multi-Context] Shard " << i << ": "
+                  << "bin=" << (ctx_exists ? "✓" : "✗") << " "
+                  << "json=" << (json_exists ? "✓" : "✗");
+      }
       
       if (!ctx_exists || !json_exists) {
-        std::cout << " → stopping\n";
+        // std::cout << " → stopping\n";
         if (i == 0) {
           std::cout << "[Multi-Context] ⚠ No shards found! Tried:\n"
                     << "  " << ctx_file << "\n"
@@ -63,7 +64,7 @@ bool LLMDecodeRunner::load_multi_context_graphs() { // [spagetti] blob 고려 / 
         break;  // No more shards found
       }
       
-      std::cout << " → found\n";
+      // std::cout << " → found\n";
       context_files.push_back(ctx_file);
       json_files.push_back(json_file);
     }
@@ -95,13 +96,13 @@ bool LLMDecodeRunner::load_multi_context_graphs() { // [spagetti] blob 고려 / 
     }
   }
   
-  if (config_.log_level >= 1) {
+  if (config_.log_level >= 2) {
     std::cout << "[Multi-Context] Found " << config_.num_shards << " shards\n";
   }
   
   // Load each shard ONE BY ONE (메모리 절약: 읽기→생성→해제 반복)
   for (int i = 0; i < config_.num_shards; ++i) {
-    if (config_.log_level >= 1) {
+    if (config_.log_level >= 2) {
       std::cout << "[Graphs] Shard " << i << ": loading...\n";
     }
     
@@ -128,7 +129,7 @@ bool LLMDecodeRunner::load_multi_context_graphs() { // [spagetti] blob 고려 / 
       return false;
     }
     
-    if (config_.log_level >= 1) {
+    if (config_.log_level >= 2) {
       std::cout << "[Graphs] Shard " << i << ": context created\n";
     }
     
@@ -245,7 +246,7 @@ bool LLMDecodeRunner::extract_multi_context_metadata() {
   prefill_cache_len_ = context_len_ - prefill_ar_len_;
   kv_cache_len_ = context_len_ - kv_ar_len_;
   
-  if (config_.log_level >= 1) {
+  if (config_.log_level >= 2) {
     std::cout << "[Multi-Context Metadata]\n";
     std::cout << "  context_len=" << context_len_ << ", prefill_ar=" << prefill_ar_len_
               << ", kv_ar=" << kv_ar_len_ << "\n";
@@ -407,7 +408,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     tokens[i] = batch.token[i];
   }
   
-  if (config_.log_level >= 1) {
+  if (config_.log_level >= 2) {
     std::cout << "[Multi-Context Prefill] Starting with " << tokens.size() << " tokens\n";
   }
   
@@ -416,7 +417,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
   uint16_t* attn_mask = reinterpret_cast<uint16_t*>(shared_buffer_views_["attention_mask"]);
 
 
-  if (config_.log_level >= 1) {
+  if (config_.log_level >= 2) {
     std::cout << "[Multi-Context Prefill] Input tokens:\n";
     for (size_t i = 0; i < tokens.size(); ++i) {
       std::cout << "  token[" << i << "] = " << tokens[i] << "\n";
@@ -674,7 +675,7 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
   
   // Rearrange cache on first decode (prefill→decode transition)
   if (!prefill_done_) {
-    if (config_.log_level >= 1) {
+    if (config_.log_level >= 2) {
       std::cout << "[Multi-Context Decode] First decode - rearranging cache\n";
     }
     kv_manager_->rearrange_cache(prefill_ar_len_, kv_ar_len_);
@@ -925,7 +926,7 @@ bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
                                          const std::vector<int32_t>& tokens,
                                          int32_t n_past,
                                          int32_t n_update) {
-  if (config_.log_level >= 1) {
+  if (config_.log_level >= 2) {
     std::cout << "[Shard " << shard_idx << " Prefill] Running...\n";
   }
   
@@ -1177,7 +1178,7 @@ bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
     std::cout << "[Shard " << shard_idx << "] Output copy completed\n";
   }
   
-  if (config_.log_level >= 1) {
+  if (config_.log_level >= 2) {
     std::cout << "[Shard " << shard_idx << " Prefill] ✓\n";
   }
   

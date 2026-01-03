@@ -61,7 +61,7 @@ bool LLMDecodeRunner::initialize() {
     }
   }
 
-  if (config_.log_level >= 1) {
+  if (config_.log_level >= 2) {
     std::cout << "[Init] QNN backend loaded\n";
     if (config_.use_multi_context) {
       std::cout << "[Init] Multi-context mode enabled (" << config_.num_shards << " shards)\n";
@@ -88,7 +88,7 @@ bool LLMDecodeRunner::initialize() {
     // Compute layers per shard for multi-context
     if (config_.use_multi_context && config_.num_shards > 0) {
       layers_per_shard_ = model_params_.n_layers / config_.num_shards;
-      if (config_.log_level >= 1) {
+      if (config_.log_level >= 2) {
         std::cout << "  layers_per_shard=" << layers_per_shard_ 
                   << " (" << model_params_.n_layers << " / " << config_.num_shards << ")\n";
       }

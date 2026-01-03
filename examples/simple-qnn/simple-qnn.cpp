@@ -165,11 +165,12 @@ int main(int argc, char ** argv) {
             }
             std::string s(buf, n);
             printf("%s", s.c_str());
-            fflush(stdout);
+            fflush(stdout); 
         }
 
         // Decode loop using qnn_decode with batch (same interface as llama_decode)
         int n_decode_qnn = 1;
+        const auto t_decode_start = ggml_time_us();
 
         for (int i = 0; i < n_predict - 1; ++i) {
             // Create batch with single token (same as llama_decode usage)
@@ -202,8 +203,36 @@ int main(int argc, char ** argv) {
 
             n_decode_qnn += 1;
         }
+        const auto t_decode_end = ggml_time_us();
 
-        printf("\n");
+        printf("\n\n");
+
+        // Calculate metrics
+        double init_time_ms = (t_init_end - t_init_start) / 1000.0;
+        double prefill_time_ms = (t_inference_end - t_inference_start) / 1000.0;
+        double decode_time_ms = (t_decode_end - t_decode_start) / 1000.0;
+        
+        int n_prefill_tokens = (int)prompt_tokens.size();
+        int n_decoded_tokens = n_decode_qnn;  // includes first token from prefill
+        
+        double prefill_tps = (prefill_time_ms > 0) ? (n_prefill_tokens / (prefill_time_ms / 1000.0)) : 0;
+        double decode_tps = (decode_time_ms > 0) ? (n_decoded_tokens / (decode_time_ms / 1000.0)) : 0;
+        
+        // Print performance summary
+        fprintf(stderr, "╔══════════════════════════════════════════════════════════════╗\n");
+        fprintf(stderr, "║                    QNN Performance Summary                   ║\n");
+        fprintf(stderr, "╠══════════════════════════════════════════════════════════════╣\n");
+        fprintf(stderr, "║  Stage      │  Tokens  │  Latency (ms)  │  Throughput (t/s)  ║\n");
+        fprintf(stderr, "╠═════════════╪══════════╪════════════════╪════════════════════╣\n");
+        fprintf(stderr, "║  Init       │    -     │  %12.2f  │         -          ║\n", init_time_ms);
+        fprintf(stderr, "║  Prefill    │  %6d  │  %12.2f  │  %16.2f  ║\n", n_prefill_tokens, prefill_time_ms, prefill_tps);
+        fprintf(stderr, "║  Decode     │  %6d  │  %12.2f  │  %16.2f  ║\n", n_decoded_tokens, decode_time_ms, decode_tps);
+        fprintf(stderr, "╠═════════════╧══════════╧════════════════╧════════════════════╣\n");
+        fprintf(stderr, "║  Total      │  %6d  │  %12.2f  │  %16.2f  ║\n", 
+                n_prefill_tokens + n_decoded_tokens,
+                init_time_ms + prefill_time_ms + decode_time_ms,
+                (n_prefill_tokens + n_decoded_tokens) / ((prefill_time_ms + decode_time_ms) / 1000.0));
+        fprintf(stderr, "╚══════════════════════════════════════════════════════════════╝\n");
 
         llama_sampler_free(smpl);
         llama_free(ctx);
