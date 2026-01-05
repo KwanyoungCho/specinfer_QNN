@@ -6,9 +6,7 @@
 #include "io_alloc.h"
 #include "llm_kv_cache_manager.h"
 #include "llm_kv_cache_mapper.h"
-#include "llm_stats.h"
 #include "llm_output_processor.h"
-#include "tokenizer_llama.h"
 #include "model_params.h"
 #include "../llama-context.h"
 
@@ -54,23 +52,9 @@ class LLMDecodeRunner {
   bool initialize();
   
   /**
-   * @brief Run prefill + decode to generate text
-   * @param prompt Input prompt string
-   * @param output_text Generated text (output parameter)
-   * @return true on success
-   */
-  bool generate(const std::vector<int32_t>& prompt_tokens,
-                std::vector<int32_t>& generated_tokens);
-  
-  /**
    * @brief Get last error message
    */
   const std::string& get_error() const { return error_msg_; }
-  
-  /**
-   * @brief Get performance statistics
-   */
-  const LLMStats& get_stats() const { return stats_; }
   
  private:
   // Configuration
@@ -136,12 +120,6 @@ class LLMDecodeRunner {
   std::vector<std::unique_ptr<QnnTensorHolder>> prefill_output_holders_;
   std::vector<std::unique_ptr<QnnTensorHolder>> kv_input_holders_;
   std::vector<std::unique_ptr<QnnTensorHolder>> kv_output_holders_;
-  
-  // Tokenizer
-  std::unique_ptr<LlamaTokenizer> tokenizer_;
-  
-  // Performance statistics
-  LLMStats stats_;
   
   // Helper methods (single-context)
   bool load_graphs();

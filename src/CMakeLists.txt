@@ -150,7 +150,6 @@ add_library(qnn_core STATIC
             QNN/qnn_loader.cpp
             QNN/qnn_qnnjson.cpp
             QNN/qnn_tensor_util.cpp
-            QNN/tokenizer_llama.cpp
             )
 
 target_include_directories(qnn_core PUBLIC

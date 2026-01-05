@@ -104,19 +104,6 @@ int main(int argc, char ** argv) {
 
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
-    // print the prompt token-by-token
-
-    for (auto id : prompt_tokens) {
-        char buf[128];
-        int n = llama_token_to_piece(vocab, id, buf, sizeof(buf), 0, true);
-        if (n < 0) {
-            fprintf(stderr, "%s: error: failed to convert token to piece\n", __func__);
-            return 1;
-        }
-        std::string s(buf, n);
-        printf("%s", s.c_str());
-    }
-
     // prepare a batch for the prompt (used only for llama_decode path)
 
     llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
@@ -148,6 +135,18 @@ int main(int argc, char ** argv) {
         }
         const auto t_inference_end = ggml_time_us();
         printf("[QNN] Prefill time: %f ms\n", (t_inference_end - t_inference_start) / 1000.0);
+
+        // print the prompt token-by-token
+        for (auto id : prompt_tokens) {
+            char buf[128];
+            int n = llama_token_to_piece(vocab, id, buf, sizeof(buf), 0, true);
+            if (n < 0) {
+                fprintf(stderr, "%s: error: failed to convert token to piece\n", __func__);
+                return 1;
+            }
+            std::string s(buf, n);
+            printf("%s", s.c_str());
+        }
 
         // First token sampling using llama sampler on QNN-provided logits
         llama_token cur_token = llama_sampler_sample(smpl, ctx, -1);

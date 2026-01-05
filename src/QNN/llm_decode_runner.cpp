@@ -30,9 +30,6 @@ LLMDecodeRunner::LLMDecodeRunner(const LLMDecodeConfig& config)
 LLMDecodeRunner::~LLMDecodeRunner() = default;
 
 bool LLMDecodeRunner::initialize() {
-  // Track model load time
-  stats_.model_load_start_ms = time_in_ms();
-  
   // 1. Load QNN backend
   loader_.reset(new QnnLoader());
   
@@ -117,20 +114,8 @@ bool LLMDecodeRunner::initialize() {
     if (!setup_io_allocators()) return false;
   }
   
-  // 6. Load tokenizer
-  tokenizer_.reset(new LlamaTokenizer());
-  if (!tokenizer_->init(config_.tokenizer_path.c_str())) {
-    error_msg_ = "Failed to load tokenizer";
-    return false;
-  }
-  
-  // Track model load end time
-  stats_.model_load_end_ms = time_in_ms();
-  
   if (config_.log_level >= 1) {
     std::cout << "[Init] All components initialized successfully\n";
-    double load_time_s = (stats_.model_load_end_ms - stats_.model_load_start_ms) / 1000.0;
-    std::cout << "[Init] Model load time: " << load_time_s << " seconds\n";
   }
   
   return true;
@@ -380,129 +365,6 @@ bool LLMDecodeRunner::setup_io_allocators() {
   
   return true;
 }
-
-// bool LLMDecodeRunner::generate(const std::vector<int32_t>& prompt_tokens, // will be deprecated
-//                                std::vector<int32_t>& generated_tokens) {
-//   // Start inference timing
-//   stats_.inference_start_ms = time_in_ms();
-  
-//   // 1. Tokenize prompt (no special tokens, no chat template - same as qnn_decode_main)
-//   // auto tokens = tokenizer_->encode(prompt, false, false); // [spagetti] 토크나이저가 느릴 가능성은? - 별로 안중요
-//   // if (tokens.empty()) {
-//   //   error_msg_ = "Failed to tokenize prompt";
-//   //   return false;
-//   // }
-
-//   std::vector<int32_t> tokens = prompt_tokens;
-  
-//   stats_.num_prompt_tokens = tokens.size();
-  
-//   // if (config_.log_level >= 1) {
-//   //   std::cout << "\n[Generate] Prompt: \"" << prompt << "\"\n";
-//   //   std::cout << "[Generate] Tokens: " << tokens.size() << "\n";
-//   // }
-  
-//   // 3. Run prefill (choose single vs multi-context)
-//   int32_t next_token = 0;
-//   int32_t n_update = 0;
-//   if (config_.use_multi_context) {
-//     if (!run_multi_context_prefill(tokens, next_token, n_update)) {
-//       return false;
-//     }
-//   } else {
-//     if (!run_prefill(tokens, next_token, n_update)) {
-//       return false;
-//     }
-//   }
-  
-//   // Mark prefill end (TTFT)
-//   stats_.prompt_eval_end_ms = time_in_ms();
-//   stats_.first_token_ms = stats_.prompt_eval_end_ms;
-  
-//   // 4. Decode first token
-//   std::string decoded = tokenizer_->decode({next_token});
-//   // output_text = decoded;
-  
-//   if (config_.log_level >= 1) {
-//     std::cout << "[Prefill] Next token: " << next_token
-//               << " → \"" << decoded << "\"\n";
-//     double ttft_s = (stats_.first_token_ms - stats_.inference_start_ms) / 1000.0;
-//     std::cout << "[Prefill] TTFT: " << ttft_s << " seconds\n";
-//   }
-  
-//   tokens.push_back(next_token);
-//   stats_.num_generated_tokens = 1;
-  
-//   // 4. Rearrange cache for decode (single-context only, multi-context does it internally)
-//   if (!config_.use_multi_context) {
-//     if (config_.log_level >= 1) {
-//       std::cout << "\n[Rearrange] Expanding KV cache: "
-//                 << prefill_cache_len_ << " → " << kv_cache_len_ << "\n";
-//     }
-//     kv_manager_->rearrange_cache(prefill_ar_len_, kv_ar_len_);
-//   }
-  
-//   // 5. Decode loop
-//   if (config_.log_level >= 1) {
-//     std::cout << "\n[Decode] Generating up to " << config_.max_gen_tokens
-//               << " tokens...\n";
-//     std::cout << "[Output] " << decoded;
-//     std::cout.flush();
-//   }
-  
-//   int32_t initial_tokens = n_update;
-  
-//   for (int gen_idx = 0; gen_idx < config_.max_gen_tokens - 1; ++gen_idx) {
-//     int32_t n_past = initial_tokens + gen_idx;
-//     int32_t token_out = 0;
-    
-//     // Run decode step (choose single vs multi-context)
-//     if (config_.use_multi_context) {
-//       if (!run_multi_context_decode_step(next_token, n_past, token_out)) {
-//         return false;
-//       }
-//     } else {
-//       if (!run_decode_step(next_token, n_past, token_out)) {
-//         return false;
-//       }
-//     }
-    
-//     // Check EOS
-//     if (token_out == 128001 || token_out == 128009) {
-//       if (config_.log_level >= 1) {
-//         std::cout << "\n[Decode] EOS token detected\n";
-//       }
-//       break;
-//     }
-    
-//     // Decode and append
-//     decoded = tokenizer_->decode({token_out});
-//     // output_text += decoded;
-    
-//     if (config_.log_level >= 1) {
-//       std::cout << decoded;
-//       std::cout.flush();
-//     }
-    
-//     next_token = token_out;
-//     tokens.push_back(token_out);
-//     stats_.num_generated_tokens++;
-//   }
-  
-//   // Mark inference end
-//   stats_.inference_end_ms = time_in_ms();
-  
-//   if (config_.log_level >= 1) {
-//     std::cout << "\n\n[Generate] Complete. Total tokens: " << tokens.size() << "\n";
-//   }
-  
-//   // Print performance report
-//   if (config_.log_level >= 1) {
-//     stats_.print_report();
-//   }
-  
-//   return true;
-// }
 
 bool LLMDecodeRunner::run_prefill(const std::vector<int32_t>& tokens,
                                    int32_t& next_token,
