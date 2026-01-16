@@ -169,16 +169,19 @@ int main(int argc, char ** argv) {
 
         // Decode loop using qnn_decode with batch (same interface as llama_decode)
         int n_decode_qnn = 1;
-        const auto t_decode_start = ggml_time_us();
+        int64_t total_decode_us = 0;  // Accumulate only decode time
 
         for (int i = 0; i < n_predict - 1; ++i) {
             // Create batch with single token (same as llama_decode usage)
             llama_batch decode_batch = llama_batch_get_one(&cur_token, 1);
             
+            // Measure only qnn_decode time
+            const auto t_decode_step_start = ggml_time_us();
             if (runner.qnn_decode(ctx, decode_batch)) {
                 fprintf(stderr, "[QNN] qnn_decode (decode) failed: %s\n", runner.get_error().c_str());
                 break;
             }
+            total_decode_us += (ggml_time_us() - t_decode_step_start);
 
             // sample next token from llama sampler using QNN-provided logits
             cur_token = llama_sampler_sample(smpl, ctx, -1);
@@ -202,14 +205,14 @@ int main(int argc, char ** argv) {
 
             n_decode_qnn += 1;
         }
-        const auto t_decode_end = ggml_time_us();
 
         printf("\n\n");
 
         // Calculate metrics
         double init_time_ms = (t_init_end - t_init_start) / 1000.0;
         double prefill_time_ms = (t_inference_end - t_inference_start) / 1000.0;
-        double decode_time_ms = (t_decode_end - t_decode_start) / 1000.0;
+        double decode_time_ms = total_decode_us / 1000.0;
+        double avg_decode_latency_ms = (n_decode_qnn > 1) ? (decode_time_ms / (n_decode_qnn - 1)) : 0;
         
         int n_prefill_tokens = (int)prompt_tokens.size();
         int n_decoded_tokens = n_decode_qnn;  // includes first token from prefill
@@ -226,6 +229,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "║  Init       │    -     │  %12.2f  │         -          ║\n", init_time_ms);
         fprintf(stderr, "║  Prefill    │  %6d  │  %12.2f  │  %16.2f  ║\n", n_prefill_tokens, prefill_time_ms, prefill_tps);
         fprintf(stderr, "║  Decode     │  %6d  │  %12.2f  │  %16.2f  ║\n", n_decoded_tokens, decode_time_ms, decode_tps);
+        fprintf(stderr, "║  (avg/tok)  │    -     │  %12.2f  │         -          ║\n", avg_decode_latency_ms);
         fprintf(stderr, "╠═════════════╧══════════╧════════════════╧════════════════════╣\n");
         fprintf(stderr, "║  Total      │  %6d  │  %12.2f  │  %16.2f  ║\n", 
                 n_prefill_tokens + n_decoded_tokens,

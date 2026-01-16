@@ -56,6 +56,28 @@ class LLMDecodeRunner {
    */
   const std::string& get_error() const { return error_msg_; }
   
+  // ========== KV Cache Metadata API (llama_memory_seq_* compatible) ==========
+  
+  /**
+   * @brief Remove seq_id from cells in range [p0, p1)
+   */
+  void kv_seq_rm(int32_t seq_id, int32_t p0, int32_t p1);
+  
+  /**
+   * @brief Keep only cells that have seq_id
+   */
+  void kv_seq_keep(int32_t seq_id);
+  
+  /**
+   * @brief Copy src_seq to dst_seq for cells in range [p0, p1)
+   */
+  void kv_seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int32_t p1);
+  
+  /**
+   * @brief Get KV manager (for advanced operations)
+   */
+  LLMKVCacheManager* get_kv_manager() { return kv_manager_.get(); }
+  
  private:
   // Configuration
   LLMDecodeConfig config_;

@@ -616,50 +616,42 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
   }
 
   // For prefill, logits are [batch=1, prefill_ar_len, vocab_size]
-  // We want the last token's logits from the last iteration
+  // For speculative decoding verification, we need ALL tokens' logits (not just the last)
   // If we processed 50 tokens with prefill_ar_len=32:
   //   - Iteration 1: tokens[0:32] (32 tokens)
   //   - Iteration 2: tokens[32:50] (18 tokens)
-  // The last iteration's output contains 18 tokens worth of logits,
-  // and we want the last one (index 17 in that chunk)
+  // The last iteration's output contains logits for tokens in that chunk
   int32_t last_chunk_size = ((num_tokens - 1) % prefill_ar_len_) + 1;
-  int32_t last_token_index = last_chunk_size - 1;
-
-  if (last_token_index < 0) {
-    error_msg_ = "Invalid last token index in multi-context prefill";
-    return false;
-  }
-
-  size_t last_token_offset = (size_t) last_token_index * (size_t) vocab_size;
 
   // Update n_past_: total tokens processed
   n_past_ = num_tokens;
   
-  // // Original greedy argmax on uint16_t logits
-  // uint16_t max_val = logits_u16[last_token_offset];
-  // next_token = 0;
-  // for (int32_t i = 1; i < vocab_size; ++i) {
-  //   if (logits_u16[last_token_offset + i] > max_val) {
-  //     max_val = logits_u16[last_token_offset + i];
-  //     next_token = i;
-  //   }
-  // }
+  // Update KV cell metadata (for speculative decoding)
+  // All prefill tokens belong to seq 0
+  kv_manager_->seq_add(0, num_tokens, 0);
 
-  // Inject logits into llama_context for external sampling if provided
+  // Inject ALL tokens' logits into llama_context for external sampling/verification
   if (ctx != nullptr) {
-    std::vector<float> last_row_f32(vocab_size);
-
-    // Use quantization parameters if they are sane; otherwise fall back to simple cast
     float scale = logits_desc->quant_scale;
     int32_t offset = logits_desc->quant_offset;
     GGML_ASSERT(scale != 0.0f && "Quantization scale should not be zero");
 
-    for (int32_t i = 0; i < vocab_size; ++i) {
-      float q = (float) logits_u16[last_token_offset + i];
-      last_row_f32[i] = (q + offset) * scale;
+    // Dequantize all tokens' logits from the last chunk
+    std::vector<float> all_logits_f32((size_t)last_chunk_size * (size_t)vocab_size);
+    
+    for (int32_t t = 0; t < last_chunk_size; ++t) {
+      size_t token_offset = (size_t)t * (size_t)vocab_size;
+      for (int32_t i = 0; i < vocab_size; ++i) {
+        float q = (float) logits_u16[token_offset + i];
+        all_logits_f32[token_offset + i] = (q + offset) * scale;
+      }
     }
 
-    llama_set_logits_external(ctx, last_row_f32.data(), 1);
+    llama_set_logits_external(ctx, all_logits_f32.data(), last_chunk_size);
+    
+    if (config_.log_level >= 2) {
+      std::cout << "[Multi-Context Prefill] Injected logits for " << last_chunk_size << " tokens\n";
+    }
   }
   
   return true;
@@ -915,6 +907,9 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
 
     llama_set_logits_external(ctx, row_f32.data(), 1);
   }
+  
+  // Update KV cell metadata for the new token
+  kv_manager_->seq_add(n_past_, 1, 0);  // seq_id=0 for auto-regressive
   
   // Update n_past_ for next decode step
   n_past_ += 1;
@@ -1319,6 +1314,26 @@ bool LLMDecodeRunner::run_shard_decode(int shard_idx,
   }
   
   return true;
+}
+
+// ========== KV Cache Metadata API Implementation (llama_memory_seq_* compatible) ==========
+
+void LLMDecodeRunner::kv_seq_rm(int32_t seq_id, int32_t p0, int32_t p1) {
+  if (kv_manager_) {
+    kv_manager_->seq_rm(seq_id, p0, p1);
+  }
+}
+
+void LLMDecodeRunner::kv_seq_keep(int32_t seq_id) {
+  if (kv_manager_) {
+    kv_manager_->seq_keep(seq_id);
+  }
+}
+
+void LLMDecodeRunner::kv_seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int32_t p1) {
+  if (kv_manager_) {
+    kv_manager_->seq_cp(src_seq, dst_seq, p0, p1);
+  }
 }
 
 int LLMDecodeRunner::qnn_decode(llama_context * ctx, llama_batch batch) {

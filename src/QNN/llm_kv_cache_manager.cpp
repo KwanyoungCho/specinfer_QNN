@@ -18,6 +18,10 @@ LLMKVCacheManager::LLMKVCacheManager(const Metadata & metadata) :
         k_cache_[layer].resize(metadata_.num_heads);
         v_cache_[layer].resize(metadata_.num_heads);
     }
+    
+    // Initialize cell metadata (for speculative decoding)
+    cell_meta_.resize(metadata_.context_len);
+    reset_cell_meta();
 
     // Calculate total memory requirement (SMART_MASK mode)
     // Each cache: input_buffer + output_buffer
@@ -323,6 +327,74 @@ void LLMKVCacheManager::rearrange_cache(int32_t src_ar_len, int32_t dst_ar_len) 
     // if (config_.log_level >= 2) {
     //     std::cout << "[LLMKVCacheManager] Rearrange complete\n";
     // }
+}
+
+// ========== KV Cell Metadata Implementation (llama_memory_seq_* compatible) ==========
+
+void LLMKVCacheManager::seq_rm(int32_t seq_id, int32_t p0, int32_t p1) {
+    if (seq_id < 0) return;
+    
+    int32_t start = (p0 == -1) ? 0 : p0;
+    int32_t end = (p1 == -1) ? (int32_t)cell_meta_.size() : p1;
+    
+    for (int32_t i = start; i < end && i < (int32_t)cell_meta_.size(); ++i) {
+        if (cell_meta_[i].pos != -1 && cell_meta_[i].seq.count(seq_id) > 0) {
+            cell_meta_[i].seq.erase(seq_id);
+            // If no sequences remain, mark cell as empty
+            if (cell_meta_[i].seq.empty()) {
+                cell_meta_[i].pos = -1;
+            }
+        }
+    }
+}
+
+void LLMKVCacheManager::seq_keep(int32_t seq_id) {
+    if (seq_id < 0) return;
+    
+    for (auto& cell : cell_meta_) {
+        if (cell.pos != -1) {
+            if (cell.seq.count(seq_id) > 0) {
+                // Keep only this seq_id
+                cell.seq.clear();
+                cell.seq.insert(seq_id);
+            } else {
+                // Cell doesn't have seq_id, clear it
+                cell.pos = -1;
+                cell.seq.clear();
+            }
+        }
+    }
+}
+
+void LLMKVCacheManager::seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int32_t p1) {
+    if (src_seq < 0 || dst_seq < 0) return;
+    if (src_seq == dst_seq) return;
+    
+    int32_t start = (p0 == -1) ? 0 : p0;
+    int32_t end = (p1 == -1) ? (int32_t)cell_meta_.size() : p1;
+    
+    for (int32_t i = start; i < end && i < (int32_t)cell_meta_.size(); ++i) {
+        if (cell_meta_[i].pos != -1 && cell_meta_[i].seq.count(src_seq) > 0) {
+            cell_meta_[i].seq.insert(dst_seq);
+        }
+    }
+}
+
+void LLMKVCacheManager::seq_add(int32_t start_pos, int32_t count, int32_t seq_id) {
+    if (seq_id < 0) return;
+    
+    for (int32_t i = 0; i < count && (start_pos + i) < (int32_t)cell_meta_.size(); ++i) {
+        int32_t idx = start_pos + i;
+        cell_meta_[idx].pos = idx;
+        cell_meta_[idx].seq.insert(seq_id);
+    }
+}
+
+void LLMKVCacheManager::reset_cell_meta() {
+    for (auto& cell : cell_meta_) {
+        cell.pos = -1;
+        cell.seq.clear();
+    }
 }
 
 }  // namespace llama_qnn

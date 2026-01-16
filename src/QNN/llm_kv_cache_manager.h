@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <vector>
 #include <memory>
 #include <string>
@@ -38,6 +39,19 @@ public:
     void* output_buffer;  // Temporary storage [head_dim, max_ar_len]
     size_t input_bytes;
     size_t output_bytes;
+  };
+
+  /**
+   * @brief KV cache cell metadata for tracking position and sequences
+   * Supports multiple sequences per cell (like llama_kv_cells)
+   */
+  struct KVCellMeta {
+    int32_t pos = -1;              // -1 = empty/invalid, >= 0 = valid position
+    std::set<int32_t> seq;         // set of sequence IDs this cell belongs to
+    
+    bool is_empty() const { return pos == -1; }
+    bool has_seq(int32_t seq_id) const { return seq.count(seq_id) > 0; }
+    int seq_count() const { return static_cast<int>(seq.size()); }
   };
 
   LLMKVCacheManager(const Metadata& metadata);
@@ -125,6 +139,66 @@ public:
     return metadata_.context_len - ar_len;
   }
 
+  // ========== KV Cell Metadata API (llama_memory_seq_* compatible) ==========
+  
+  /**
+   * @brief Remove seq_id from cells in range [p0, p1)
+   * If p0 == -1, start from 0. If p1 == -1, go to end.
+   * Cell becomes empty if no sequences remain.
+   */
+  void seq_rm(int32_t seq_id, int32_t p0, int32_t p1);
+  
+  /**
+   * @brief Keep only cells that have seq_id, clear others
+   */
+  void seq_keep(int32_t seq_id);
+  
+  /**
+   * @brief Copy src_seq to dst_seq for cells in range [p0, p1)
+   * If p0 == -1, start from 0. If p1 == -1, go to end.
+   */
+  void seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int32_t p1);
+  
+  /**
+   * @brief Add seq_id to cells in range [start_pos, start_pos + count)
+   * Used during prefill/decode to mark new tokens
+   */
+  void seq_add(int32_t start_pos, int32_t count, int32_t seq_id);
+  
+  /**
+   * @brief Check if a cell is empty
+   */
+  bool is_cell_empty(int32_t pos) const {
+    return pos < 0 || pos >= (int32_t)cell_meta_.size() || cell_meta_[pos].is_empty();
+  }
+  
+  /**
+   * @brief Check if cell has specific sequence
+   */
+  bool cell_has_seq(int32_t pos, int32_t seq_id) const {
+    if (pos < 0 || pos >= (int32_t)cell_meta_.size()) return false;
+    return cell_meta_[pos].has_seq(seq_id);
+  }
+  
+  /**
+   * @brief Get cell metadata at position
+   */
+  const KVCellMeta& get_cell_meta(int32_t pos) const {
+    return cell_meta_[pos];
+  }
+  
+  /**
+   * @brief Get all cell metadata (for attention mask generation)
+   */
+  const std::vector<KVCellMeta>& get_all_cell_meta() const {
+    return cell_meta_;
+  }
+  
+  /**
+   * @brief Reset all cell metadata to empty
+   */
+  void reset_cell_meta();
+
 private:
   Metadata metadata_;
   size_t total_cache_size_;
@@ -132,6 +206,9 @@ private:
   // KV cache storage: [num_layers][num_heads]
   std::vector<std::vector<KVCacheBuffer>> k_cache_;
   std::vector<std::vector<KVCacheBuffer>> v_cache_;
+  
+  // KV cell metadata: [context_len] - shared across all layers/heads
+  std::vector<KVCellMeta> cell_meta_;
 
   // Helper functions
   void update_key_cache(
