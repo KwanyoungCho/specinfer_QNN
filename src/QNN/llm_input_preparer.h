@@ -26,18 +26,18 @@ public:
     const std::vector<int32_t>& tokens);
 
   /**
-   * @brief Fill position input tensor
+   * @brief Fill position input tensor from array
    * @param buffer Destination buffer
    * @param tensor_desc Tensor descriptor
+   * @param positions Position array from batch
    * @param num_tokens Number of tokens
-   * @param start_pos Starting position (default 0 for prefill)
    * @return true if successful
    */
   static bool fill_positions(
     void* buffer,
     const QnnJsonTensorDesc& tensor_desc,
-    size_t num_tokens,
-    int32_t start_pos = 0);
+    const int32_t* positions,
+    size_t num_tokens);
 
   /**
    * @brief Fill attention mask tensor (causal mask at context end)
@@ -73,6 +73,8 @@ public:
    * @param graph_desc Graph descriptor
    * @param get_buffer_fn Function to get buffer by tensor name
    * @param tokens Token IDs
+   * @param positions Position array from batch
+   * @param skip_attention_mask Skip filling attention mask
    * @param verbose Print debug info
    * @return true if successful
    */
@@ -80,7 +82,7 @@ public:
     const QnnJsonGraphDesc& graph_desc,
     std::function<void*(const std::string&)> get_buffer_fn,
     const std::vector<int32_t>& tokens,
-    int32_t start_pos = 0,
+    const int32_t* positions,
     bool skip_attention_mask = false,
     bool verbose = true);
 };

@@ -1223,63 +1223,63 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.use_qnn = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"--ctx-dir"}, "DIR",
         "QNN context directory",
         [](common_params & params, const std::string & value) {
             params.qnn_ctx_dir = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"--backend-so"}, "FNAME",
         "QNN backend shared library",
         [](common_params & params, const std::string & value) {
             params.qnn_backend_so = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"--system-so"}, "FNAME",
         "QNN system shared library",
         [](common_params & params, const std::string & value) {
             params.qnn_system_so = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"--tokenizer"}, "FNAME",
         "Only tokenizer model path for QNN",
         [](common_params & params, const std::string & value) {
             params.qnn_tokenizer_path = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"--params"}, "FNAME",
         "QNN params.json path",
         [](common_params & params, const std::string & value) {
             params.qnn_params_path = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"--log-level"}, "N",
         "QNN log level (0=quiet,1=info,2=debug)",
         [](common_params & params, int value) {
             params.qnn_log_level = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"--multi-context"},
         "enable QNN multi-context mode",
         [](common_params & params) {
             params.qnn_use_multi_context = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"--num-shards"}, "N",
         "number of QNN context shards (0 = auto)",
         [](common_params & params, int value) {
             params.qnn_num_shards = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
     
     add_opt(common_arg(
         {"--spm-infill"},

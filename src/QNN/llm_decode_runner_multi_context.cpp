@@ -412,8 +412,9 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     std::cout << "[Multi-Context Prefill] Starting with " << tokens.size() << " tokens\n";
   }
   
-  int32_t n_past = 0;
+  // processed: how many new tokens processed so far (for token indexing)
   int32_t num_tokens = tokens.size();
+  int32_t processed = 0;
   uint16_t* attn_mask = reinterpret_cast<uint16_t*>(shared_buffer_views_["attention_mask"]);
 
 
@@ -424,54 +425,110 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     }
   }
   
+  // Pre-detect logits tensor descriptor for accumulation across chunks
+  int final_shard = config_.num_shards - 1;
+  const QnnJsonTensorDesc* logits_desc = nullptr;
+  for (const auto& t : shards_[final_shard].prefill_graph->outputs) {
+    std::string name_lower = t.name;
+    for (auto& c : name_lower) c = (char)tolower(c);
+    if (name_lower.find("squeeze") != std::string::npos) {
+      logits_desc = &t;
+      break;
+    }
+  }
+  if (!logits_desc) {
+    size_t max_size = 0;
+    for (const auto& t : shards_[final_shard].prefill_graph->outputs) {
+      if (t.dims.size() == 3 && t.name.find("_args_") != std::string::npos) continue;
+      if (t.nbytes > max_size) { max_size = t.nbytes; logits_desc = &t; }
+    }
+  }
+  int32_t vocab_size = model_params_.is_valid() ? model_params_.vocab_size : 0;
+  if (vocab_size <= 0 && logits_desc && !logits_desc->dims.empty()) {
+    vocab_size = (int32_t) logits_desc->dims.back();
+  }
+
+  // Accumulate logits from all chunks for speculative verification
+  std::vector<float> accumulated_logits;
+  accumulated_logits.reserve((size_t)num_tokens * (size_t)std::max(vocab_size, 1));
+
   // Multiple iteration prefill
-  while (n_past < num_tokens) {
-    int32_t chunk_size = std::min(prefill_ar_len_, num_tokens - n_past);
+  while (processed < num_tokens) {
+    int32_t chunk_size = std::min(prefill_ar_len_, num_tokens - processed);
     
     if (config_.log_level >= 2) {
-      std::cout << "[Multi-Context Prefill] Iteration: n_past=" << n_past 
+      std::cout << "[Multi-Context Prefill] Iteration: processed=" << processed 
                 << ", chunk_size=" << chunk_size << "\n";
     }
     
     // Extract current chunk of tokens
     std::vector<int32_t> chunk_tokens(
-      tokens.begin() + n_past,
-      tokens.begin() + n_past + chunk_size
+      tokens.begin() + processed,
+      tokens.begin() + processed + chunk_size
     );
 
     // Pad chunk to prefill_ar_len if needed
     if (chunk_size < prefill_ar_len_) {
       chunk_tokens.resize(prefill_ar_len_, 0);  // Pad with 0
     }
+      
+    // 1. Find slot for KV storage
+    int32_t slot = kv_manager_->find_slot(chunk_size, 0);
+    if (config_.log_level >= 2) {
+      std::cout << "[Multi-Context Prefill] Found slot: " << slot << std::endl;
+    }
+    if (slot < 0) {
+      error_msg_ = "No contiguous slot found for " + std::to_string(chunk_size) + " tokens";
+      return false;
+    }
     
-    // Update attention mask for this iteration
-    // SMART_MASK: causal pattern within the current chunk, plus attending to all past tokens
+    // 2. Generate attention mask BEFORE cell_meta_ update (QNN model has separate KV I/O)
+    // cell_meta_ reflects only past tokens with valid KV data at this point
+    // Layout: [0..prefill_cache_len_-1] = past KV region, [prefill_cache_len_..context_len_-1] = current chunk region
     std::memset(attn_mask, 0, prefill_ar_len_ * context_len_ * sizeof(uint16_t));
+    int chunk_start = context_len_ - prefill_ar_len_;
     
     for (int i = 0; i < chunk_size; ++i) {
-      int row = i;
-      // Attend to all past tokens [0..n_past-1]
-      for (int j = 0; j < n_past; ++j) {
-        attn_mask[row * context_len_ + j] = 65535;
+      int batch_idx_i = processed + i;
+      int32_t p_i = batch.pos ? batch.pos[batch_idx_i] : batch_idx_i;
+      
+      // Part 1: Past KV region [0..prefill_cache_len_-1]
+      // Past KV always has seq_id=0 after seq_keep(0), so just check pos != -1
+      for (int j = 0; j < prefill_cache_len_; ++j) {
+        if (!kv_manager_->get_cell_meta(j).is_empty()) {
+          attn_mask[i * context_len_ + j] = 65535;
+        }
       }
-      // Attend to current and previous tokens in this chunk (causal)
-      int chunk_start = context_len_ - prefill_ar_len_;
-      for (int j = 0; j <= i; ++j) {
-        attn_mask[row * context_len_ + chunk_start + j] = 65535;
+      
+      // Part 2: Current chunk region [chunk_start..chunk_start+prefill_ar_len_-1]
+      // Use batch pos for causal mask (supports tree-attention)
+      for (int k = 0; k < chunk_size; ++k) {
+        int batch_idx_k = processed + k;
+        int32_t p_k = batch.pos ? batch.pos[batch_idx_k] : batch_idx_k;
+        if (p_k <= p_i) {
+          attn_mask[i * context_len_ + chunk_start + k] = 65535;
+        }
       }
+    }
+    
+    // Build positions array (use batch.pos or generate sequential)
+    // Pad to prefill_ar_len_ to match chunk_tokens padding
+    std::vector<int32_t> chunk_positions(prefill_ar_len_, 0);
+    for (int i = 0; i < chunk_size; ++i) {
+      chunk_positions[i] = batch.pos ? batch.pos[processed + i] : (processed + i);
     }
     
     // Run prefill through all shards sequentially
     for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
-      if (!run_shard_prefill(shard_idx, chunk_tokens, n_past, chunk_size)) {
+      if (!run_shard_prefill(shard_idx, chunk_tokens, chunk_positions.data(), chunk_size)) {
         return false;
       }
     }
     
-    // Update KV cache: copy prefill outputs to KV inputs for this iteration
+    // Update KV cache: copy prefill outputs to KV inputs at found slot
     if (config_.log_level >= 2) {
-      std::cout << "[Multi-Context Prefill] Updating KV cache for iteration at n_past=" 
-                << n_past << ", chunk_size=" << chunk_size << "\n";
+      std::cout << "[Multi-Context Prefill] Updating KV cache at slot=" 
+                << slot << ", chunk_size=" << chunk_size << "\n";
     }
     
     int total_v_updated = 0, total_k_updated = 0;
@@ -504,11 +561,11 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
         
         const auto& v_buf = kv_manager_->get_v_cache(global_layer, head);
         uint8_t* src = reinterpret_cast<uint8_t*>(v_outputs[i]);
-        uint8_t* dst = reinterpret_cast<uint8_t*>(v_buf.input_buffer) + n_past * head_dim_;
+        uint8_t* dst = reinterpret_cast<uint8_t*>(v_buf.input_buffer) + slot * head_dim_;
         std::memcpy(dst, src, chunk_size * head_dim_);
         
         if (config_.log_level >= 2 && shard_idx == 0 && i < 2) {
-          std::cout << "[Prefill KV] Iter: n_past=" << n_past << " Shard " << shard_idx 
+          std::cout << "[Prefill KV] Iter: slot=" << slot << " Shard " << shard_idx 
                     << " V-cache " << i << " → Layer " << global_layer << " Head " << head << "\n";
         }
         total_v_updated++;
@@ -524,7 +581,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
         
         const auto& k_buf = kv_manager_->get_k_cache(global_layer, head);
         uint8_t* src = reinterpret_cast<uint8_t*>(k_outputs[i]);
-        uint8_t* dst = reinterpret_cast<uint8_t*>(k_buf.input_buffer) + n_past;
+        uint8_t* dst = reinterpret_cast<uint8_t*>(k_buf.input_buffer) + slot;
         
         // K cache: copy with stride (transposed layout)
         for (int32_t dim = 0; dim < head_dim_; ++dim) {
@@ -542,115 +599,74 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
                 << total_k_updated << " K-caches\n";
     }
     
-    // Advance n_past for next iteration
-    n_past += chunk_size;
+    // 4. Update cell_meta_ AFTER KV cache update (QNN model has separate KV I/O)
+    for (int i = 0; i < chunk_size; ++i) {
+      int batch_idx = processed + i;
+      int32_t cell_idx = slot + i;
+      
+      int32_t pos = batch.pos ? batch.pos[batch_idx] : batch_idx;
+      int32_t n_seq = (batch.n_seq_id && batch.seq_id) ? batch.n_seq_id[batch_idx] : 1;
+      
+      kv_manager_->set_cell_pos(cell_idx, pos);
+      for (int s = 0; s < n_seq; ++s) {
+        int32_t seq_id = (batch.seq_id && batch.seq_id[batch_idx]) ? batch.seq_id[batch_idx][s] : 0;
+        kv_manager_->add_cell_seq(cell_idx, seq_id);
+      }
+    }
+    
+    // 5. Accumulate this chunk's logits for later injection
+    if (ctx != nullptr && logits_desc && vocab_size > 0) {
+      auto& bindings = shards_[final_shard].prefill_alloc->bindings();
+      auto it = bindings.find(logits_desc->name);
+      if (it != bindings.end() && it->second) {
+        const uint16_t * logits_u16 = reinterpret_cast<const uint16_t *>(it->second);
+        float scale = logits_desc->quant_scale;
+        int32_t offset = logits_desc->quant_offset;
+        
+        size_t prev_size = accumulated_logits.size();
+        accumulated_logits.resize(prev_size + (size_t)chunk_size * (size_t)vocab_size);
+        
+        for (int32_t t = 0; t < chunk_size; ++t) {
+          size_t src_offset = (size_t)t * (size_t)vocab_size;
+          size_t dst_offset = prev_size + src_offset;
+          for (int32_t i = 0; i < vocab_size; ++i) {
+            float q = (float) logits_u16[src_offset + i];
+            accumulated_logits[dst_offset + i] = (q + offset) * scale;
+          }
+        }
+      }
+    }
+
+    // Advance counter for next iteration
+    processed += chunk_size;
   }  // End of while loop
   
   if (config_.log_level >= 2) {
-    std::cout << "[Multi-Context Prefill] All iterations completed. Total tokens processed: " 
-              << n_past << "\n";
-  }
-  
-  // Extract logits from final shard
-  int final_shard = config_.num_shards - 1;
-  const QnnJsonTensorDesc* logits_desc = nullptr;
-  
-  // Find logits output
-  for (const auto& t : shards_[final_shard].prefill_graph->outputs) {
-    std::string name_lower = t.name;
-    for (auto& c : name_lower) c = (char)tolower(c);
-    
-    if (name_lower.find("squeeze") != std::string::npos) {
-      logits_desc = &t;
-      break;
-    }
-  }
-  
-  // Fallback: use the largest output tensor
-  if (!logits_desc) { // [spagetti] 이 부분 뭐하는거임? 필요한거임?
-    size_t max_size = 0;
-    for (const auto& t : shards_[final_shard].prefill_graph->outputs) {
-      if (t.dims.size() == 3 && t.name.find("_args_") != std::string::npos) {
-        continue;
-      }
-      if (t.nbytes > max_size) {
-        max_size = t.nbytes;
-        logits_desc = &t;
-      }
-    }
+    std::cout << "[Multi-Context Prefill] All iterations completed. processed=" 
+              << processed << "\n";
   }
   
   if (!logits_desc) {
     error_msg_ = "Logits output not found in final shard";
     return false;
   }
-  
-  if (config_.log_level >= 2) {
-    std::cout << "[Multi-Context Prefill] Logits tensor: " << logits_desc->name 
-              << " (" << logits_desc->nbytes << " bytes)\n";
-  }
-  
-  // Get logits buffer
-  auto& bindings = shards_[final_shard].prefill_alloc->bindings();
-  auto it = bindings.find(logits_desc->name);
-  if (it == bindings.end()) {
-    error_msg_ = "Logits buffer not found in bindings";
-    return false;
-  }
-  
-  if (!it->second) {
-    error_msg_ = "Logits buffer is null";
-    return false;
-  }
 
-  const uint16_t * logits_u16 = reinterpret_cast<const uint16_t *>(it->second);
-
-  // Determine vocab size: prefer model_params_ if available, otherwise tensor dims
-  int32_t vocab_size = model_params_.is_valid() ? model_params_.vocab_size : 0;
-  if (vocab_size <= 0 && !logits_desc->dims.empty()) {
-    vocab_size = (int32_t) logits_desc->dims.back();
-  }
   if (vocab_size <= 0) {
     error_msg_ = "Invalid vocab size for multi-context prefill logits";
     return false;
   }
 
-  // For prefill, logits are [batch=1, prefill_ar_len, vocab_size]
-  // For speculative decoding verification, we need ALL tokens' logits (not just the last)
-  // If we processed 50 tokens with prefill_ar_len=32:
-  //   - Iteration 1: tokens[0:32] (32 tokens)
-  //   - Iteration 2: tokens[32:50] (18 tokens)
-  // The last iteration's output contains logits for tokens in that chunk
-  int32_t last_chunk_size = ((num_tokens - 1) % prefill_ar_len_) + 1;
+  // Update n_past_ from cell_meta_ (used count)
+  n_past_ = kv_manager_->get_used_count();
 
-  // Update n_past_: total tokens processed
-  n_past_ = num_tokens;
-  
-  // Update KV cell metadata (for speculative decoding)
-  // All prefill tokens belong to seq 0
-  kv_manager_->seq_add(0, num_tokens, 0);
-
-  // Inject ALL tokens' logits into llama_context for external sampling/verification
-  if (ctx != nullptr) {
-    float scale = logits_desc->quant_scale;
-    int32_t offset = logits_desc->quant_offset;
-    GGML_ASSERT(scale != 0.0f && "Quantization scale should not be zero");
-
-    // Dequantize all tokens' logits from the last chunk
-    std::vector<float> all_logits_f32((size_t)last_chunk_size * (size_t)vocab_size);
-    
-    for (int32_t t = 0; t < last_chunk_size; ++t) {
-      size_t token_offset = (size_t)t * (size_t)vocab_size;
-      for (int32_t i = 0; i < vocab_size; ++i) {
-        float q = (float) logits_u16[token_offset + i];
-        all_logits_f32[token_offset + i] = (q + offset) * scale;
-      }
-    }
-
-    llama_set_logits_external(ctx, all_logits_f32.data(), last_chunk_size);
+  // Inject ALL accumulated logits into llama_context for external sampling/verification
+  if (ctx != nullptr && !accumulated_logits.empty()) {
+    int32_t n_total = (int32_t)(accumulated_logits.size() / (size_t)vocab_size);
+    llama_set_logits_external(ctx, accumulated_logits.data(), n_total);
     
     if (config_.log_level >= 2) {
-      std::cout << "[Multi-Context Prefill] Injected logits for " << last_chunk_size << " tokens\n";
+      std::cout << "[Multi-Context Prefill] Injected logits for " << n_total 
+                << " tokens (accumulated from all chunks)\n";
     }
   }
   
@@ -679,6 +695,17 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
               << ", n_past=" << n_past_ << "\n";
   }
   
+  // Get pos and seq_id from batch (with NULL fallback)
+  int32_t token_pos = batch.pos ? batch.pos[0] : n_past_;
+  int32_t n_seq = (batch.n_seq_id && batch.seq_id) ? batch.n_seq_id[0] : 1;
+  
+  // 1. Find slot for KV storage (but don't update cell_meta_ yet)
+  int32_t slot = kv_manager_->find_slot(1, 0);
+  if (slot < 0) {
+    error_msg_ = "No slot found for decode token";
+    return false;
+  }
+  
   // Prepare shard 0 inputs: token, position, attention_mask
   auto& shard0 = shards_[0];
   auto& bindings0 = shard0.kv_alloc->bindings();
@@ -697,27 +724,36 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
         std::cout << "[Decode Shard 0] Token filled: " << token_in << "\n";
       }
     }
-    // Position
+    // Position - use batch's pos
     else if (name_lower.find("pos") != std::string::npos && t.data_type.find("INT_32") != std::string::npos) {
-      std::memcpy(it->second, &n_past_, sizeof(int32_t));
+      std::memcpy(it->second, &token_pos, sizeof(int32_t));
       if (config_.log_level >= 2) {
-        std::cout << "[Decode Shard 0] Position filled: " << n_past_ << "\n";
+        std::cout << "[Decode Shard 0] Position filled: " << token_pos << "\n";
       }
     }
-    // Attention mask
+    // 3. Generate attention mask (split layout matching QNN model)
+    // Layout: [0..kv_cache_len_-1] = past KV region, [context_len_-1] = current token
     else if (name_lower.find("atten_mask") != std::string::npos) {
       uint16_t* attn_mask = reinterpret_cast<uint16_t*>(it->second);
       std::memset(attn_mask, 0, context_len_ * sizeof(uint16_t));
       
-      // Attend to past tokens [0..n_past_-1]
-      for (int32_t i = 0; i < n_past_; ++i) {
-        attn_mask[i] = 65535;
+      // Part 1: Past KV region [0..kv_cache_len_-1]
+      // Past KV always has seq_id=0 after seq_keep(0), so just check pos != -1
+      for (int j = 0; j < kv_cache_len_; ++j) {
+        if (!kv_manager_->get_cell_meta(j).is_empty()) {
+          attn_mask[j] = 65535;
+        }
       }
-      // Attend to current token (last position in rearranged cache)
+      
+      // Part 2: Current token at last position [context_len_-1]
       attn_mask[context_len_ - 1] = 65535;
       
       if (config_.log_level >= 2) {
-        std::cout << "[Decode Shard 0] Attention mask: attend to [0, " << (n_past_ - 1) << "] and [" << (context_len_ - 1) << "] (" << (n_past_ + 1) << " tokens)\n";
+        int attend_count = 0;
+        for (int j = 0; j < context_len_; ++j) {
+          if (attn_mask[j] == 65535) attend_count++;
+        }
+        std::cout << "[Decode Shard 0] Attention mask: attending to " << attend_count << " cells (query pos=" << token_pos << ")\n";
       }
       
       // Also copy to shared buffer for other shards
@@ -730,7 +766,7 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
     if (config_.log_level >= 2) {
       std::cout << "[Multi-Context Decode] Running shard " << shard_idx << "...\n";
     }
-    if (!run_shard_decode(shard_idx, n_past_)) {
+    if (!run_shard_decode(shard_idx)) {
       return false;
     }
     if (config_.log_level >= 2) {
@@ -738,10 +774,9 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
     }
   }
   
-  // Update KV cache: copy decode outputs to inputs for next step
-  // Manual memcpy (exactly like single-context)
+  // Update KV cache: copy decode outputs to inputs at found slot
   if (config_.log_level >= 2) {
-    std::cout << "[Multi-Context Decode] Updating KV cache at position " << n_past_ << "...\n";
+    std::cout << "[Multi-Context Decode] Updating KV cache at slot=" << slot << "...\n";
   }
   
   int total_v_updated = 0, total_k_updated = 0;
@@ -775,7 +810,7 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
       
       const auto& v_buf = kv_manager_->get_v_cache(global_layer, head);
       uint8_t* src = reinterpret_cast<uint8_t*>(v_outputs[i]);
-      uint8_t* dst = reinterpret_cast<uint8_t*>(v_buf.input_buffer) + n_past_ * head_dim_;
+      uint8_t* dst = reinterpret_cast<uint8_t*>(v_buf.input_buffer) + slot * head_dim_;
       std::memcpy(dst, src, 1 * head_dim_);
       total_v_updated++;
     }
@@ -790,7 +825,7 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
       
       const auto& k_buf = kv_manager_->get_k_cache(global_layer, head);
       uint8_t* src = reinterpret_cast<uint8_t*>(k_outputs[i]);
-      uint8_t* dst = reinterpret_cast<uint8_t*>(k_buf.input_buffer) + n_past_;
+      uint8_t* dst = reinterpret_cast<uint8_t*>(k_buf.input_buffer) + slot;
       
       // K cache: copy with stride (transposed layout)
       for (int32_t dim = 0; dim < head_dim_; ++dim) {
@@ -804,6 +839,13 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
     std::cout << "[Multi-Context Decode] KV cache updated: " 
               << total_v_updated << " V-caches, " 
               << total_k_updated << " K-caches\n";
+  }
+  
+  // 4. Update cell_meta_ AFTER KV cache update (QNN model has separate KV I/O)
+  kv_manager_->set_cell_pos(slot, token_pos);
+  for (int s = 0; s < n_seq; ++s) {
+    int32_t seq_id = (batch.seq_id && batch.seq_id[0]) ? batch.seq_id[0][s] : 0;
+    kv_manager_->add_cell_seq(slot, seq_id);
   }
   
   // Extract logits from final shard (kv_forward)
@@ -908,18 +950,17 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
     llama_set_logits_external(ctx, row_f32.data(), 1);
   }
   
-  // Update KV cell metadata for the new token
-  kv_manager_->seq_add(n_past_, 1, 0);  // seq_id=0 for auto-regressive
+  // cell_meta_ already updated before mask generation (apply_ubatch pattern)
   
-  // Update n_past_ for next decode step
-  n_past_ += 1;
+  // Update n_past_ from cell_meta_ (used count)
+  n_past_ = kv_manager_->get_used_count();
   
   return true;
 }
 
 bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
                                          const std::vector<int32_t>& tokens,
-                                         int32_t n_past,
+                                         const int32_t* positions,
                                          int32_t n_update) {
   if (config_.log_level >= 2) {
     std::cout << "[Shard " << shard_idx << " Prefill] Running...\n";
@@ -994,8 +1035,8 @@ bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
         return (it != bindings.end()) ? it->second : nullptr;
       },
       tokens,
-      n_past,  // start_pos: use current n_past for position tensor
-      true,    // skip_attention_mask: we manually set it before this call
+      positions,
+      true,  // skip_attention_mask
       config_.log_level >= 2);
     
     // Copy manually-set attention mask to shard 0's input buffer
@@ -1180,10 +1221,9 @@ bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
   return true;
 }
 
-bool LLMDecodeRunner::run_shard_decode(int shard_idx,
-                                        int32_t n_past) {
+bool LLMDecodeRunner::run_shard_decode(int shard_idx) {
   if (config_.log_level >= 2) {
-    std::cout << "[Decode Shard " << shard_idx << "] n_past=" << n_past << "\n";
+    std::cout << "[Decode Shard " << shard_idx << "]\n";
   }
   
   auto& shard = shards_[shard_idx];
@@ -1334,6 +1374,13 @@ void LLMDecodeRunner::kv_seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, in
   if (kv_manager_) {
     kv_manager_->seq_cp(src_seq, dst_seq, p0, p1);
   }
+}
+
+int32_t LLMDecodeRunner::kv_find_slot(int32_t n_tokens) {
+  if (kv_manager_) {
+    return kv_manager_->find_slot(n_tokens, n_past_);
+  }
+  return -1;
 }
 
 int LLMDecodeRunner::qnn_decode(llama_context * ctx, llama_batch batch) {

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <cstring>
 #include <algorithm>
+#include <numeric>
 #include <set>
 
 namespace llama_qnn {
@@ -380,7 +381,11 @@ bool LLMDecodeRunner::run_prefill(const std::vector<int32_t>& tokens,
     return (bit != bindings.end()) ? bit->second : nullptr;
   };
   
-  if (!InputPreparer::auto_fill_inputs(*prefill_graph_, get_prefill_buffer, tokens, true)) {
+  // Build sequential positions for simple prefill
+  std::vector<int32_t> positions(tokens.size());
+  std::iota(positions.begin(), positions.end(), 0);
+  
+  if (!InputPreparer::auto_fill_inputs(*prefill_graph_, get_prefill_buffer, tokens, positions.data(), false, true)) {
     error_msg_ = "Failed to prepare prefill inputs";
     return false;
   }

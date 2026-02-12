@@ -160,10 +160,28 @@ public:
   void seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int32_t p1);
   
   /**
-   * @brief Add seq_id to cells in range [start_pos, start_pos + count)
-   * Used during prefill/decode to mark new tokens
+   * @brief Add seq_id to cells in range [slot, slot + count)
+   * Sets position values starting from pos_start (incremented for each cell)
+   * Used during prefill/decode to mark new tokens (apply_ubatch pattern)
+   * @param slot Starting cell index in KV cache
+   * @param count Number of cells to update
+   * @param seq_id Sequence ID to add
+   * @param pos_start Starting position value (logical sequence position)
    */
-  void seq_add(int32_t start_pos, int32_t count, int32_t seq_id);
+  void seq_add(int32_t slot, int32_t count, int32_t seq_id, int32_t pos_start);
+  
+  /**
+   * @brief Find contiguous empty slots for n_tokens
+   * @param n_tokens Number of tokens to find space for
+   * @param hint Starting position hint (like head in llama.cpp)
+   * @return Starting position, or -1 if not found
+   */
+  int32_t find_slot(int32_t n_tokens, int32_t hint = 0);
+  
+  /**
+   * @brief Get number of used (non-empty) cells in KV cache
+   */
+  int32_t get_used_count() const;
   
   /**
    * @brief Check if a cell is empty
@@ -192,6 +210,24 @@ public:
    */
   const std::vector<KVCellMeta>& get_all_cell_meta() const {
     return cell_meta_;
+  }
+  
+  /**
+   * @brief Set cell position (for apply_ubatch pattern)
+   */
+  void set_cell_pos(int32_t cell_idx, int32_t pos) {
+    if (cell_idx >= 0 && cell_idx < (int32_t)cell_meta_.size()) {
+      cell_meta_[cell_idx].pos = pos;
+    }
+  }
+  
+  /**
+   * @brief Add seq_id to cell (for apply_ubatch pattern)
+   */
+  void add_cell_seq(int32_t cell_idx, int32_t seq_id) {
+    if (cell_idx >= 0 && cell_idx < (int32_t)cell_meta_.size() && seq_id >= 0) {
+      cell_meta_[cell_idx].seq.insert(seq_id);
+    }
   }
   
   /**

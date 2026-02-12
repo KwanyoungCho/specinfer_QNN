@@ -72,10 +72,10 @@ int main(int argc, char ** argv) {
     llama_context * ctx_dft = NULL;
 
     // load the target model (for vocab/tokenizer only when using QNN)
-    common_init_result llama_init_tgt = common_init_from_params(params);
+    // common_init_result llama_init_tgt = common_init_from_params(params);
 
-    model_tgt = llama_init_tgt.model.get();
-    ctx_tgt   = llama_init_tgt.context.get();
+    // model_tgt = llama_init_tgt.model.get();
+    // ctx_tgt   = llama_init_tgt.context.get();
 
     // Initialize QNN runner for target model
     llama_qnn::LLMDecodeConfig qnn_config;
@@ -88,6 +88,16 @@ int main(int argc, char ** argv) {
     qnn_config.log_level         = params.qnn_log_level;
     qnn_config.use_multi_context = params.qnn_use_multi_context;
     qnn_config.num_shards        = params.qnn_num_shards;
+
+    llama_model_params tgt_model_param = llama_model_default_params();
+    tgt_model_param.vocab_only = true;
+    model_tgt = llama_model_load_from_file(qnn_config.tokenizer_path.c_str(), tgt_model_param);
+    llama_context_params tgt_ctx_param = llama_context_default_params();
+    tgt_ctx_param.n_ctx     = params.n_ctx > 0 ? params.n_ctx : 4096;
+    tgt_ctx_param.n_batch   = params.n_batch > 0 ? params.n_batch : 2048;
+    tgt_ctx_param.n_seq_max = params.n_parallel + 1;
+    tgt_ctx_param.no_perf   = false;
+    ctx_tgt = llama_init_from_model(model_tgt, tgt_ctx_param);
 
     if (qnn_config.ctx_dir.empty()) {
         LOG_ERR("%s: --qnn-ctx-dir is required for QNN target model\n", __func__);
@@ -624,10 +634,16 @@ int main(int argc, char ** argv) {
 
         // evaluate the target model on the drafted tokens using QNN
         {
+            // Copy seq 0 KV metadata to all active sequences (same pattern as llama_memory)
+            // This prepares the KV cache metadata for multi-branch tree verification
+            qnn_runner.kv_seq_keep(0);
+            for (int s = 1; s < n_seq_dft; ++s) {
+                qnn_runner.kv_seq_cp(0, s, -1, -1);
+            }
+            
             // TODO: Build tree attention mask based on batch_tgt seq_id/pos
             // For now, use causal mask (works for single-branch n_seq_dft=1)
             
-            // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
             if (qnn_runner.qnn_decode(ctx_tgt, batch_tgt)) {
                 LOG_ERR("%s: QNN verification decode failed: %s\n", __func__, qnn_runner.get_error().c_str());
                 break;

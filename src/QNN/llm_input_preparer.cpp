@@ -38,21 +38,19 @@ bool InputPreparer::fill_tokens(
   return true;
 }
 
-bool InputPreparer::fill_positions( // [spagetti] fill token이랑 fill position, (mask까지)이랑 왜 데이터 집어 넣는 방식이 달라?이유가 있긴한데 일단 좀 깔끔하게 고치긴 했습니다. 
+bool InputPreparer::fill_positions(
     void* buffer,
     const QnnJsonTensorDesc& tensor_desc,
-    size_t num_tokens,
-    int32_t start_pos) {
-  if (!buffer || num_tokens == 0) return false;
+    const int32_t* positions,
+    size_t num_tokens) {
+  if (!buffer || !positions || num_tokens == 0) return false;
   
   if (tensor_desc.nbytes < num_tokens * sizeof(int32_t)) {
     std::cerr << "[InputPreparer] Position buffer too small\n";
     return false;
   }
   
-  int32_t* pos_buf = reinterpret_cast<int32_t*>(buffer);
-  std::iota(pos_buf, pos_buf + num_tokens, start_pos);
-  
+  std::memcpy(buffer, positions, num_tokens * sizeof(int32_t));
   return true;
 }
 
@@ -119,7 +117,7 @@ bool InputPreparer::auto_fill_inputs(
     const QnnJsonGraphDesc& graph_desc,
     std::function<void*(const std::string&)> get_buffer_fn,
     const std::vector<int32_t>& tokens,
-    int32_t start_pos,
+    const int32_t* positions,
     bool skip_attention_mask,
     bool verbose) {
   
@@ -150,10 +148,10 @@ bool InputPreparer::auto_fill_inputs(
     bool is_position = name_lower.find("_pos_") != std::string::npos;
     
     if (is_position && is_int32 && t.nbytes >= tokens.size() * 4) {
-      if (fill_positions(buffer, t, tokens.size(), start_pos)) {
+      if (fill_positions(buffer, t, positions, tokens.size())) {
         if (verbose) {
           std::cout << "[InputPreparer] Filled positions: " << t.name 
-                    << " " << start_pos << ".." << (start_pos + tokens.size() - 1) << "\n";
+                    << " count=" << tokens.size() << "\n";
         }
       }
       continue;

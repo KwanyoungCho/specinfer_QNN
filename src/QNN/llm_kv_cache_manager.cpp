@@ -380,12 +380,12 @@ void LLMKVCacheManager::seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int
     }
 }
 
-void LLMKVCacheManager::seq_add(int32_t start_pos, int32_t count, int32_t seq_id) {
+void LLMKVCacheManager::seq_add(int32_t slot, int32_t count, int32_t seq_id, int32_t pos_start) {
     if (seq_id < 0) return;
     
-    for (int32_t i = 0; i < count && (start_pos + i) < (int32_t)cell_meta_.size(); ++i) {
-        int32_t idx = start_pos + i;
-        cell_meta_[idx].pos = idx;
+    for (int32_t i = 0; i < count && (slot + i) < (int32_t)cell_meta_.size(); ++i) {
+        int32_t idx = slot + i;
+        cell_meta_[idx].pos = pos_start + i;  // Logical sequence position
         cell_meta_[idx].seq.insert(seq_id);
     }
 }
@@ -395,6 +395,47 @@ void LLMKVCacheManager::reset_cell_meta() {
         cell.pos = -1;
         cell.seq.clear();
     }
+}
+
+int32_t LLMKVCacheManager::get_used_count() const {
+    int32_t count = 0;
+    for (const auto& cell : cell_meta_) {
+        if (!cell.is_empty()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+int32_t LLMKVCacheManager::find_slot(int32_t n_tokens, int32_t hint) {
+    if (n_tokens <= 0 || n_tokens > (int32_t)cell_meta_.size()) {
+        return -1;
+    }
+    
+    int32_t cache_size = (int32_t)cell_meta_.size();
+    int32_t head = (hint >= 0 && hint < cache_size) ? hint : 0;
+    int32_t n_tested = 0;
+    
+    while (n_tested < cache_size) {
+        // Check if we have n_tokens contiguous empty cells starting from head
+        bool found = true;
+        for (int32_t i = 0; i < n_tokens; ++i) {
+            int32_t idx = (head + i) % cache_size;
+            if (!cell_meta_[idx].is_empty()) {
+                found = false;
+                // Skip to position after the non-empty cell
+                head = (idx + 1) % cache_size;
+                n_tested += (i + 1);
+                break;
+            }
+        }
+        
+        if (found) {
+            return head;
+        }
+    }
+    
+    return -1;  // No contiguous slot found
 }
 
 }  // namespace llama_qnn

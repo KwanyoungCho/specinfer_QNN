@@ -74,6 +74,12 @@ class LLMDecodeRunner {
   void kv_seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int32_t p1);
   
   /**
+   * @brief Find contiguous empty slots for n_tokens
+   * @return Starting position, or -1 if not found
+   */
+  int32_t kv_find_slot(int32_t n_tokens);
+  
+  /**
    * @brief Get KV manager (for advanced operations)
    */
   LLMKVCacheManager* get_kv_manager() { return kv_manager_.get(); }
@@ -184,11 +190,10 @@ class LLMDecodeRunner {
   // Shard execution helpers
   bool run_shard_prefill(int shard_idx,
                          const std::vector<int32_t>& tokens,
-                         int32_t n_past,
+                         const int32_t* positions,
                          int32_t n_update);
   
-  bool run_shard_decode(int shard_idx,
-                        int32_t n_past);
+  bool run_shard_decode(int shard_idx);
 };
 
 } // namespace llama_qnn
