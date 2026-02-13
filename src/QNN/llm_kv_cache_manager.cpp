@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 
 namespace llama_qnn {
 
@@ -334,16 +335,18 @@ void LLMKVCacheManager::rearrange_cache(int32_t src_ar_len, int32_t dst_ar_len) 
 void LLMKVCacheManager::seq_rm(int32_t seq_id, int32_t p0, int32_t p1) {
     if (seq_id < 0) return;
     
-    int32_t start = (p0 == -1) ? 0 : p0;
-    int32_t end = (p1 == -1) ? (int32_t)cell_meta_.size() : p1;
+    int32_t pos_start = (p0 < 0) ? 0 : p0;
+    int32_t pos_end   = (p1 < 0) ? std::numeric_limits<int32_t>::max() : p1;
     
-    for (int32_t i = start; i < end && i < (int32_t)cell_meta_.size(); ++i) {
-        if (cell_meta_[i].pos != -1 && cell_meta_[i].seq.count(seq_id) > 0) {
-            cell_meta_[i].seq.erase(seq_id);
-            // If no sequences remain, mark cell as empty
-            if (cell_meta_[i].seq.empty()) {
-                cell_meta_[i].pos = -1;
-            }
+    for (int32_t i = 0; i < (int32_t)cell_meta_.size(); ++i) {
+        if (cell_meta_[i].pos == -1) continue;
+        if (cell_meta_[i].pos < pos_start || cell_meta_[i].pos >= pos_end) continue;
+        if (cell_meta_[i].seq.count(seq_id) == 0) continue;
+        
+        cell_meta_[i].seq.erase(seq_id);
+        // If no sequences remain, mark cell as empty
+        if (cell_meta_[i].seq.empty()) {
+            cell_meta_[i].pos = -1;
         }
     }
 }
@@ -370,13 +373,15 @@ void LLMKVCacheManager::seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int
     if (src_seq < 0 || dst_seq < 0) return;
     if (src_seq == dst_seq) return;
     
-    int32_t start = (p0 == -1) ? 0 : p0;
-    int32_t end = (p1 == -1) ? (int32_t)cell_meta_.size() : p1;
+    int32_t pos_start = (p0 < 0) ? 0 : p0;
+    int32_t pos_end   = (p1 < 0) ? std::numeric_limits<int32_t>::max() : p1;
     
-    for (int32_t i = start; i < end && i < (int32_t)cell_meta_.size(); ++i) {
-        if (cell_meta_[i].pos != -1 && cell_meta_[i].seq.count(src_seq) > 0) {
-            cell_meta_[i].seq.insert(dst_seq);
-        }
+    for (int32_t i = 0; i < (int32_t)cell_meta_.size(); ++i) {
+        if (cell_meta_[i].pos == -1) continue;
+        if (cell_meta_[i].pos < pos_start || cell_meta_[i].pos >= pos_end) continue;
+        if (cell_meta_[i].seq.count(src_seq) == 0) continue;
+        
+        cell_meta_[i].seq.insert(dst_seq);
     }
 }
 

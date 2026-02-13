@@ -253,7 +253,7 @@ int main(int argc, char ** argv) {
 
     // sample from the last token of the prompt
     drafts[0].i_batch_tgt.resize(1);
-    drafts[0].i_batch_tgt[0] = 0;
+    drafts[0].i_batch_tgt[0] = n_input - 1;
 
     while (true) {
         std::set<int> active_seqs = {};
@@ -283,6 +283,7 @@ int main(int argc, char ** argv) {
             // for stochastic sampling, attempt to match the token with the drafted tokens
             {
                 bool accept = false;
+                params.sampling.temp = 0;
                 if (params.sampling.temp > 0) {
                     // stochastic verification
                     common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft], true);
@@ -643,7 +644,7 @@ int main(int argc, char ** argv) {
             
             // TODO: Build tree attention mask based on batch_tgt seq_id/pos
             // For now, use causal mask (works for single-branch n_seq_dft=1)
-            
+
             if (qnn_runner.qnn_decode(ctx_tgt, batch_tgt)) {
                 LOG_ERR("%s: QNN verification decode failed: %s\n", __func__, qnn_runner.get_error().c_str());
                 break;
