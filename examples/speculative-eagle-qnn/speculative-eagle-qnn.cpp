@@ -9,6 +9,7 @@
 #include "../src/llama-model.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <random>
@@ -272,14 +273,25 @@ int main(int argc, char ** argv) {
     LOG_DBG("QNN Prefill completed.\n");
     LOG_DBG("\nn_input: %d, prefill latency: %.3f seconds\n", n_input, (t_prefill_end - t_prefill_start) / 1e6f);
 
-    // TODO: Hidden state extraction from QNN is not yet supported
-    // For now, use placeholder data for draft model prefill
-    std::vector<float> sliced_data; // placeholder - hidden states from QNN not available
-    std::vector<float> backup_data; // placeholder - hidden states from QNN not available
+    // Extract hidden states from QNN prefill output (stored in ctx_tgt->final_hiddens)
+    const auto& final_hs = ctx_tgt->final_hiddens;
+    if (final_hs.empty()) {
+        LOG_ERR("%s: QNN prefill did not produce hidden states (final_hiddens is empty)\n", __func__);
+        return 1;
+    }
+    // const int hidden_dim = (int)(final_hs.size() / n_input);
+    const int hidden_dim = 4096;
+    LOG_DBG("[QNN] Hidden states extracted: %zu floats, hidden_dim=%d, n_tokens=%d\n",
+            final_hs.size(), hidden_dim, n_input);
 
-    // Draft model prefill (EAGLE uses hidden states - currently placeholder)
-    // llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
-    llama_decode(ctx_dft, llama_batch_get_one(inp.data(), n_input)); // Use regular decode for now
+    // sliced_data: hidden states for tokens[0..n_input-2] (EAGLE draft uses shifted input)
+    std::vector<float> sliced_data(final_hs.begin(), final_hs.begin() + (n_input - 1) * hidden_dim);
+    // backup_data: all n_input hidden states from prefill
+    // i_batch_tgt[0] = n_input-1 indexes the last prompt token's hidden state
+    std::vector<float> backup_data = final_hs;
+
+    // Draft model prefill with EAGLE hidden state sharing
+    llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
 
     LOG_DBG("Prefill completed for draft model.\n");
 
@@ -355,11 +367,12 @@ int main(int argc, char ** argv) {
 
     // sample from the last token of the prompt
     drafts[0].i_batch_tgt.resize(1);
-    drafts[0].i_batch_tgt[0] = 0;
+    drafts[0].i_batch_tgt[0] = n_input - 1;
 
     auto verification_start = ggml_time_us(); //verification 시작 시간 기록 -ym-
 
     while (true) {
+        // fprintf(stderr, "\n[DBG] === OUTER LOOP START ===\n");
         std::set<int> active_seqs = {};
 
         // print current draft sequences
@@ -527,9 +540,6 @@ int main(int argc, char ** argv) {
 
                     token_str = common_token_to_piece(ctx_tgt, token_id);
 
-                    temp2.insert(temp2.end(), backup_data.begin() + (4096 * (drafts[s_keep].i_batch_tgt[i_dft])), backup_data.begin() + (4096 * (drafts[s_keep].i_batch_tgt[i_dft] + 1)));
-                    recompute.push_back(token_id);
-
                     for (int s = 0; s < n_seq_dft; ++s) {
                         if (!drafts[s].active) {
                             continue;
@@ -546,6 +556,19 @@ int main(int argc, char ** argv) {
                         }
                     }
                 }
+
+                // insert hidden state into temp2 (common for both stochastic and greedy paths)
+                {
+                    int idx = drafts[s_keep].i_batch_tgt[i_dft];
+                    size_t needed = (size_t)(idx + 1) * hidden_dim;
+                    if (needed <= backup_data.size()) {
+                        temp2.insert(temp2.end(), backup_data.begin() + (hidden_dim * idx), backup_data.begin() + (hidden_dim * (idx + 1)));
+                    } else {
+                        fprintf(stderr, "[DIAG] OOB! temp2 insert: i_dft=%d, idx=%d, backup_data.size=%zu, needed=%zu\n",
+                                i_dft, idx, backup_data.size(), needed);
+                    }
+                }
+                recompute.push_back(token_id);
 
                 if (llama_vocab_is_eog(vocab_tgt, token_id)) {
                     has_eos = true;
@@ -571,6 +594,7 @@ int main(int argc, char ** argv) {
             }
         }
 
+        // fprintf(stderr, "[DBG] inner loop done, i_dft=%d, s_keep=%d\n", i_dft, s_keep);
         const auto verification_end = ggml_time_us(); //verification 종료 시간 기록 -ym-
 
         int verification_latency = (verification_end - verification_start) / 1000; //ms 단위로 변환 -ym-
@@ -587,8 +611,9 @@ int main(int argc, char ** argv) {
         // 루프가 끝났을 때 i_dft는 이번 단계에서 연속적으로 수락된 토큰의 개수와 같습니다.
         acceptance_lengths.push_back(i_dft + 1);
 
+        // fprintf(stderr, "[DBG] backup_data=temp2, temp2.size=%zu, hidden_dim=%d\n", temp2.size(), hidden_dim);
         backup_data = temp2;
-        std::vector temp3 = std::vector<float>(backup_data.end() - 4096, backup_data.end());
+        std::vector temp3 = std::vector<float>(backup_data.end() - hidden_dim, backup_data.end());
         int recompute_point = n_past_dft - i_dft;
 
         /////////////////////////////////////////Drafting Start///////////////////////////////////////
@@ -634,8 +659,9 @@ int main(int argc, char ** argv) {
             LOG_DBG("remove_KV_Cache took %.3f seconds\n", (remove_KV_Cache_end - remove_KV_Cache_start) / 1e6f);
 
             //recompute logic 추가 -ym-
+            // fprintf(stderr, "[DBG] recompute check: i_dft=%d\n", i_dft);
             if (i_dft > 0) {
-                std::vector temp4 = std::vector<float>(backup_data.begin(), backup_data.end() - 4096);
+                std::vector temp4 = std::vector<float>(backup_data.begin(), backup_data.end() - hidden_dim);
 
                 common_batch_clear(batch_dft);
                 for (int i = 0; i < recompute.size() - 1; i++) {
@@ -651,9 +677,10 @@ int main(int argc, char ** argv) {
             common_batch_add(batch_dft, token_id, n_past_dft, {0}, true);
 
             LOG_DBG("n_past_tgt: %d, n_past_dft: %d\n", n_past_tgt, n_past_dft);
-            LOG_DBG("recompute point: %d, n_past_dft: %d, recompute.size(): %zu, batch_dft.n_tokens: %d, backup_data.size(): %zu\n", recompute_point, n_past_dft, recompute.size(), batch_dft.n_tokens, backup_data.size()/4096);
+            LOG_DBG("recompute point: %d, n_past_dft: %d, recompute.size(): %zu, batch_dft.n_tokens: %d, backup_data.size(): %zu\n", recompute_point, n_past_dft, recompute.size(), batch_dft.n_tokens, backup_data.size()/hidden_dim);
 
             // LOG_DBG("dft batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_dft, batch_dft).c_str());
+            // fprintf(stderr, "[DBG] recompute seed decode: batch_dft.n_tokens=%d, temp3.size=%zu\n", batch_dft.n_tokens, temp3.size());
             const auto recompute_decode_start1 = ggml_time_us();
             llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
             const auto recompute_decode_end1 = ggml_time_us();
@@ -671,6 +698,7 @@ int main(int argc, char ** argv) {
             break;
         }
 
+        // fprintf(stderr, "[DBG] tree drafting start\n");
         if (drafts[0].smpl) {
             common_sampler_free(drafts[0].smpl);
         }
@@ -778,7 +806,7 @@ int main(int argc, char ** argv) {
 
                 std::vector<int> sa(1, s);
 
-                temp.insert(temp.end(), cb_data.data.begin() + (4096 * s), cb_data.data.begin() + (4096 * (s + 1)));
+                temp.insert(temp.end(), cb_data.data.begin() + (hidden_dim * drafts[s].i_batch_dft), cb_data.data.begin() + (hidden_dim * (drafts[s].i_batch_dft + 1)));
 
                 /////////////////////////////////////////Sampling End///////////////////////////////////////
 
@@ -857,7 +885,7 @@ int main(int argc, char ** argv) {
                         
                         LOG_DBG("디버그: n_seq_cur = %d, cb_data.data.size() = %zu\n", n_seq_cur, backup_data.size());
                         const auto hidden_state_insert_start = ggml_time_us(); //hidden_state insert 시작 시간 기록 -ym-
-                        temp.insert(temp.end(), cb_data.data.begin() + (4096 * s), cb_data.data.begin() + (4096 * (s + 1)));
+                        temp.insert(temp.end(), cb_data.data.begin() + (hidden_dim * drafts[s].i_batch_dft), cb_data.data.begin() + (hidden_dim * (drafts[s].i_batch_dft + 1)));
                         const auto hidden_state_insert_end = ggml_time_us(); //hidden_state insert 종료 시간 기록 -ym-
                         LOG_DBG("hidden state insert took %.8f seconds\n", (hidden_state_insert_end - hidden_state_insert_start) / 1e6f);
 
@@ -999,12 +1027,16 @@ int main(int argc, char ** argv) {
                 break;
             }
 
-            LOG_DBG("temp.size(): %d, batch_dft.n_tokens: %d\n", temp.size()/4096, batch_dft.n_tokens);
+            // fprintf(stderr, "[DBG] tree depth=%d, temp.size=%zu/%d=%zu, batch_dft.n_tokens=%d, cb_data.size=%zu\n",
+            //         cur_depth, temp.size(), hidden_dim, temp.size()/hidden_dim, batch_dft.n_tokens, cb_data.data.size());
+            LOG_DBG("temp.size(): %d, batch_dft.n_tokens: %d\n", temp.size()/hidden_dim, batch_dft.n_tokens);
 
             // evaluate the drafted tokens on the draft model
             const auto dft_model_decode_start = ggml_time_us(); //dft_model decode 시작 시간 기록 -ym-
+            // fprintf(stderr, "[DBG] tree decode: depth=%d, batch_dft.n_tokens=%d, temp entries=%zu\n", cur_depth, batch_dft.n_tokens, temp.size()/hidden_dim);
             llama_decode_eagle(ctx_dft, batch_dft, temp.data());
             ctx_dft->synchronize();
+            // fprintf(stderr, "[DBG] tree decode done, cb_data.size=%zu\n", cb_data.data.size());
             const auto dft_model_decode_end = ggml_time_us(); //dft_model decode 종료 시간 기록 -ym-
             if (batch_dft.n_tokens == 1)
                 T_d.push_back((dft_model_decode_end - dft_model_decode_start) / 1000.0f); //ms 단위로 변환 -ym-
@@ -1042,6 +1074,8 @@ int main(int argc, char ** argv) {
             }
 
             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
+            // fprintf(stderr, "[DBG] verification decode start: batch_tgt.n_tokens=%d\n", batch_tgt.n_tokens);
+            ctx_tgt->final_hiddens.clear();  // Clear before verification decode to get fresh hidden states
             const auto t_dec_start = ggml_time_us(); //target model decode 시작 시간 기록 -ym-
             if (qnn_runner.qnn_decode(ctx_tgt, batch_tgt)) {
                 LOG_ERR("%s: QNN verification decode failed: %s\n", __func__, qnn_runner.get_error().c_str());
@@ -1049,7 +1083,13 @@ int main(int argc, char ** argv) {
             }
             const auto t_dec_end = ggml_time_us(); //target model decode 종료 시간 기록 -ym-
             LOG_DBG("/////////////////////////////batch_tgt.n_tokens: %d, target model decoding took %.3f seconds\n", batch_tgt.n_tokens, (t_dec_end - t_dec_start) / 1e6f);
-            // backup_data = cb_data.data; // Hidden state extraction not available with QNN
+            // fprintf(stderr, "[DBG] verification decode done, final_hiddens.size=%zu\n", ctx_tgt->final_hiddens.size());
+            if (!ctx_tgt->final_hiddens.empty()) {
+                backup_data = ctx_tgt->final_hiddens;  // Hidden states from QNN verification
+                // fprintf(stderr, "[DBG] backup_data updated from final_hiddens: %zu entries\n", backup_data.size()/hidden_dim);
+            } else {
+                // fprintf(stderr, "[DBG] WARNING: final_hiddens empty! keeping temp2\n");
+            }
             ++n_past_tgt;
         }
 

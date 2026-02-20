@@ -765,24 +765,24 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     }
   }
 
-  {
-    auto & hs = ctx->final_hiddens;
-    size_t n_floats = hs.size();
-    size_t hidden_dim = 4096;
-    size_t n_tokens = n_floats / hidden_dim;
+  // {
+  //   auto & hs = ctx->final_hiddens;
+  //   size_t n_floats = hs.size();
+  //   size_t hidden_dim = 4096;
+  //   size_t n_tokens = n_floats / hidden_dim;
 
-    printf("\n===== [Prefill Hidden States - ALL] =====\n");
-    printf("total: %zu floats (%zu tokens x %zu)\n", n_floats, n_tokens, hidden_dim);
+  //   printf("\n===== [Prefill Hidden States - ALL] =====\n");
+  //   printf("total: %zu floats (%zu tokens x %zu)\n", n_floats, n_tokens, hidden_dim);
 
-    for (size_t t = 0; t < n_tokens; ++t) {
-        printf("[token %zu] ", t);
-        for (size_t d = 0; d < hidden_dim; ++d) {
-            printf("%.6f ", hs[t * hidden_dim + d]);
-        }
-        printf("\n");
-    }
-    printf("==========================================\n\n");
-  }
+  //   for (size_t t = 0; t < n_tokens; ++t) {
+  //       printf("[token %zu] ", t);
+  //       for (size_t d = 0; d < hidden_dim; ++d) {
+  //           printf("%.6f ", hs[t * hidden_dim + d]);
+  //       }
+  //       printf("\n");
+  //   }
+  //   printf("==========================================\n\n");
+  // }
   
   return true;
 }

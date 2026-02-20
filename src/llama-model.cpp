@@ -6427,7 +6427,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
                     embd_fc   = create_tensor(tn(LLM_TENSOR_EMBD_FC, "weight"), {n_embd * 2, n_embd}, 0);
-                    embd_fc_b = create_tensor(tn(LLM_TENSOR_EMBD_FC, "bias"),   {n_embd}, 0);
+                    embd_fc_b = create_tensor(tn(LLM_TENSOR_EMBD_FC, "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
 
                     // ================================================================================================
                     // ORIGINAL CODE (output tensor creation)
