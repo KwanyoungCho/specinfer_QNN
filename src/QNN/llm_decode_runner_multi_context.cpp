@@ -456,8 +456,13 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
   while (processed < num_tokens) {
     int32_t chunk_size = std::min(prefill_ar_len_, num_tokens - processed);
     
+    // std::cout << "[Debug Spec] Iteration: num_tokens=" << num_tokens 
+    //           << ", processed=" << processed 
+    //           << ", chunk_size=" << chunk_size << std::endl;
+    
     if (config_.log_level >= 2) {
-      std::cout << "[Multi-Context Prefill] Iteration: processed=" << processed 
+      std::cout << "[Multi-Context Prefill] Iteration: num_tokens=" << num_tokens 
+                << ", processed=" << processed 
                 << ", chunk_size=" << chunk_size << "\n";
     }
     
@@ -501,11 +506,29 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
       }
       
       // Part 2: Current chunk region [chunk_start..chunk_start+prefill_ar_len_-1]
-      // Use batch pos for causal mask (supports tree-attention)
+      // Tree attention: check both pos (causal) AND seq_id (branch ancestry)
       for (int k = 0; k < chunk_size; ++k) {
         int batch_idx_k = processed + k;
         int32_t p_k = batch.pos ? batch.pos[batch_idx_k] : batch_idx_k;
-        if (p_k <= p_i) {
+        
+        // Causal check
+        if (p_k > p_i) continue;
+        
+        // Seq_id intersection check (tree attention)
+        bool has_common_seq = false;
+        if (batch.seq_id && batch.n_seq_id) {
+          for (int si = 0; si < batch.n_seq_id[batch_idx_i] && !has_common_seq; ++si) {
+            for (int sk = 0; sk < batch.n_seq_id[batch_idx_k] && !has_common_seq; ++sk) {
+              if (batch.seq_id[batch_idx_i][si] == batch.seq_id[batch_idx_k][sk]) {
+                has_common_seq = true;
+              }
+            }
+          }
+        } else {
+          has_common_seq = true;  // No seq_id info, default to causal
+        }
+        
+        if (has_common_seq) {
           attn_mask[i * context_len_ + chunk_start + k] = 65535;
         }
       }
@@ -517,6 +540,51 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     for (int i = 0; i < chunk_size; ++i) {
       chunk_positions[i] = batch.pos ? batch.pos[processed + i] : (processed + i);
     }
+    
+    // [ATTN_MASK_DEBUG] Attention mask bitmap visualization
+    // Remove this block when debugging is complete
+    #if 0
+    {
+      // Find last valid cell in past KV region
+      int last_valid_past = -1;
+      for (int j = prefill_cache_len_ - 1; j >= 0; --j) {
+        if (!kv_manager_->get_cell_meta(j).is_empty()) { last_valid_past = j; break; }
+      }
+      
+      fprintf(stderr, "[ATTN_MASK] chunk=%d, chunk_size=%d\n", processed / prefill_ar_len_, chunk_size);
+      
+      // Part 1: Past KV (up to last valid cell)
+      if (last_valid_past >= 0) {
+        fprintf(stderr, "=== PAST KV [0..%d] ===\n", last_valid_past);
+        fprintf(stderr, "Q\\K ");
+        for (int k = 0; k <= last_valid_past; ++k) fprintf(stderr, "%d", k % 10);
+        fprintf(stderr, "\n");
+        for (int q = 0; q < chunk_size; ++q) {
+          fprintf(stderr, "%3d ", q);
+          for (int k = 0; k <= last_valid_past; ++k) {
+            fprintf(stderr, "%c", attn_mask[q * context_len_ + k] ? 'O' : 'X');
+          }
+          fprintf(stderr, "\n");
+        }
+      } else {
+        fprintf(stderr, "=== PAST KV: (empty) ===\n");
+      }
+      
+      // Part 2: Current chunk
+      fprintf(stderr, "=== CURRENT [%d..%d] ===\n", chunk_start, chunk_start + chunk_size - 1);
+      fprintf(stderr, "Q\\K ");
+      for (int k = 0; k < chunk_size; ++k) fprintf(stderr, "%d", k % 10);
+      fprintf(stderr, "\n");
+      for (int q = 0; q < chunk_size; ++q) {
+        fprintf(stderr, "%3d ", q);
+        for (int k = 0; k < chunk_size; ++k) {
+          fprintf(stderr, "%c", attn_mask[q * context_len_ + chunk_start + k] ? 'O' : 'X');
+        }
+        fprintf(stderr, "\n");
+      }
+    }
+    #endif
+    // [/ATTN_MASK_DEBUG]
     
     // Run prefill through all shards sequentially
     for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
