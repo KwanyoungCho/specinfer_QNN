@@ -3,6 +3,7 @@
 #include "sampling.h"
 #include "log.h"
 #include "llama.h"
+#include "llm_decode_runner.h"
 #include "../src/llama-context.h"
 
 #include "../src/llama-model.h"
@@ -127,11 +128,39 @@ int main(int argc, char ** argv) {
     llama_context * ctx_tgt = NULL;
     llama_context * ctx_dft = NULL;
 
-    // load the target model
-    common_init_result llama_init_tgt = common_init_from_params(params);
+    // Initialize QNN runner for target model
+    llama_qnn::LLMDecodeConfig qnn_config;
+    qnn_config.ctx_dir           = params.qnn_ctx_dir;
+    qnn_config.backend_so        = params.qnn_backend_so.empty() ? "libQnnHtp.so" : params.qnn_backend_so;
+    qnn_config.system_so         = params.qnn_system_so.empty() ? "libQnnSystem.so" : params.qnn_system_so;
+    qnn_config.tokenizer_path    = params.qnn_tokenizer_path;
+    qnn_config.params_path       = params.qnn_params_path;
+    qnn_config.max_gen_tokens    = params.n_predict > 0 ? params.n_predict : 100;
+    qnn_config.log_level         = params.qnn_log_level;
+    qnn_config.use_multi_context = params.qnn_use_multi_context;
+    qnn_config.num_shards        = params.qnn_num_shards;
 
-    model_tgt = llama_init_tgt.model.get();
-    ctx_tgt   = llama_init_tgt.context.get();
+    // load target model (vocab_only for QNN)
+    llama_model_params tgt_model_param = llama_model_default_params();
+    tgt_model_param.vocab_only = true;
+    model_tgt = llama_model_load_from_file(qnn_config.tokenizer_path.c_str(), tgt_model_param);
+    llama_context_params tgt_ctx_param = llama_context_default_params();
+    tgt_ctx_param.n_ctx     = 4096;
+    tgt_ctx_param.n_batch   = 2048;
+    tgt_ctx_param.n_seq_max = params.n_parallel;
+    ctx_tgt = llama_init_from_model(model_tgt, tgt_ctx_param);
+
+    if (qnn_config.ctx_dir.empty()) {
+        LOG_ERR("%s: --qnn-ctx-dir is required for QNN target model\n", __func__);
+        return 1;
+    }
+
+    llama_qnn::LLMDecodeRunner qnn_runner(qnn_config);
+    if (!qnn_runner.initialize()) {
+        LOG_ERR("%s: failed to initialize QNN runner: %s\n", __func__, qnn_runner.get_error().c_str());
+        return 1;
+    }
+    LOG_INF("[QNN] Target model runner initialized successfully\n");
 
     // load the draft model
     params.devices = params.speculative.devices;
@@ -148,70 +177,7 @@ int main(int argc, char ** argv) {
     model_dft = llama_init_dft.model.get();
     ctx_dft   = llama_init_dft.context.get();
 
-    // ================================================================================================
-    // LM HEAD SHARING IMPLEMENTATION (Execute immediately after both models are loaded)
-    // ================================================================================================
-    {
-        // The EAGLE graph building code already expects this scenario (output tensor can be NULL initially)
-        // We simply assign the target model's output tensor to the draft model
-        struct ggml_tensor * tgt_output = llama_get_model(ctx_tgt)->output;
-        struct ggml_tensor * dft_output = llama_get_model(ctx_dft)->output;
-        
-        printf("\n🔍 DEBUG: Target model output tensor: %p\n", (void*)tgt_output);
-        printf("🔍 DEBUG: Draft model output tensor BEFORE sharing: %p\n", (void*)dft_output);
-        
-        if (!tgt_output) {
-            LOG_ERR("Target model output tensor is NULL - cannot perform LM Head Sharing\n");
-            return 1;
-        }
-        
-        printf("🎯 LM HEAD SHARING: Assigning target output tensor to draft model\n");
-        
-        // Simple and proper tensor sharing - assign target's output tensor to draft model
-        // This works because:
-        // 1. EAGLE graph building code already handles NULL output tensors
-        // 2. When we assign the target tensor, graph building will use it directly
-        // 3. Both models will compute their logits to the same memory location
-        const_cast<struct llama_model *>(llama_get_model(ctx_dft))->output = tgt_output;
-        
-        // Clear draft model memory to ensure graph rebuild with shared tensor
-        auto * mem_dft = llama_get_memory(ctx_dft);
-        llama_memory_clear(mem_dft, false);
-        
-        struct ggml_tensor * dft_output_after = llama_get_model(ctx_dft)->output;
-        printf("✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: %p\n", (void*)dft_output_after);
-        
-        if (dft_output_after == tgt_output) {
-            printf("✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!\n");
-            
-            // Also assign output_norm for consistency (if it exists)
-            if (llama_get_model(ctx_tgt)->output_norm && !llama_get_model(ctx_dft)->output_norm) {
-                const_cast<struct llama_model *>(llama_get_model(ctx_dft))->output_norm = llama_get_model(ctx_tgt)->output_norm;
-                printf("📋 LM HEAD SHARING: Also shared output_norm tensor\n");
-            }
-        } else {
-            LOG_ERR("LM HEAD SHARING FAILED: Pointers don't match after assignment\n");
-            return 1;
-        }
-        
-        printf("\n🔍 FINAL VERIFICATION:\n");
-        printf("🔍 Target model output: %p\n", (void*)llama_get_model(ctx_tgt)->output);
-        printf("🔍 Draft model output:  %p\n", (void*)llama_get_model(ctx_dft)->output);
-        
-        if (llama_get_model(ctx_tgt)->output == llama_get_model(ctx_dft)->output) {
-            printf("✅ FINAL: Output tensors are properly shared!\n");
-            
-            printf("🔍 SHARED TENSOR INFO:\n");
-            printf("  - Dimensions: [%ld, %ld]\n", tgt_output->ne[0], tgt_output->ne[1]);
-            printf("  - Type: %d\n", tgt_output->type);
-            printf("  - Data pointer: %p\n", tgt_output->data);
-            printf("  - Buffer: %p\n", (void*)tgt_output->buffer);
-        } else {
-            LOG_ERR("FINAL: Output tensors are NOT shared!\n");
-            return 1;
-        }
-    }
-    // ================================================================================================
+    // LM HEAD SHARING not needed - target model runs on QNN NPU
 
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
@@ -265,16 +231,8 @@ int main(int argc, char ** argv) {
         }
     }
 
-    auto * mem_tgt = llama_get_memory(ctx_tgt);
+    // mem_tgt not needed - QNN uses internal kv_manager_ for KV cache tracking
     auto * mem_dft = llama_get_memory(ctx_dft);
-    
-    // Trick: if the output buffer is in host memory, we need to allocate a new buffer for the draft model
-    // if (ggml_backend_buffer_is_host(llama_get_model(ctx_dft)->output->buffer)) {
-    //     void * data = malloc(ggml_nbytes(llama_get_model(ctx_tgt)->output));
-    //     llama_get_model(ctx_dft)->output->data = data;
-    // }
-    // // copy output parameters from target to draft
-    // ggml_backend_tensor_copy(llama_get_model(ctx_tgt)->output, llama_get_model(ctx_dft)->output);
 
     // Tokenize the prompt
     std::vector<llama_token> inp;
@@ -300,29 +258,28 @@ int main(int argc, char ** argv) {
 
     const auto t_enc_start = ggml_time_us();
 
-    llama_batch temp_batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
-    int temp_n_past = 0;
-    for (int i = 0; i < inp.size() - 1; i++) {
-        common_batch_add(temp_batch_tgt, inp[i], temp_n_past++, { 0 }, true);
-    }
-
-    // eval the prompt with both models
+    // Target model: use QNN prefill (single call for all prompt tokens)
+    // KV cache metadata is automatically updated inside qnn_decode
     const auto t_prefill_start = ggml_time_us();
-    llama_decode(ctx_tgt, temp_batch_tgt);
+    {
+        llama_batch prefill_batch = llama_batch_get_one(inp.data(), n_input);
+        if (qnn_runner.qnn_decode(ctx_tgt, prefill_batch)) {
+            LOG_ERR("%s: QNN prefill failed: %s\n", __func__, qnn_runner.get_error().c_str());
+            return 1;
+        }
+    }
     const auto t_prefill_end = ggml_time_us();
-    ctx_tgt->synchronize();
-    std::vector<float> sliced_data = std::vector<float>(cb_data.data.begin(), cb_data.data.end()); // callback data에서 마지막 데이터를 제외한 나머지 백업 -ym-
+    LOG_DBG("QNN Prefill completed.\n");
+    LOG_DBG("\nn_input: %d, prefill latency: %.3f seconds\n", n_input, (t_prefill_end - t_prefill_start) / 1e6f);
 
-    LOG_DBG("Prefill completed.\n");
+    // TODO: Hidden state extraction from QNN is not yet supported
+    // For now, use placeholder data for draft model prefill
+    std::vector<float> sliced_data; // placeholder - hidden states from QNN not available
+    std::vector<float> backup_data; // placeholder - hidden states from QNN not available
 
-    LOG_DBG("\nbatch_tgt.n_tokens: %d, prefill latency: %.3f seconds\n", temp_batch_tgt.n_tokens, (t_prefill_end - t_prefill_start) / 1e6f);
-
-    llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
-    std::vector<float> backup_data = std::vector<float>(cb_data.data.begin(), cb_data.data.end()); // callback data에서 마지막 데이터만 백업 -ym-
-
-    LOG_DBG("hidden_state extraction completed for target model.\n");
-
-    llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
+    // Draft model prefill (EAGLE uses hidden states - currently placeholder)
+    // llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
+    llama_decode(ctx_dft, llama_batch_get_one(inp.data(), n_input)); // Use regular decode for now
 
     LOG_DBG("Prefill completed for draft model.\n");
 
@@ -653,10 +610,11 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_cp  (mem_dft, s_keep, 0, -1, -1);
                 llama_memory_seq_keep(mem_dft, 0);
 
-                llama_memory_seq_rm  (mem_tgt, s_keep, n_past_tgt, -1);
-                llama_memory_seq_keep(mem_tgt, s_keep);
-                llama_memory_seq_cp  (mem_tgt, s_keep, 0, -1, -1);
-                llama_memory_seq_keep(mem_tgt, 0);
+                // QNN KV cache management for target model
+                qnn_runner.kv_seq_rm  (s_keep, n_past_tgt, -1);
+                qnn_runner.kv_seq_keep(s_keep);
+                qnn_runner.kv_seq_cp  (s_keep, 0, -1, -1);
+                qnn_runner.kv_seq_keep(0);
             }
 
             for (int s = 0; s < n_seq_dft; ++s) {
@@ -1075,20 +1033,23 @@ int main(int argc, char ** argv) {
 
         LOG_DBG("batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
 
-        // evaluate the target model on the drafted tokens
+        // evaluate the target model on the drafted tokens using QNN
         {
-            llama_memory_seq_keep(mem_tgt, 0);
+            // QNN KV cache management: Copy seq 0 to all active sequences
+            qnn_runner.kv_seq_keep(0);
             for (int s = 1; s < n_seq_dft; ++s) {
-                llama_memory_seq_cp(mem_tgt, 0, s, -1, -1);
+                qnn_runner.kv_seq_cp(0, s, -1, -1);
             }
 
             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
             const auto t_dec_start = ggml_time_us(); //target model decode 시작 시간 기록 -ym-
-            llama_decode(ctx_tgt, batch_tgt);
-            ctx_tgt->synchronize();
+            if (qnn_runner.qnn_decode(ctx_tgt, batch_tgt)) {
+                LOG_ERR("%s: QNN verification decode failed: %s\n", __func__, qnn_runner.get_error().c_str());
+                break;
+            }
             const auto t_dec_end = ggml_time_us(); //target model decode 종료 시간 기록 -ym-
             LOG_DBG("/////////////////////////////batch_tgt.n_tokens: %d, target model decoding took %.3f seconds\n", batch_tgt.n_tokens, (t_dec_end - t_dec_start) / 1e6f);
-            backup_data = cb_data.data;
+            // backup_data = cb_data.data; // Hidden state extraction not available with QNN
             ++n_past_tgt;
         }
 
