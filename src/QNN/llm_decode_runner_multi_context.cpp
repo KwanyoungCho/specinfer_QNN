@@ -637,6 +637,33 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
       }
     }
 
+    auto& bindings_iter = shards_[final_shard].prefill_alloc->bindings();
+
+    const QnnJsonTensorDesc* hidden_state_desc = nullptr;
+    for(const auto& t : shards_[final_shard].prefill_graph->outputs){
+      if (t.name.find("output_quantized_decomposed_dequantize_per_tensor_tensor_0") != std::string::npos) {
+        hidden_state_desc = &t;
+        break;
+      }
+    }
+
+    if (hidden_state_desc) {
+      auto hs_it = bindings_iter.find(hidden_state_desc->name);
+      if (hs_it != bindings_iter.end() && hs_it->second) {
+        // Parse dimensions: [batch, seq_len, hidden_dim]
+        size_t hidden_dim = hidden_state_desc->dims.size() >= 3 ? hidden_state_desc->dims[2] : 4096;
+        
+        // Only save chunk_size tokens (not the full padded prefill_ar_len)
+        size_t elements_to_save = chunk_size * hidden_dim;
+        
+        // Float32 tensor
+        const float* float_data = reinterpret_cast<const float*>(hs_it->second);
+        ctx->final_hiddens.insert(ctx->final_hiddens.end(), float_data, float_data + elements_to_save); 
+      }
+    }
+
+    
+
     // Advance counter for next iteration
     processed += chunk_size;
   }  // End of while loop
@@ -668,6 +695,25 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
       std::cout << "[Multi-Context Prefill] Injected logits for " << n_total 
                 << " tokens (accumulated from all chunks)\n";
     }
+  }
+
+  {
+    auto & hs = ctx->final_hiddens;
+    size_t n_floats = hs.size();
+    size_t hidden_dim = 4096;
+    size_t n_tokens = n_floats / hidden_dim;
+
+    printf("\n===== [Prefill Hidden States - ALL] =====\n");
+    printf("total: %zu floats (%zu tokens x %zu)\n", n_floats, n_tokens, hidden_dim);
+
+    for (size_t t = 0; t < n_tokens; ++t) {
+        printf("[token %zu] ", t);
+        for (size_t d = 0; d < hidden_dim; ++d) {
+            printf("%.6f ", hs[t * hidden_dim + d]);
+        }
+        printf("\n");
+    }
+    printf("==========================================\n\n");
   }
   
   return true;

@@ -213,6 +213,8 @@ private:
     //
 
 public:
+    std::vector<float> final_hiddens;
+    
     uint32_t graph_max_nodes() const;
 
     // can reuse the llm_graph_result instance of the context (for example to update a memory module)
