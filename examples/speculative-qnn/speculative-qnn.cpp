@@ -16,6 +16,41 @@
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  1280000
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
+// Debug helper: print KV cache metadata in bitmap format
+// Format: [cell] pos (seq_ids), 5 per line, 'x' for empty cells
+static void dump_kv_meta(llama_qnn::LLMDecodeRunner & runner, const char * label) {
+    auto * kvm = runner.get_kv_manager();
+    if (!kvm) { fprintf(stderr, "[KV] %s: NULL\n", label); return; }
+    const auto & cells = kvm->get_all_cell_meta();
+    
+    // Find last valid cell
+    int last_valid = -1;
+    for (int i = (int)cells.size() - 1; i >= 0; --i) {
+        if (!cells[i].is_empty()) { last_valid = i; break; }
+    }
+    
+    fprintf(stderr, "[KV] %s (last=%d):\n", label, last_valid);
+    if (last_valid < 0) { fprintf(stderr, "(empty)\n"); return; }
+    
+    for (int i = 0; i <= last_valid; ++i) {
+        if (cells[i].is_empty()) {
+            fprintf(stderr, "[%3d] x         ", i);
+        } else {
+            // Build seq_id string
+            std::string seq_str;
+            bool first = true;
+            for (int s : cells[i].seq) {
+                if (!first) seq_str += ",";
+                seq_str += std::to_string(s);
+                first = false;
+            }
+            fprintf(stderr, "[%3d] %3d  (%s)  ", i, cells[i].pos, seq_str.c_str());
+        }
+        if ((i + 1) % 5 == 0) fprintf(stderr, "\n");
+    }
+    if ((last_valid + 1) % 5 != 0) fprintf(stderr, "\n");
+}
+
 struct seq_draft {
     bool active   = false;
     bool drafting = false;
@@ -93,10 +128,9 @@ int main(int argc, char ** argv) {
     tgt_model_param.vocab_only = true;
     model_tgt = llama_model_load_from_file(qnn_config.tokenizer_path.c_str(), tgt_model_param);
     llama_context_params tgt_ctx_param = llama_context_default_params();
-    tgt_ctx_param.n_ctx     = params.n_ctx > 0 ? params.n_ctx : 4096;
-    tgt_ctx_param.n_batch   = params.n_batch > 0 ? params.n_batch : 2048;
-    tgt_ctx_param.n_seq_max = params.n_parallel + 1;
-    tgt_ctx_param.no_perf   = false;
+    tgt_ctx_param.n_ctx     = 4096; // TODO: QNN의 max context length에 맞게 조정
+    tgt_ctx_param.n_batch   = 2048;
+    tgt_ctx_param.n_seq_max = params.n_parallel;
     ctx_tgt = llama_init_from_model(model_tgt, tgt_ctx_param);
 
     if (qnn_config.ctx_dir.empty()) {
@@ -228,6 +262,7 @@ int main(int argc, char ** argv) {
     int n_predict = 0;
     int n_drafted = 0;
     int n_accept  = 0;
+    int n_steps   = 0;
 
     int n_past_tgt = inp.size();
     int n_past_dft = inp.size();
@@ -283,7 +318,6 @@ int main(int argc, char ** argv) {
             // for stochastic sampling, attempt to match the token with the drafted tokens
             {
                 bool accept = false;
-                params.sampling.temp = 0;
                 if (params.sampling.temp > 0) {
                     // stochastic verification
                     common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft], true);
@@ -460,8 +494,11 @@ int main(int argc, char ** argv) {
                 }
             }
         }
-
+        // [Debug Spec]
+        // fprintf(stderr, "[VERIFY] accepted=%d tokens (i_dft=%d, n_past_tgt=%d)\n", 
+        //     i_dft, i_dft, n_past_tgt);
         {
+            ++n_steps;
             LOG_DBG("the sampled target token (%d, '%s') did not match, or we ran out of drafted tokens\n", token_id, token_str.c_str());
 
             // Manage KV cache after accept/reject
@@ -474,8 +511,11 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_keep(mem_dft, 0);
 
                 // QNN Target model: same pattern as llama_memory_seq_*
+                // [spec debug]
+                // dump_kv_meta(qnn_runner, "after_accept_reject");
                 qnn_runner.kv_seq_rm  (s_keep, n_past_tgt, -1);
                 qnn_runner.kv_seq_keep(s_keep);
+                // dump_kv_meta(qnn_runner, "rm_keep");
                 qnn_runner.kv_seq_cp  (s_keep, 0, -1, -1);
                 qnn_runner.kv_seq_keep(0);
             }
@@ -526,6 +566,9 @@ int main(int argc, char ** argv) {
 
         // sample n_draft tokens from the draft model using tree-based sampling
         for (int i = 0; i < n_draft; ++i) {
+
+            if (batch_tgt.n_tokens >= n_draft) break;     // tree-budget size 고정
+
             batch_dft.n_tokens = 0;
 
             for (int s = 0; s < n_seq_dft; ++s) {
@@ -632,6 +675,10 @@ int main(int argc, char ** argv) {
                 break;
             }
         }
+        // [Debug Spec]
+        // fprintf(stderr, "[DRAFT] drafted=%d tokens (batch_tgt.n_tokens=%d)\n", 
+        //     batch_tgt.n_tokens - 1, batch_tgt.n_tokens);  // -1 for seed
+        
 
         // evaluate the target model on the drafted tokens using QNN
         {
@@ -649,8 +696,7 @@ int main(int argc, char ** argv) {
                 LOG_ERR("%s: QNN verification decode failed: %s\n", __func__, qnn_runner.get_error().c_str());
                 break;
             }
-            
-            // KV cache metadata is automatically updated inside qnn_decode
+        
             ++n_past_tgt;
         }
 
@@ -677,16 +723,19 @@ int main(int argc, char ** argv) {
     LOG_INF("n_predict = %d\n", n_predict);
     LOG_INF("n_drafted = %d\n", n_drafted);
     LOG_INF("n_accept  = %d\n", n_accept);
+    LOG_INF("n_steps   = %d\n", n_steps);
     LOG_INF("accept    = %.3f%%\n", 100.0f * n_accept / n_drafted);
+    LOG_INF("avg_draft_len  = %.3f\n", n_steps > 0 ? (float)n_drafted / n_steps : 0.0f);
+    LOG_INF("avg_accept_len = %.3f\n", n_steps > 0 ? (float)n_accept / n_steps : 0.0f);
 
     LOG_INF("\n");
     LOG_INF("draft:\n\n");
     // TODO: print sampling/grammar timings for all drafts
     llama_perf_context_print(ctx_dft);
 
-    LOG_INF("\n");
-    LOG_INF("target:\n\n");
-    common_perf_print(ctx_tgt, smpl);
+    // LOG_INF("\n");
+    // LOG_INF("target:\n\n");
+    // common_perf_print(ctx_tgt, smpl);
 
     common_sampler_free(smpl);
     for (int s = 0; s < n_seq_dft; ++s) {
