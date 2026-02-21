@@ -43,8 +43,8 @@ static bool cb_get_hidden(struct ggml_tensor * tensor, bool ask, void * user_dat
 
     int64_t end_time = ggml_time_us();
     int64_t latency = end_time - start_time;
-    LOG_DBG("[[Latency for tensor]] '%s' (%s): %lld us ==> (%d)\n", tensor->name, ggml_op_name(tensor->op), latency, (int)ggml_backend_buffer_is_host(tensor->buffer));
-    LOG_DBG("[%d, %d, %d, %d]\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+    // LOG_DBG("[[Latency for tensor]] '%s' (%s): %lld us ==> (%d)\n", tensor->name, ggml_op_name(tensor->op), latency, (int)ggml_backend_buffer_is_host(tensor->buffer));
+    // LOG_DBG("[%d, %d, %d, %d]\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     auto * cb_data = (struct callback_data *) user_data;
     auto n_bytes = ggml_nbytes(tensor);
     cb_data->data.resize(n_bytes / sizeof(float)); //float 타입으로 변경 -ym-
@@ -61,10 +61,10 @@ static bool cb_get_latency(struct ggml_tensor * tensor, bool ask, void * user_da
 
     int64_t end_time = ggml_time_us();
     int64_t latency = end_time - start_time;
-    LOG_DBG("[[Latency for tensor]] '%s' (%s): %lld us ==> (%d)\n", tensor->name, ggml_op_name(tensor->op), latency, (int)ggml_backend_buffer_is_host(tensor->buffer));
+    // LOG_DBG("[[Latency for tensor]] '%s' (%s): %lld us ==> (%d)\n", tensor->name, ggml_op_name(tensor->op), latency, (int)ggml_backend_buffer_is_host(tensor->buffer));
     ggml_tensor * src_tensor = tensor->src[0];
-    LOG_DBG("[[Latency for tensor]] [%d, %d, %d, %d]\n", src_tensor->ne[0], src_tensor->ne[1], src_tensor->ne[2], src_tensor->ne[3]);
-    LOG_DBG("[[Latency for tensor]] [%d, %d, %d, %d]\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+    // LOG_DBG("[[Latency for tensor]] [%d, %d, %d, %d]\n", src_tensor->ne[0], src_tensor->ne[1], src_tensor->ne[2], src_tensor->ne[3]);
+    // LOG_DBG("[[Latency for tensor]] [%d, %d, %d, %d]\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
 
     return true;
 }
@@ -184,10 +184,10 @@ int main(int argc, char ** argv) {
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
     const bool vocab_type_tgt = llama_vocab_type(vocab_tgt);
-    LOG_DBG("vocab_type tgt: %d\n", vocab_type_tgt);
+    // LOG_DBG("vocab_type tgt: %d\n", vocab_type_tgt);
 
     const bool vocab_type_dft = llama_vocab_type(vocab_dft);
-    LOG_DBG("vocab_type dft: %d\n", vocab_type_dft);
+    // LOG_DBG("vocab_type dft: %d\n", vocab_type_dft);
 
     if (vocab_type_tgt != vocab_type_dft) {
         LOG_ERR("%s: draft model vocab type must match target model to use speculation but ", __func__);
@@ -270,8 +270,8 @@ int main(int argc, char ** argv) {
         }
     }
     const auto t_prefill_end = ggml_time_us();
-    LOG_DBG("QNN Prefill completed.\n");
-    LOG_DBG("\nn_input: %d, prefill latency: %.3f seconds\n", n_input, (t_prefill_end - t_prefill_start) / 1e6f);
+    // LOG_DBG("QNN Prefill completed.\n");
+    // LOG_DBG("\nn_input: %d, prefill latency: %.3f seconds\n", n_input, (t_prefill_end - t_prefill_start) / 1e6f);
 
     // Extract hidden states from QNN prefill output (stored in ctx_tgt->final_hiddens)
     const auto& final_hs = ctx_tgt->final_hiddens;
@@ -281,8 +281,8 @@ int main(int argc, char ** argv) {
     }
     // const int hidden_dim = (int)(final_hs.size() / n_input);
     const int hidden_dim = 4096;
-    LOG_DBG("[QNN] Hidden states extracted: %zu floats, hidden_dim=%d, n_tokens=%d\n",
-            final_hs.size(), hidden_dim, n_input);
+    // LOG_DBG("[QNN] Hidden states extracted: %zu floats, hidden_dim=%d, n_tokens=%d\n",
+    //         final_hs.size(), hidden_dim, n_input);
 
     // sliced_data: hidden states for tokens[0..n_input-2] (EAGLE draft uses shifted input)
     std::vector<float> sliced_data(final_hs.begin(), final_hs.begin() + (n_input - 1) * hidden_dim);
@@ -293,7 +293,7 @@ int main(int argc, char ** argv) {
     // Draft model prefill with EAGLE hidden state sharing
     llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
 
-    LOG_DBG("Prefill completed for draft model.\n");
+    // LOG_DBG("Prefill completed for draft model.\n");
 
     // float* p_data = sliced_data.data();
     // size_t total_size = sliced_data.size();
@@ -316,6 +316,43 @@ int main(int argc, char ** argv) {
     //     LOG("\n");
     // }
     LOG("\n");LOG("\n");
+
+    // // ===== DIAGNOSTIC: Check hidden state stats after prefill =====
+    // {
+    //     float hs_min = 1e30f, hs_max = -1e30f, hs_sum = 0.0f;
+    //     for (size_t i = 0; i < final_hs.size(); ++i) {
+    //         hs_min = std::min(hs_min, final_hs[i]);
+    //         hs_max = std::max(hs_max, final_hs[i]);
+    //         hs_sum += final_hs[i];
+    //     }
+    //     fprintf(stderr, "[DIAG-PREFILL] hidden_state: count=%zu, min=%.6f, max=%.6f, mean=%.6f\n",
+    //             final_hs.size(), hs_min, hs_max, hs_sum / final_hs.size());
+    //     size_t last_offset = (size_t)(n_input - 1) * hidden_dim;
+    //     fprintf(stderr, "[DIAG-PREFILL] last_token_hs[0..7]: ");
+    //     for (int k = 0; k < 8 && last_offset + k < final_hs.size(); ++k)
+    //         fprintf(stderr, "%.4f ", final_hs[last_offset + k]);
+    //     fprintf(stderr, "\n");
+    // }
+
+    // // ===== DIAGNOSTIC: Check target logits after prefill =====
+    // {
+    //     const float * logits_ptr = llama_get_logits_ith(ctx_tgt, n_input - 1);
+    //     if (logits_ptr) {
+    //         int n_vocab_diag = llama_vocab_n_tokens(vocab_tgt);
+    //         std::vector<std::pair<float, int>> top_logits;
+    //         for (int v = 0; v < n_vocab_diag; ++v)
+    //             top_logits.push_back({logits_ptr[v], v});
+    //         std::partial_sort(top_logits.begin(), top_logits.begin() + 5, top_logits.end(),
+    //             [](const auto& a, const auto& b){ return a.first > b.first; });
+    //         fprintf(stderr, "[DIAG-PREFILL] Target logits top-5 (idx=%d):\n", n_input - 1);
+    //         for (int k = 0; k < 5; ++k)
+    //             fprintf(stderr, "  rank%d: token=%d logit=%.4f '%s'\n", k,
+    //                 top_logits[k].second, top_logits[k].first,
+    //                 common_token_to_piece(ctx_tgt, top_logits[k].second).c_str());
+    //     } else {
+    //         fprintf(stderr, "[DIAG-PREFILL] ERROR: logits_ptr is NULL for idx=%d\n", n_input - 1);
+    //     }
+    // }
 
     const auto t_enc_end = ggml_time_us();
 
@@ -384,7 +421,7 @@ int main(int argc, char ** argv) {
             active_seqs.insert(s);
             const auto & tokens = drafts[s].tokens;
 
-            LOG_DBG("draft %d: %s\n", s, string_from(ctx_dft, tokens).c_str());
+            // LOG_DBG("draft %d: %s\n", s, string_from(ctx_dft, tokens).c_str());
         }
 
         int i_dft  = 0;
@@ -430,7 +467,7 @@ int main(int argc, char ** argv) {
                             continue;
                         }
 
-                        LOG_DBG("verifying sequence #%d at pos #%d from %d active sequence(s)\n", s, i_dft, (int) active_seqs.size());
+                        // LOG_DBG("verifying sequence #%d at pos #%d from %d active sequence(s)\n", s, i_dft, (int) active_seqs.size());
                         float r = u_dist(rng);
                         llama_token_data_array dist_dft = { drafts[s].dists[i_dft].data() , drafts[s].dists[i_dft].size(), LLAMA_TOKEN_NULL, true };
 
@@ -449,7 +486,7 @@ int main(int argc, char ** argv) {
                                 break;
                             }
                         }
-                        LOG_DBG("r = %f, p_dft = %f, p_tgt = %f\n", r, p_dft, p_tgt);
+                        // LOG_DBG("r = %f, p_dft = %f, p_tgt = %f\n", r, p_dft, p_tgt);
                         if (r <= p_tgt / p_dft) {
                             s_keep = s;
                             accept = true;
@@ -457,10 +494,10 @@ int main(int argc, char ** argv) {
                             token_str = common_token_to_piece(ctx_tgt, token_id);
                             common_sampler_accept(smpl, token_id, true);
 
-                            LOG_DBG("draft token %d of sequence %d (%d, '%s') accepted\n", i_dft, s, token_id, token_str.c_str());
+                            // LOG_DBG("draft token %d of sequence %d (%d, '%s') accepted\n", i_dft, s, token_id, token_str.c_str());
                             break;
                         } else {
-                            LOG_DBG("draft token %d of sequence %d (%d, '%s') rejected\n", i_dft, s, drafts[s].tokens[i_dft], common_token_to_piece(ctx_tgt, drafts[s].tokens[i_dft]).c_str());
+                            // LOG_DBG("draft token %d of sequence %d (%d, '%s') rejected\n", i_dft, s, drafts[s].tokens[i_dft], common_token_to_piece(ctx_tgt, drafts[s].tokens[i_dft]).c_str());
                             drafts[s].active = false;
 
                             // calculate residual probability
@@ -515,7 +552,7 @@ int main(int argc, char ** argv) {
                     if (!accept) {
                         // all drafted tokens were rejected
                         // sample from the target model
-                        LOG_DBG("all drafted tokens were rejected, sampling from residual distribution\n");
+                        // LOG_DBG("all drafted tokens were rejected, sampling from residual distribution\n");
                         std::vector<float> probs(dist_tgt.size);
                         for (size_t i = 0; i < dist_tgt.size; ++i) {
                             probs[i] = dist_tgt.data[i].p;
@@ -533,12 +570,34 @@ int main(int argc, char ** argv) {
                     // greedy verification
 
                     // sample from the target model
-                    LOG_DBG("sampling target: s_keep = %3d, i_dft = %3d, i_batch_tgt = %3d\n", s_keep, i_dft, drafts[s_keep].i_batch_tgt[i_dft]);
+                    // LOG_DBG("sampling target: s_keep = %3d, i_dft = %3d, i_batch_tgt = %3d\n", s_keep, i_dft, drafts[s_keep].i_batch_tgt[i_dft]);
                     token_id = common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft]);
 
                     common_sampler_accept(smpl, token_id, true);
 
                     token_str = common_token_to_piece(ctx_tgt, token_id);
+
+                    // // ===== DIAGNOSTIC: Greedy verification comparison =====
+                    // {
+                    //     int tgt_idx = drafts[s_keep].i_batch_tgt[i_dft];
+                    //     llama_token draft_tok = (i_dft < (int)drafts[s_keep].tokens.size()) ? drafts[s_keep].tokens[i_dft] : -1;
+                    //     fprintf(stderr, "[DIAG-VERIFY] i_dft=%d, i_batch_tgt=%d, target_sampled=%d('%s'), draft_token=%d('%s') %s\n",
+                    //         i_dft, tgt_idx, token_id, token_str.c_str(),
+                    //         draft_tok, (draft_tok >= 0 ? common_token_to_piece(ctx_tgt, draft_tok).c_str() : "N/A"),
+                    //         (token_id == draft_tok) ? "MATCH" : "MISMATCH");
+                    //     const float * vlogits = llama_get_logits_ith(ctx_tgt, tgt_idx);
+                    //     if (vlogits) {
+                    //         int nv = llama_vocab_n_tokens(vocab_tgt);
+                    //         std::vector<std::pair<float, int>> vtop;
+                    //         for (int v = 0; v < nv; ++v) vtop.push_back({vlogits[v], v});
+                    //         std::partial_sort(vtop.begin(), vtop.begin() + std::min(5, nv), vtop.end(),
+                    //             [](const auto& a, const auto& b){ return a.first > b.first; });
+                    //         fprintf(stderr, "[DIAG-VERIFY]   target top-5: ");
+                    //         for (int k = 0; k < 5 && k < nv; ++k)
+                    //             fprintf(stderr, "%d(%.2f) ", vtop[k].second, vtop[k].first);
+                    //         fprintf(stderr, "\n");
+                    //     }
+                    // }
 
                     for (int s = 0; s < n_seq_dft; ++s) {
                         if (!drafts[s].active) {
@@ -546,7 +605,7 @@ int main(int argc, char ** argv) {
                         }
 
                         if (i_dft < (int) drafts[s].tokens.size() && token_id == drafts[s].tokens[i_dft]) {
-                            LOG_DBG("the sampled target token matches the %dth drafted token of sequence %d (%d, '%s') - accepted\n", i_dft, s, token_id, token_str.c_str());
+                            // LOG_DBG("the sampled target token matches the %dth drafted token of sequence %d (%d, '%s') - accepted\n", i_dft, s, token_id, token_str.c_str());
                             accept_counts[s][i_dft]++; // [추가] 수락된 토큰의 개수를 카운트합니다.
 
                             s_keep = s;
@@ -599,7 +658,7 @@ int main(int argc, char ** argv) {
 
         int verification_latency = (verification_end - verification_start) / 1000; //ms 단위로 변환 -ym-
         verification_latencies.push_back(verification_latency);
-        LOG_DBG("verification took %.3f seconds\n", (verification_end - verification_start) / 1e6f);
+        // LOG_DBG("verification took %.3f seconds\n", (verification_end - verification_start) / 1e6f);
 
         for (int i = 0; i < rows; i++) {
             for (int j = 0; j < cols; j++) {
@@ -619,17 +678,17 @@ int main(int argc, char ** argv) {
         /////////////////////////////////////////Drafting Start///////////////////////////////////////
 
         const auto drafting_start = ggml_time_us(); //tree decoding 시작 시간 기록 -ym-
-        LOG_DBG("Current n_accept: %d, n_drafted: %d, n_predict: %d\n", n_accept, n_drafted, n_predict);
+        // LOG_DBG("Current n_accept: %d, n_drafted: %d, n_predict: %d\n", n_accept, n_drafted, n_predict);
 
         //////////////////////////////////////////Recompute Logic Start////////////////////////////////////////
 
         const auto recompute_start = ggml_time_us(); //recompute 시작 시간 기록 -ym-
         {
-            LOG_DBG("the sampled target token (%d, '%s') did not match, or we ran out of drafted tokens\n", token_id, token_str.c_str());
+            // LOG_DBG("the sampled target token (%d, '%s') did not match, or we ran out of drafted tokens\n", token_id, token_str.c_str());
             const auto remove_KV_Cache_start = ggml_time_us();
             // TODO: simplify
             {
-                LOG_DBG("keeping sequence %d, n_past_tgt = %d, n_past_dft = %d\n", s_keep, n_past_tgt, n_past_dft);
+                // LOG_DBG("keeping sequence %d, n_past_tgt = %d, n_past_dft = %d\n", s_keep, n_past_tgt, n_past_dft);
 
                 llama_memory_seq_keep(mem_dft, s_keep);
                 llama_memory_seq_cp  (mem_dft, s_keep, 0, -1, -1);
@@ -656,7 +715,7 @@ int main(int argc, char ** argv) {
             llama_memory_seq_rm(mem_dft, 0, recompute_point, -1);
 
             const auto remove_KV_Cache_end = ggml_time_us();
-            LOG_DBG("remove_KV_Cache took %.3f seconds\n", (remove_KV_Cache_end - remove_KV_Cache_start) / 1e6f);
+            // LOG_DBG("remove_KV_Cache took %.3f seconds\n", (remove_KV_Cache_end - remove_KV_Cache_start) / 1e6f);
 
             //recompute logic 추가 -ym-
             // fprintf(stderr, "[DBG] recompute check: i_dft=%d\n", i_dft);
@@ -670,27 +729,64 @@ int main(int argc, char ** argv) {
                 const auto recompute_decode_start = ggml_time_us();
                 llama_decode_eagle(ctx_dft, batch_dft, temp4.data());
                 const auto recompute_decode_end = ggml_time_us();
-                LOG_DBG("recompute decode latency: %.3f seconds\n", (recompute_decode_end - recompute_decode_start) / 1e6f);
+                // LOG_DBG("recompute decode latency: %.3f seconds\n", (recompute_decode_end - recompute_decode_start) / 1e6f);
             }
 
             common_batch_clear(batch_dft);
             common_batch_add(batch_dft, token_id, n_past_dft, {0}, true);
 
-            LOG_DBG("n_past_tgt: %d, n_past_dft: %d\n", n_past_tgt, n_past_dft);
-            LOG_DBG("recompute point: %d, n_past_dft: %d, recompute.size(): %zu, batch_dft.n_tokens: %d, backup_data.size(): %zu\n", recompute_point, n_past_dft, recompute.size(), batch_dft.n_tokens, backup_data.size()/hidden_dim);
+            // LOG_DBG("n_past_tgt: %d, n_past_dft: %d\n", n_past_tgt, n_past_dft);
+            // LOG_DBG("recompute point: %d, n_past_dft: %d, recompute.size(): %zu, batch_dft.n_tokens: %d, backup_data.size(): %zu\n", recompute_point, n_past_dft, recompute.size(), batch_dft.n_tokens, backup_data.size()/hidden_dim);
 
             // LOG_DBG("dft batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_dft, batch_dft).c_str());
+
+            // // ===== DIAGNOSTIC: Hidden state going into EAGLE recompute =====
+            // {
+            //     float hs_min = 1e30f, hs_max = -1e30f, hs_sum = 0.0f, hs_sq = 0.0f;
+            //     for (int k = 0; k < hidden_dim; ++k) {
+            //         float v = temp3[k];
+            //         hs_min = std::min(hs_min, v);
+            //         hs_max = std::max(hs_max, v);
+            //         hs_sum += v;
+            //         hs_sq += v * v;
+            //     }
+            //     fprintf(stderr, "[DIAG-RECOMP-QNN] temp3 stats: min=%.4f max=%.4f mean=%.4f rms=%.4f\n",
+            //         hs_min, hs_max, hs_sum / (float)hidden_dim, sqrtf(hs_sq / (float)hidden_dim));
+            //     fprintf(stderr, "[DIAG-RECOMP-QNN] temp3[0..7]: ");
+            //     for (int k = 0; k < 8; ++k) fprintf(stderr, "%.4f ", temp3[k]);
+            //     fprintf(stderr, "\n");
+            //     fprintf(stderr, "[DIAG-RECOMP-QNN] token_id=%d('%s'), n_past_dft=%d\n",
+            //         token_id, common_token_to_piece(ctx_tgt, token_id).c_str(), n_past_dft);
+            // }
+
             // fprintf(stderr, "[DBG] recompute seed decode: batch_dft.n_tokens=%d, temp3.size=%zu\n", batch_dft.n_tokens, temp3.size());
             const auto recompute_decode_start1 = ggml_time_us();
             llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
             const auto recompute_decode_end1 = ggml_time_us();
-            LOG_DBG("recompute decode latency: %.3f seconds\n", (recompute_decode_end1 - recompute_decode_start1) / 1e6f);
+            // LOG_DBG("recompute decode latency: %.3f seconds\n", (recompute_decode_end1 - recompute_decode_start1) / 1e6f);
+
+            // // ===== DIAGNOSTIC: EAGLE model logits after recompute =====
+            // {
+            //     const float * dft_logits = llama_get_logits_ith(ctx_dft, 0);
+            //     if (dft_logits) {
+            //         int nv = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_dft)));
+            //         std::vector<std::pair<float, int>> dtop;
+            //         for (int v = 0; v < nv; ++v) dtop.push_back({dft_logits[v], v});
+            //         std::partial_sort(dtop.begin(), dtop.begin() + std::min(5, nv), dtop.end(),
+            //             [](const auto& a, const auto& b){ return a.first > b.first; });
+            //         fprintf(stderr, "[DIAG-RECOMP-QNN] EAGLE logits top-5: ");
+            //         for (int k = 0; k < 5 && k < nv; ++k)
+            //             fprintf(stderr, "%d(%.2f,'%s') ", dtop[k].second, dtop[k].first,
+            //                 common_token_to_piece(ctx_dft, dtop[k].second).c_str());
+            //         fprintf(stderr, "\n");
+            //     }
+            // }
 
             ++n_past_dft;
         }
 
         const auto recompute_end = ggml_time_us(); //recompute 시작 시간 기록 -ym-
-        LOG_DBG("recompute took %.3f seconds\n", (recompute_end - recompute_start) / 1e6f);
+        // LOG_DBG("recompute took %.3f seconds\n", (recompute_end - recompute_start) / 1e6f);
 
         //////////////////////////////////////////Recompute Logic End////////////////////////////////////////
 
@@ -721,6 +817,11 @@ int main(int argc, char ** argv) {
 
         common_batch_clear(batch_tgt);
         common_batch_add  (batch_tgt, drafts[0].tokens[0], n_past_tgt, { 0 }, true);
+
+        // // ===== DIAGNOSTIC: First draft token going into batch_tgt =====
+        // fprintf(stderr, "[DIAG-DRAFT] Tree start: drafts[0].tokens[0]=%d('%s'), n_past_tgt=%d, n_past_dft=%d\n",
+        //     drafts[0].tokens[0], common_token_to_piece(ctx_tgt, drafts[0].tokens[0]).c_str(),
+        //     n_past_tgt, n_past_dft);
 
         // sample n_draft tokens from the draft model using tree-based sampling
         for (int i = 0; i < n_draft; ++i) {
@@ -792,17 +893,17 @@ int main(int argc, char ** argv) {
                 const auto common_sampler_sample_start = ggml_time_us(); //common_sampler_sample 시작 시간 기록 -ym-
                 common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft, true);
                 const auto common_sampler_sample_end = ggml_time_us(); //common_sampler_sample 시작 시간 기록 -ym-
-                LOG_DBG("common_sampler_sample took %f seconds\n", (common_sampler_sample_end - common_sampler_sample_start) / 1e6f);
+                // LOG_DBG("common_sampler_sample took %f seconds\n", (common_sampler_sample_end - common_sampler_sample_start) / 1e6f);
 
                 const auto common_sampler_get_candidates_start = ggml_time_us(); //common_sampler_get_candidates 시작 시간 기록 -ym-
                 const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
                 const auto common_sampler_get_candidates_end = ggml_time_us(); //common_sampler_get_candidates 시작 시간 기록 -ym-
-                LOG_DBG("common_sampler_get_candidates took %f seconds\n", (common_sampler_get_candidates_end - common_sampler_get_candidates_start) / 1e6f);
+                // LOG_DBG("common_sampler_get_candidates took %f seconds\n", (common_sampler_get_candidates_end - common_sampler_get_candidates_start) / 1e6f);
 
-                for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
-                    LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                            k, s, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
-                }
+                // for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
+                //     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                //             k, s, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                // }
 
                 std::vector<int> sa(1, s);
 
@@ -812,19 +913,19 @@ int main(int argc, char ** argv) {
 
                 // Accumulated Probability Table Add 1
                 float prob = cur_p->data[0].p;
-                LOG_DBG(" %f \n", prob);
+                // LOG_DBG(" %f \n", prob);
                 if (i == 0) {
                     scores.at(s).at(i) = prob;
                     column_scores.at(s) = prob;
                 }
                 else {
-                    LOG_DBG("before prob = %f, prob = %f, before prob x prob = %f\n", scores.at(s).at(i-1), prob, scores.at(s).at(i-1) * prob);
+                    // LOG_DBG("before prob = %f, prob = %f, before prob x prob = %f\n", scores.at(s).at(i-1), prob, scores.at(s).at(i-1) * prob);
                     scores.at(s).at(i) = scores.at(s).at(i-1) * prob;
                     column_scores.at(s) = scores.at(s).at(i-1) * prob;
                 }
 
                 const auto sampling_end = ggml_time_us(); //sampling 시작 시간 기록 -ym-
-                LOG_DBG("sampling took %f seconds\n", (sampling_end - sampling_start) / 1e6f);
+                // LOG_DBG("sampling took %f seconds\n", (sampling_end - sampling_start) / 1e6f);
 
                 ////////////////////////////////////////Split Start///////////////////////////////////////
 
@@ -840,7 +941,7 @@ int main(int argc, char ** argv) {
                 ///////////////////////////////////////////////
 
                 int f_max = 4; // 최대 분기 수 -ym-
-                LOG_DBG("cur_depth = %d, s = %d\n", cur_depth, s);
+                // LOG_DBG("cur_depth = %d, s = %d\n", cur_depth, s);
                 //기존 binary tree 구조
                 if (cur_depth == 0)
                     f_max = 4; //4, 2
@@ -874,20 +975,20 @@ int main(int argc, char ** argv) {
                 else
                     f_max = 4;
                 for (int f = 1; f < f_max; ++f) {
-                    LOG_DBG("cur_p->data[f].p = %lf\n", cur_p->data[f].p);
+                    // LOG_DBG("cur_p->data[f].p = %lf\n", cur_p->data[f].p);
                     // if (n_seq_cur < n_seq_dft && cur_p->data[f].p > p_draft_split) {
                     if (n_seq_cur < n_seq_dft) {
                 //////////////////////////////////////////////
-                        LOG_DBG("splitting seq %3d into %3d\n", s, n_seq_cur);
+                        // LOG_DBG("splitting seq %3d into %3d\n", s, n_seq_cur);
 
                         llama_memory_seq_rm(mem_dft,    n_seq_cur, -1, -1);
                         llama_memory_seq_cp(mem_dft, s, n_seq_cur, -1, -1);
                         
-                        LOG_DBG("디버그: n_seq_cur = %d, cb_data.data.size() = %zu\n", n_seq_cur, backup_data.size());
+                        // LOG_DBG("디버그: n_seq_cur = %d, cb_data.data.size() = %zu\n", n_seq_cur, backup_data.size());
                         const auto hidden_state_insert_start = ggml_time_us(); //hidden_state insert 시작 시간 기록 -ym-
                         temp.insert(temp.end(), cb_data.data.begin() + (hidden_dim * drafts[s].i_batch_dft), cb_data.data.begin() + (hidden_dim * (drafts[s].i_batch_dft + 1)));
                         const auto hidden_state_insert_end = ggml_time_us(); //hidden_state insert 종료 시간 기록 -ym-
-                        LOG_DBG("hidden state insert took %.8f seconds\n", (hidden_state_insert_end - hidden_state_insert_start) / 1e6f);
+                        // LOG_DBG("hidden state insert took %.8f seconds\n", (hidden_state_insert_end - hidden_state_insert_start) / 1e6f);
 
                         // all previous tokens from this branch are now also part of the new branch
                         for (int t = 0; t < batch_tgt.n_tokens; ++t) {
@@ -921,13 +1022,13 @@ int main(int argc, char ** argv) {
 
                         // Accumulated Probability Table Add 2
                         float prob = cur_p->data[f].p;
-                        LOG_DBG(" %f \n", prob);
+                        // LOG_DBG(" %f \n", prob);
                         if (i == 0) {
                             scores.at(n_seq_cur-1).at(i) = prob;
                             column_scores.at(n_seq_cur-1) = prob;
                         }
                         else {
-                            LOG_DBG("before prob = %f, prob = %f, before prob x prob = %f\n", scores.at(s).at(i-1), prob, scores.at(s).at(i-1) * prob);
+                            // LOG_DBG("before prob = %f, prob = %f, before prob x prob = %f\n", scores.at(s).at(i-1), prob, scores.at(s).at(i-1) * prob);
                             scores.at(n_seq_cur-1).at(i) = scores.at(s).at(i-1) * prob;
                             column_scores.at(n_seq_cur-1) = scores.at(s).at(i-1) * prob;
                         }
@@ -939,7 +1040,7 @@ int main(int argc, char ** argv) {
                 ////////////////////////////////////////Split End///////////////////////////////////////
 
                 const auto split_end = ggml_time_us(); //split 시작 시간 기록 -ym-
-                LOG_DBG("split took %f seconds\n", (split_end - split_start) / 1e6f);
+                // LOG_DBG("split took %f seconds\n", (split_end - split_start) / 1e6f);
 
                 ////////////////////////////////////////Add Tokens Start///////////////////////////////////////
 
@@ -961,7 +1062,7 @@ int main(int argc, char ** argv) {
                     drafts[s].i_batch_tgt.push_back(batch_tgt.n_tokens);
 
                     common_batch_add(batch_tgt, id, n_past_tgt + i + 1, { s }, true);
-                    LOG_DBG("batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
+                    // LOG_DBG("batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
 
                     // add the token to the batch for batched decoding with the draft model
                     drafts[s].i_batch_dft = batch_dft.n_tokens;
@@ -1001,20 +1102,20 @@ int main(int argc, char ** argv) {
                 ////////////////////////////////////////Add Tokens End///////////////////////////////////////
 
                 const auto add_tokens_end = ggml_time_us(); //add tokens 시작 시간 기록 -ym-
-                LOG_DBG("add tokens took %f seconds\n", (add_tokens_end - add_tokens_start) / 1e6f);
+                // LOG_DBG("add tokens took %f seconds\n", (add_tokens_end - add_tokens_start) / 1e6f);
             }
 
             if (i + 1 == n_depth) {
                 float sum = 0.0f;
                 for (int i = 0; i < rows; i++) {
                     for (int j = 0; j < cols; j++) {
-                        LOG_DBG("%f ", scores[i][j]);
+                        // LOG_DBG("%f ", scores[i][j]);
                         sum += scores[i][j];
                     }
-                    LOG_DBG("\n");
+                    // LOG_DBG("\n");
                 }
 
-                LOG_DBG("\n\nConfidence Score Table Sum: %f\n\n", sum);
+                // LOG_DBG("\n\nConfidence Score Table Sum: %f\n\n", sum);
                 confidence_scores.push_back(sum);
             }
 
@@ -1029,7 +1130,7 @@ int main(int argc, char ** argv) {
 
             // fprintf(stderr, "[DBG] tree depth=%d, temp.size=%zu/%d=%zu, batch_dft.n_tokens=%d, cb_data.size=%zu\n",
             //         cur_depth, temp.size(), hidden_dim, temp.size()/hidden_dim, batch_dft.n_tokens, cb_data.data.size());
-            LOG_DBG("temp.size(): %d, batch_dft.n_tokens: %d\n", temp.size()/hidden_dim, batch_dft.n_tokens);
+            // LOG_DBG("temp.size(): %d, batch_dft.n_tokens: %d\n", temp.size()/hidden_dim, batch_dft.n_tokens);
 
             // evaluate the drafted tokens on the draft model
             const auto dft_model_decode_start = ggml_time_us(); //dft_model decode 시작 시간 기록 -ym-
@@ -1040,10 +1141,10 @@ int main(int argc, char ** argv) {
             const auto dft_model_decode_end = ggml_time_us(); //dft_model decode 종료 시간 기록 -ym-
             if (batch_dft.n_tokens == 1)
                 T_d.push_back((dft_model_decode_end - dft_model_decode_start) / 1000.0f); //ms 단위로 변환 -ym-
-            LOG_DBG("draft model decoding took %f seconds\n", (dft_model_decode_end - dft_model_decode_start) / 1e6f);
+            // LOG_DBG("draft model decoding took %f seconds\n", (dft_model_decode_end - dft_model_decode_start) / 1e6f);
             ++n_past_cur;
             ++n_drafted;
-            LOG_DBG("%d\n", cur_depth);
+            // LOG_DBG("%d\n", cur_depth);
             cur_depth += 1;
         }
         cur_depth = 0;
@@ -1051,7 +1152,7 @@ int main(int argc, char ** argv) {
         /////////////////////////////////////////Tree Decoding End///////////////////////////////////////
 
         const auto tree_decoding_end = ggml_time_us(); //tree decoding 시작 시간 기록 -ym-
-        LOG_DBG("Tree decoding took %.3f seconds\n", (tree_decoding_end - tree_decoding_start) / 1e6f);
+        // LOG_DBG("Tree decoding took %.3f seconds\n", (tree_decoding_end - tree_decoding_start) / 1e6f);
 
         /////////////////////////////////////////Drafting End///////////////////////////////////////
 
@@ -1059,11 +1160,11 @@ int main(int argc, char ** argv) {
         int tree_decoding_latency = (drafting_end - drafting_start) / 1000.0f; //ms 단위로 변환 -ym-
         decoding_latencies.push_back(tree_decoding_latency);
 
-        LOG_DBG("Drafting took %.3f seconds\n", (drafting_end - drafting_start) / 1e6f);
+        // LOG_DBG("Drafting took %.3f seconds\n", (drafting_end - drafting_start) / 1e6f);
 
         verification_start = ggml_time_us(); //verification 시작 시간 기록 -ym-
 
-        LOG_DBG("batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
+        // LOG_DBG("batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
 
         // evaluate the target model on the drafted tokens using QNN
         {
@@ -1073,8 +1174,6 @@ int main(int argc, char ** argv) {
                 qnn_runner.kv_seq_cp(0, s, -1, -1);
             }
 
-            // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
-            // fprintf(stderr, "[DBG] verification decode start: batch_tgt.n_tokens=%d\n", batch_tgt.n_tokens);
             ctx_tgt->final_hiddens.clear();  // Clear before verification decode to get fresh hidden states
             const auto t_dec_start = ggml_time_us(); //target model decode 시작 시간 기록 -ym-
             if (qnn_runner.qnn_decode(ctx_tgt, batch_tgt)) {
@@ -1082,13 +1181,11 @@ int main(int argc, char ** argv) {
                 break;
             }
             const auto t_dec_end = ggml_time_us(); //target model decode 종료 시간 기록 -ym-
-            LOG_DBG("/////////////////////////////batch_tgt.n_tokens: %d, target model decoding took %.3f seconds\n", batch_tgt.n_tokens, (t_dec_end - t_dec_start) / 1e6f);
-            // fprintf(stderr, "[DBG] verification decode done, final_hiddens.size=%zu\n", ctx_tgt->final_hiddens.size());
+
             if (!ctx_tgt->final_hiddens.empty()) {
                 backup_data = ctx_tgt->final_hiddens;  // Hidden states from QNN verification
-                // fprintf(stderr, "[DBG] backup_data updated from final_hiddens: %zu entries\n", backup_data.size()/hidden_dim);
             } else {
-                // fprintf(stderr, "[DBG] WARNING: final_hiddens empty! keeping temp2\n");
+                fprintf(stderr, "[DIAG-VERIF] WARNING: final_hiddens empty after verification!\n");
             }
             ++n_past_tgt;
         }

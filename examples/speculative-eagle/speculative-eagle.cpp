@@ -700,10 +700,47 @@ int main(int argc, char ** argv) {
             LOG_DBG("recompute point: %d, n_past_dft: %d, recompute.size(): %zu, batch_dft.n_tokens: %d, backup_data.size(): %zu\n", recompute_point, n_past_dft, recompute.size(), batch_dft.n_tokens, backup_data.size()/4096);
 
             // LOG_DBG("dft batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_dft, batch_dft).c_str());
+
+            // ===== DIAGNOSTIC: Hidden state going into EAGLE recompute =====
+            {
+                float hs_min = 1e30f, hs_max = -1e30f, hs_sum = 0.0f, hs_sq = 0.0f;
+                for (int k = 0; k < 4096; ++k) {
+                    float v = temp3[k];
+                    hs_min = std::min(hs_min, v);
+                    hs_max = std::max(hs_max, v);
+                    hs_sum += v;
+                    hs_sq += v * v;
+                }
+                fprintf(stderr, "[DIAG-RECOMP-NONQNN] temp3 stats: min=%.4f max=%.4f mean=%.4f rms=%.4f\n",
+                    hs_min, hs_max, hs_sum / 4096.0f, sqrtf(hs_sq / 4096.0f));
+                fprintf(stderr, "[DIAG-RECOMP-NONQNN] temp3[0..7]: ");
+                for (int k = 0; k < 8; ++k) fprintf(stderr, "%.4f ", temp3[k]);
+                fprintf(stderr, "\n");
+                fprintf(stderr, "[DIAG-RECOMP-NONQNN] token_id=%d('%s'), n_past_dft=%d\n",
+                    token_id, common_token_to_piece(ctx_tgt, token_id).c_str(), n_past_dft);
+            }
+
             const auto recompute_decode_start1 = ggml_time_us();
             llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
             const auto recompute_decode_end1 = ggml_time_us();
             LOG_DBG("recompute decode latency: %.3f seconds\n", (recompute_decode_end1 - recompute_decode_start1) / 1e6f);
+
+            // ===== DIAGNOSTIC: EAGLE model logits after recompute =====
+            {
+                const float * dft_logits = llama_get_logits_ith(ctx_dft, 0);
+                if (dft_logits) {
+                    int nv = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_dft)));
+                    std::vector<std::pair<float, int>> dtop;
+                    for (int v = 0; v < nv; ++v) dtop.push_back({dft_logits[v], v});
+                    std::partial_sort(dtop.begin(), dtop.begin() + std::min(5, nv), dtop.end(),
+                        [](const auto& a, const auto& b){ return a.first > b.first; });
+                    fprintf(stderr, "[DIAG-RECOMP-NONQNN] EAGLE logits top-5: ");
+                    for (int k = 0; k < 5 && k < nv; ++k)
+                        fprintf(stderr, "%d(%.2f,'%s') ", dtop[k].second, dtop[k].first,
+                            common_token_to_piece(ctx_dft, dtop[k].second).c_str());
+                    fprintf(stderr, "\n");
+                }
+            }
 
             ++n_past_dft;
         }

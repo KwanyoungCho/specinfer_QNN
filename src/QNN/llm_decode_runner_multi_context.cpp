@@ -707,6 +707,25 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
 
     auto& bindings_iter = shards_[final_shard].prefill_alloc->bindings();
 
+    // // ===== DIAGNOSTIC: Print ALL output tensors of final shard (once) =====
+    // if (processed == 0) {
+    //   fprintf(stderr, "[DIAG-HS] Final shard %d prefill outputs (%zu tensors):\n",
+    //           final_shard, shards_[final_shard].prefill_graph->outputs.size());
+    //   for (size_t ti = 0; ti < shards_[final_shard].prefill_graph->outputs.size(); ++ti) {
+    //     const auto& t = shards_[final_shard].prefill_graph->outputs[ti];
+    //     auto bit = bindings_iter.find(t.name);
+    //     fprintf(stderr, "  [%zu] name='%s' dims=[", ti, t.name.c_str());
+    //     for (size_t d = 0; d < t.dims.size(); ++d)
+    //       fprintf(stderr, "%s%u", d ? "," : "", t.dims[d]);
+    //     fprintf(stderr, "] nbytes=%zu dtype=%s", t.nbytes, t.data_type.c_str());
+    //     if (bit != bindings_iter.end() && bit->second) {
+    //       const float* fptr = reinterpret_cast<const float*>(bit->second);
+    //       fprintf(stderr, " vals=[%.4f,%.4f,%.4f,%.4f]", fptr[0], fptr[1], fptr[2], fptr[3]);
+    //     }
+    //     fprintf(stderr, "\n");
+    //   }
+    // }
+
     const QnnJsonTensorDesc* hidden_state_desc = nullptr;
     for(const auto& t : shards_[final_shard].prefill_graph->outputs){
       if (t.name.find("output_quantized_decomposed_dequantize_per_tensor_tensor_0") != std::string::npos) {
@@ -962,6 +981,68 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
     kv_manager_->add_cell_seq(slot, seq_id);
   }
   
+  // Extract hidden state from final shard and store in ctx->final_hiddens
+  {
+    int final_shard_hs = config_.num_shards - 1;
+    auto& bindings_hs = shards_[final_shard_hs].kv_alloc->bindings();
+
+    // // ===== DIAGNOSTIC: Print ALL output tensors of final shard kv_graph (once) =====
+    // static bool decode_diag_printed = false;
+    // if (!decode_diag_printed) {
+    //   decode_diag_printed = true;
+    //   fprintf(stderr, "[DIAG-HS-DECODE] Final shard %d kv_graph outputs (%zu tensors):\n",
+    //           final_shard_hs, shards_[final_shard_hs].kv_graph->outputs.size());
+    //   for (size_t ti = 0; ti < shards_[final_shard_hs].kv_graph->outputs.size(); ++ti) {
+    //     const auto& t = shards_[final_shard_hs].kv_graph->outputs[ti];
+    //     auto bit = bindings_hs.find(t.name);
+    //     fprintf(stderr, "  [%zu] name='%s' dims=[", ti, t.name.c_str());
+    //     for (size_t d = 0; d < t.dims.size(); ++d)
+    //       fprintf(stderr, "%s%u", d ? "," : "", t.dims[d]);
+    //     fprintf(stderr, "] nbytes=%zu dtype=%s", t.nbytes, t.data_type.c_str());
+    //     if (bit != bindings_hs.end() && bit->second) {
+    //       const float* fptr = reinterpret_cast<const float*>(bit->second);
+    //       fprintf(stderr, " vals=[%.4f,%.4f,%.4f,%.4f]", fptr[0], fptr[1], fptr[2], fptr[3]);
+    //     }
+    //     fprintf(stderr, "\n");
+    //   }
+    // }
+
+    const QnnJsonTensorDesc* hidden_state_desc = nullptr;
+    for (const auto& t : shards_[final_shard_hs].kv_graph->outputs) {
+      if (t.name.find("output_quantized_decomposed_dequantize_per_tensor_tensor_0") != std::string::npos) {
+        hidden_state_desc = &t;
+        break;
+      }
+    }
+    // Fallback: try the shared_buffer pattern used in run_shard_decode
+    if (!hidden_state_desc) {
+      for (const auto& t : shards_[final_shard_hs].kv_graph->outputs) {
+        if (t.name.find("output_aten_add_tensor") != std::string::npos ||
+            t.name.find("fallback") != std::string::npos) {
+          hidden_state_desc = &t;
+          break;
+        }
+      }
+    }
+
+    if (hidden_state_desc && ctx != nullptr) {
+      auto hs_it = bindings_hs.find(hidden_state_desc->name);
+      if (hs_it != bindings_hs.end() && hs_it->second) {
+        size_t hidden_dim = hidden_state_desc->dims.size() >= 3 ? hidden_state_desc->dims[2] : 4096;
+        // Decode step processes 1 token
+        size_t elements_to_save = 1 * hidden_dim;
+
+        const float* float_data = reinterpret_cast<const float*>(hs_it->second);
+        ctx->final_hiddens.insert(ctx->final_hiddens.end(), float_data, float_data + elements_to_save);
+
+        if (config_.log_level >= 2) {
+          std::cout << "[Multi-Context Decode] Hidden state extracted: " << elements_to_save
+                    << " floats from " << hidden_state_desc->name << "\n";
+        }
+      }
+    }
+  }
+
   // Extract logits from final shard (kv_forward)
   int final_shard = config_.num_shards - 1;
   const QnnJsonTensorDesc* logits_desc = nullptr;
