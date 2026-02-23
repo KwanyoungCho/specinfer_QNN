@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <numeric>
 #include <random>
 #include <set>
 #include <string>
@@ -262,7 +263,9 @@ int main(int argc, char ** argv) {
     int n_predict = 0;
     int n_drafted = 0;
     int n_accept  = 0;
-    int n_steps   = 0;
+    std::vector<int>    acceptance_lengths;
+    std::vector<double> decoding_latencies;
+    std::vector<double> verification_latencies;
 
     int n_past_tgt = inp.size();
     int n_past_dft = inp.size();
@@ -498,7 +501,7 @@ int main(int argc, char ** argv) {
         // fprintf(stderr, "[VERIFY] accepted=%d tokens (i_dft=%d, n_past_tgt=%d)\n", 
         //     i_dft, i_dft, n_past_tgt);
         {
-            ++n_steps;
+            acceptance_lengths.push_back(i_dft + 1);
             LOG_DBG("the sampled target token (%d, '%s') did not match, or we ran out of drafted tokens\n", token_id, token_str.c_str());
 
             // Manage KV cache after accept/reject
@@ -544,6 +547,8 @@ int main(int argc, char ** argv) {
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
             break;
         }
+
+        const auto t_draft_step_start = ggml_time_us();
 
         if (drafts[0].smpl) {
             common_sampler_free(drafts[0].smpl);
@@ -675,28 +680,26 @@ int main(int argc, char ** argv) {
                 break;
             }
         }
-        // [Debug Spec]
-        // fprintf(stderr, "[DRAFT] drafted=%d tokens (batch_tgt.n_tokens=%d)\n", 
-        //     batch_tgt.n_tokens - 1, batch_tgt.n_tokens);  // -1 for seed
-        
+        const auto t_draft_step_end = ggml_time_us();
+        decoding_latencies.push_back((t_draft_step_end - t_draft_step_start) / 1000.0);
 
         // evaluate the target model on the drafted tokens using QNN
         {
-            // Copy seq 0 KV metadata to all active sequences (same pattern as llama_memory)
-            // This prepares the KV cache metadata for multi-branch tree verification
+            const auto t_verify_start = ggml_time_us();
+
             qnn_runner.kv_seq_keep(0);
             for (int s = 1; s < n_seq_dft; ++s) {
                 qnn_runner.kv_seq_cp(0, s, -1, -1);
             }
-            
-            // TODO: Build tree attention mask based on batch_tgt seq_id/pos
-            // For now, use causal mask (works for single-branch n_seq_dft=1)
 
             if (qnn_runner.qnn_decode(ctx_tgt, batch_tgt)) {
                 LOG_ERR("%s: QNN verification decode failed: %s\n", __func__, qnn_runner.get_error().c_str());
                 break;
             }
-        
+
+            const auto t_verify_end = ggml_time_us();
+            verification_latencies.push_back((t_verify_end - t_verify_start) / 1000.0);
+
             ++n_past_tgt;
         }
 
@@ -715,27 +718,38 @@ int main(int argc, char ** argv) {
 
     LOG("\n\n");
 
-    LOG_INF("encoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_input,   (t_enc_end - t_enc_start) / 1e6f, inp.size() / ((t_enc_end - t_enc_start) / 1e6f));
-    LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_predict, (t_dec_end - t_dec_start) / 1e6f, n_predict  / ((t_dec_end - t_dec_start) / 1e6f));
+    {
+        const double prefill_ms  = (t_enc_end - t_enc_start) / 1000.0;
+        const double prefill_tps = n_input / (prefill_ms / 1000.0);
+        const double decode_ms   = (t_dec_end - t_dec_start) / 1000.0;
+        const double decode_tps  = n_predict / (decode_ms / 1000.0);
+        const double decode_lat  = n_predict > 0 ? decode_ms / n_predict : 0;
 
-    LOG_INF("\n");
-    LOG_INF("n_draft   = %d\n", n_draft);
-    LOG_INF("n_predict = %d\n", n_predict);
-    LOG_INF("n_drafted = %d\n", n_drafted);
-    LOG_INF("n_accept  = %d\n", n_accept);
-    LOG_INF("n_steps   = %d\n", n_steps);
-    LOG_INF("accept    = %.3f%%\n", 100.0f * n_accept / n_drafted);
-    LOG_INF("avg_draft_len  = %.3f\n", n_steps > 0 ? (float)n_drafted / n_steps : 0.0f);
-    LOG_INF("avg_accept_len = %.3f\n", n_steps > 0 ? (float)n_accept / n_steps : 0.0f);
+        const int    n_steps     = (int)decoding_latencies.size();
+        const double draft_len   = n_steps > 0 ? (double)n_drafted / n_steps : 0;
+        const double accept_len  = n_steps > 0
+            ? std::accumulate(acceptance_lengths.begin()+1, acceptance_lengths.end(), 0.0) / n_steps : 0;
+        const double avg_draft_lat = !decoding_latencies.empty()
+            ? std::accumulate(decoding_latencies.begin(), decoding_latencies.end(), 0.0) / decoding_latencies.size() : 0;
+        const double avg_verify_lat = !verification_latencies.empty()
+            ? std::accumulate(verification_latencies.begin(), verification_latencies.end(), 0.0) / verification_latencies.size() : 0;
 
-    LOG_INF("\n");
-    LOG_INF("draft:\n\n");
-    // TODO: print sampling/grammar timings for all drafts
-    llama_perf_context_print(ctx_dft);
-
-    // LOG_INF("\n");
-    // LOG_INF("target:\n\n");
-    // common_perf_print(ctx_tgt, smpl);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "============================================================\n");
+        fprintf(stderr, "        Speculative-QNN  Performance Summary\n");
+        fprintf(stderr, "============================================================\n");
+        fprintf(stderr, "  Prefill           : %5d tokens | %9.2f ms | %8.2f t/s\n", n_input, prefill_ms, prefill_tps);
+        fprintf(stderr, "  Decode            : %5d tokens | %9.2f ms | %8.2f t/s\n", n_predict, decode_ms, decode_tps);
+        fprintf(stderr, "  Decode latency    :              | %9.2f ms/tok\n", decode_lat);
+        fprintf(stderr, "------------------------------------------------------------\n");
+        fprintf(stderr, "  Draft length          : %.3f\n", draft_len);
+        fprintf(stderr, "  Avg accept length     : %.3f\n", accept_len);
+        fprintf(stderr, "  Accept ratio          : %.3f%%\n", n_drafted > 0 ? 100.0f * n_accept / n_drafted : 0.0f);
+        fprintf(stderr, "------------------------------------------------------------\n");
+        fprintf(stderr, "  Avg draft phase       : %9.3f ms\n", avg_draft_lat);
+        fprintf(stderr, "  Avg verification      : %9.3f ms\n", avg_verify_lat);
+        fprintf(stderr, "============================================================\n");
+    }
 
     common_sampler_free(smpl);
     for (int s = 0; s < n_seq_dft; ++s) {
