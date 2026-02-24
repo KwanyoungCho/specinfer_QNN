@@ -11,6 +11,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  1280000
@@ -239,17 +240,46 @@ int main(int argc, char ** argv) {
     const auto t_enc_start = ggml_time_us();
 
     // eval the prompt with both models
-    // Target model: use QNN prefill (single call for all prompt tokens)
-    // KV cache metadata is automatically updated inside qnn_decode
-    {
-        llama_batch prefill_batch = llama_batch_get_one(inp.data(), n_input);
-        if (qnn_runner.qnn_decode(ctx_tgt, prefill_batch)) {
+    if (params.qnn_parallel_prefill) {
+        // === PARALLEL PREFILL (target=NPU, draft=GPU) ===
+        LOG_INF("[Prefill] parallel mode (--parallel-prefill)\n");
+        int qnn_prefill_rc = 0;
+        auto t_tgt_start = ggml_time_us();
+        std::thread tgt_thread([&]() {
+            llama_batch prefill_batch = llama_batch_get_one(inp.data(), n_input);
+            qnn_prefill_rc = qnn_runner.qnn_decode(ctx_tgt, prefill_batch);
+        });
+        auto t_dft_start = ggml_time_us();
+        llama_decode(ctx_dft, llama_batch_get_one(inp.data(), n_input));
+        auto t_dft_end = ggml_time_us();
+        tgt_thread.join();
+        auto t_tgt_end = ggml_time_us();
+        if (qnn_prefill_rc) {
             LOG_ERR("%s: QNN prefill failed: %s\n", __func__, qnn_runner.get_error().c_str());
             return 1;
         }
+        LOG_INF("[Prefill] target (QNN):  %.3f ms\n", (t_tgt_end - t_tgt_start) / 1e3);
+        LOG_INF("[Prefill] draft  (GPU):  %.3f ms\n", (t_dft_end - t_dft_start) / 1e3);
+        LOG_INF("[Prefill] total (parallel): %.3f ms\n", (t_tgt_end - t_tgt_start) / 1e3);
+    } else {
+        // === SEQUENTIAL PREFILL ===
+        LOG_INF("[Prefill] sequential mode\n");
+        auto t_tgt_start = ggml_time_us();
+        {
+            llama_batch prefill_batch = llama_batch_get_one(inp.data(), n_input);
+            if (qnn_runner.qnn_decode(ctx_tgt, prefill_batch)) {
+                LOG_ERR("%s: QNN prefill failed: %s\n", __func__, qnn_runner.get_error().c_str());
+                return 1;
+            }
+        }
+        auto t_tgt_end = ggml_time_us();
+        auto t_dft_start = ggml_time_us();
+        llama_decode(ctx_dft, llama_batch_get_one(inp.data(), n_input));
+        auto t_dft_end = ggml_time_us();
+        LOG_INF("[Prefill] target (QNN):  %.3f ms\n", (t_tgt_end - t_tgt_start) / 1e3);
+        LOG_INF("[Prefill] draft  (GPU):  %.3f ms\n", (t_dft_end - t_dft_start) / 1e3);
+        LOG_INF("[Prefill] total (sequential): %.3f ms\n", ((t_dft_end - t_tgt_start)) / 1e3);
     }
-    // Draft model: use llama_decode (CPU/GPU)
-    llama_decode(ctx_dft, llama_batch_get_one(inp.data(), n_input));
 
     const auto t_enc_end = ggml_time_us();
 

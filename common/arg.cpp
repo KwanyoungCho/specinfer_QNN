@@ -1280,6 +1280,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.qnn_num_shards = value;
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE}));
+    add_opt(common_arg(
+        {"--parallel-prefill"},
+        "run target (QNN/NPU) and draft (GPU) prefill in parallel (default: sequential)",
+        [](common_params & params) {
+            params.qnn_parallel_prefill = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
     
     add_opt(common_arg(
         {"--spm-infill"},

@@ -137,11 +137,11 @@ llm_build_eagle::llm_build_eagle(const llama_model & model, const llm_graph_para
 
     cur = inpL;
 
-    if (model.output_norm) {
-        cur = build_norm(cur,
-                model.output_norm, NULL,
-                LLM_NORM_RMS, -1);
-    }
+    // if (model.output_norm) {
+    //     cur = build_norm(cur,
+    //             model.output_norm, NULL,
+    //             LLM_NORM_RMS, -1);
+    // }
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;

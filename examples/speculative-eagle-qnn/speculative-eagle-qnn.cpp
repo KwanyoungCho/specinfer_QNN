@@ -294,65 +294,7 @@ int main(int argc, char ** argv) {
     llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
 
     // LOG_DBG("Prefill completed for draft model.\n");
-
-    // float* p_data = sliced_data.data();
-    // size_t total_size = sliced_data.size();
-    // LOG("total_size: %d\n", total_size);
-    // if (total_size == 0) {
-    //     LOG("데이터가 비어있습니다.\n");
-    // }
-    // else {
-    //     LOG("sliced 데이터 크기:  %d개\n", total_size / 4096);
-    //     for (int i = 0; i < 10; ++i) {
-    //         // cb_data.data[i]를 사용해 i번째 요소에 접근
-    //         // uint8_t는 문자로 출력될 수 있으므로 int로 변환하여 숫자 값을 확인
-    //         LOG("%lf ", *(p_data + i));
-    //     }
-    //     LOG("\n");
-    //     size_t start_index = total_size - 10;
-    //     for (int i = start_index; i < total_size; ++i) {
-    //         LOG("%lf ", *(p_data + i));
-    //     }
-    //     LOG("\n");
-    // }
     LOG("\n");LOG("\n");
-
-    // // ===== DIAGNOSTIC: Check hidden state stats after prefill =====
-    // {
-    //     float hs_min = 1e30f, hs_max = -1e30f, hs_sum = 0.0f;
-    //     for (size_t i = 0; i < final_hs.size(); ++i) {
-    //         hs_min = std::min(hs_min, final_hs[i]);
-    //         hs_max = std::max(hs_max, final_hs[i]);
-    //         hs_sum += final_hs[i];
-    //     }
-    //     fprintf(stderr, "[DIAG-PREFILL] hidden_state: count=%zu, min=%.6f, max=%.6f, mean=%.6f\n",
-    //             final_hs.size(), hs_min, hs_max, hs_sum / final_hs.size());
-    //     size_t last_offset = (size_t)(n_input - 1) * hidden_dim;
-    //     fprintf(stderr, "[DIAG-PREFILL] last_token_hs[0..7]: ");
-    //     for (int k = 0; k < 8 && last_offset + k < final_hs.size(); ++k)
-    //         fprintf(stderr, "%.4f ", final_hs[last_offset + k]);
-    //     fprintf(stderr, "\n");
-    // }
-
-    // // ===== DIAGNOSTIC: Check target logits after prefill =====
-    // {
-    //     const float * logits_ptr = llama_get_logits_ith(ctx_tgt, n_input - 1);
-    //     if (logits_ptr) {
-    //         int n_vocab_diag = llama_vocab_n_tokens(vocab_tgt);
-    //         std::vector<std::pair<float, int>> top_logits;
-    //         for (int v = 0; v < n_vocab_diag; ++v)
-    //             top_logits.push_back({logits_ptr[v], v});
-    //         std::partial_sort(top_logits.begin(), top_logits.begin() + 5, top_logits.end(),
-    //             [](const auto& a, const auto& b){ return a.first > b.first; });
-    //         fprintf(stderr, "[DIAG-PREFILL] Target logits top-5 (idx=%d):\n", n_input - 1);
-    //         for (int k = 0; k < 5; ++k)
-    //             fprintf(stderr, "  rank%d: token=%d logit=%.4f '%s'\n", k,
-    //                 top_logits[k].second, top_logits[k].first,
-    //                 common_token_to_piece(ctx_tgt, top_logits[k].second).c_str());
-    //     } else {
-    //         fprintf(stderr, "[DIAG-PREFILL] ERROR: logits_ptr is NULL for idx=%d\n", n_input - 1);
-    //     }
-    // }
 
     const auto t_enc_end = ggml_time_us();
 
@@ -577,28 +519,6 @@ int main(int argc, char ** argv) {
 
                     token_str = common_token_to_piece(ctx_tgt, token_id);
 
-                    // // ===== DIAGNOSTIC: Greedy verification comparison =====
-                    // {
-                    //     int tgt_idx = drafts[s_keep].i_batch_tgt[i_dft];
-                    //     llama_token draft_tok = (i_dft < (int)drafts[s_keep].tokens.size()) ? drafts[s_keep].tokens[i_dft] : -1;
-                    //     fprintf(stderr, "[DIAG-VERIFY] i_dft=%d, i_batch_tgt=%d, target_sampled=%d('%s'), draft_token=%d('%s') %s\n",
-                    //         i_dft, tgt_idx, token_id, token_str.c_str(),
-                    //         draft_tok, (draft_tok >= 0 ? common_token_to_piece(ctx_tgt, draft_tok).c_str() : "N/A"),
-                    //         (token_id == draft_tok) ? "MATCH" : "MISMATCH");
-                    //     const float * vlogits = llama_get_logits_ith(ctx_tgt, tgt_idx);
-                    //     if (vlogits) {
-                    //         int nv = llama_vocab_n_tokens(vocab_tgt);
-                    //         std::vector<std::pair<float, int>> vtop;
-                    //         for (int v = 0; v < nv; ++v) vtop.push_back({vlogits[v], v});
-                    //         std::partial_sort(vtop.begin(), vtop.begin() + std::min(5, nv), vtop.end(),
-                    //             [](const auto& a, const auto& b){ return a.first > b.first; });
-                    //         fprintf(stderr, "[DIAG-VERIFY]   target top-5: ");
-                    //         for (int k = 0; k < 5 && k < nv; ++k)
-                    //             fprintf(stderr, "%d(%.2f) ", vtop[k].second, vtop[k].first);
-                    //         fprintf(stderr, "\n");
-                    //     }
-                    // }
-
                     for (int s = 0; s < n_seq_dft; ++s) {
                         if (!drafts[s].active) {
                             continue;
@@ -739,49 +659,10 @@ int main(int argc, char ** argv) {
             // LOG_DBG("recompute point: %d, n_past_dft: %d, recompute.size(): %zu, batch_dft.n_tokens: %d, backup_data.size(): %zu\n", recompute_point, n_past_dft, recompute.size(), batch_dft.n_tokens, backup_data.size()/hidden_dim);
 
             // LOG_DBG("dft batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_dft, batch_dft).c_str());
-
-            // // ===== DIAGNOSTIC: Hidden state going into EAGLE recompute =====
-            // {
-            //     float hs_min = 1e30f, hs_max = -1e30f, hs_sum = 0.0f, hs_sq = 0.0f;
-            //     for (int k = 0; k < hidden_dim; ++k) {
-            //         float v = temp3[k];
-            //         hs_min = std::min(hs_min, v);
-            //         hs_max = std::max(hs_max, v);
-            //         hs_sum += v;
-            //         hs_sq += v * v;
-            //     }
-            //     fprintf(stderr, "[DIAG-RECOMP-QNN] temp3 stats: min=%.4f max=%.4f mean=%.4f rms=%.4f\n",
-            //         hs_min, hs_max, hs_sum / (float)hidden_dim, sqrtf(hs_sq / (float)hidden_dim));
-            //     fprintf(stderr, "[DIAG-RECOMP-QNN] temp3[0..7]: ");
-            //     for (int k = 0; k < 8; ++k) fprintf(stderr, "%.4f ", temp3[k]);
-            //     fprintf(stderr, "\n");
-            //     fprintf(stderr, "[DIAG-RECOMP-QNN] token_id=%d('%s'), n_past_dft=%d\n",
-            //         token_id, common_token_to_piece(ctx_tgt, token_id).c_str(), n_past_dft);
-            // }
-
-            // fprintf(stderr, "[DBG] recompute seed decode: batch_dft.n_tokens=%d, temp3.size=%zu\n", batch_dft.n_tokens, temp3.size());
             const auto recompute_decode_start1 = ggml_time_us();
             llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
             const auto recompute_decode_end1 = ggml_time_us();
             // LOG_DBG("recompute decode latency: %.3f seconds\n", (recompute_decode_end1 - recompute_decode_start1) / 1e6f);
-
-            // // ===== DIAGNOSTIC: EAGLE model logits after recompute =====
-            // {
-            //     const float * dft_logits = llama_get_logits_ith(ctx_dft, 0);
-            //     if (dft_logits) {
-            //         int nv = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_dft)));
-            //         std::vector<std::pair<float, int>> dtop;
-            //         for (int v = 0; v < nv; ++v) dtop.push_back({dft_logits[v], v});
-            //         std::partial_sort(dtop.begin(), dtop.begin() + std::min(5, nv), dtop.end(),
-            //             [](const auto& a, const auto& b){ return a.first > b.first; });
-            //         fprintf(stderr, "[DIAG-RECOMP-QNN] EAGLE logits top-5: ");
-            //         for (int k = 0; k < 5 && k < nv; ++k)
-            //             fprintf(stderr, "%d(%.2f,'%s') ", dtop[k].second, dtop[k].first,
-            //                 common_token_to_piece(ctx_dft, dtop[k].second).c_str());
-            //         fprintf(stderr, "\n");
-            //     }
-            // }
-
             ++n_past_dft;
         }
 
@@ -817,11 +698,6 @@ int main(int argc, char ** argv) {
 
         common_batch_clear(batch_tgt);
         common_batch_add  (batch_tgt, drafts[0].tokens[0], n_past_tgt, { 0 }, true);
-
-        // // ===== DIAGNOSTIC: First draft token going into batch_tgt =====
-        // fprintf(stderr, "[DIAG-DRAFT] Tree start: drafts[0].tokens[0]=%d('%s'), n_past_tgt=%d, n_past_dft=%d\n",
-        //     drafts[0].tokens[0], common_token_to_piece(ctx_tgt, drafts[0].tokens[0]).c_str(),
-        //     n_past_tgt, n_past_dft);
 
         // sample n_draft tokens from the draft model using tree-based sampling
         for (int i = 0; i < n_draft; ++i) {
