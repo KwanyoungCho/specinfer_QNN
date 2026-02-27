@@ -307,6 +307,7 @@ int main(int argc, char ** argv) {
     int n_predict = 0;
     int n_drafted = 0;
     int n_accept  = 0;
+    int total_draft_tokens = 0;
 
     int n_past_tgt = inp.size();
     int n_past_dft = inp.size() - 1;
@@ -317,7 +318,6 @@ int main(int argc, char ** argv) {
     // draft sequence data
     std::vector<seq_draft> drafts(n_seq_dft);
 
-    // [추가] 각 단계별 수락 길이를 저장하기 위한 벡터
     std::vector<int> acceptance_lengths;
     std::vector<float> confidence_scores;
     std::vector<int> decoding_latencies;
@@ -1038,9 +1038,9 @@ int main(int argc, char ** argv) {
 
         // LOG_DBG("Drafting took %.3f seconds\n", (drafting_end - drafting_start) / 1e6f);
 
-        verification_start = ggml_time_us(); //verification 시작 시간 기록 -ym-
+        total_draft_tokens += batch_tgt.n_tokens - 1;
 
-        // LOG_DBG("batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
+        verification_start = ggml_time_us(); //verification 시작 시간 기록 -ym-
 
         // evaluate the target model on the drafted tokens using QNN
         {
@@ -1081,78 +1081,49 @@ int main(int argc, char ** argv) {
 
     LOG("\n\n");
 
-    LOG_INF("encoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_input,   (t_enc_end - t_enc_start) / 1e6f, inp.size() / ((t_enc_end - t_enc_start) / 1e6f));
-    LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_predict, (t_dec_end - t_dec_start) / 1e6f, n_predict  / ((t_dec_end - t_dec_start) / 1e6f));
+    {
+        const double prefill_ms  = (t_enc_end - t_enc_start) / 1000.0;
+        const double prefill_tps = n_input / (prefill_ms / 1000.0);
+        const double decode_ms   = (t_dec_end - t_dec_start) / 1000.0;
+        const double decode_tps  = n_predict / (decode_ms / 1000.0);
+        const double decode_lat  = n_predict > 0 ? decode_ms / n_predict : 0;
 
-    LOG_INF("\n");
-    LOG_INF("n_draft   = %d\n", n_draft);
-    LOG_INF("n_predict = %d\n", n_predict);
-    LOG_INF("n_drafted = %d\n", n_drafted);
-    LOG_INF("n_accept  = %d\n", n_accept);
-    LOG_INF("accept    = %.3f%%\n", 100.0f * n_accept / n_drafted);
+        const int    n_steps     = (int)decoding_latencies.size();
+        const double draft_len   = n_steps > 0 ? (double)n_drafted / n_steps : 0;
+        const double accept_len  = n_steps > 0
+            ? std::accumulate(acceptance_lengths.begin()+1, acceptance_lengths.end(), 0.0) / n_steps : 0;
+        const double avg_draft_lat = !decoding_latencies.empty()
+            ? std::accumulate(decoding_latencies.begin(), decoding_latencies.end(), 0.0) / decoding_latencies.size() : 0;
+        const double avg_verify_lat = !verification_latencies.empty()
+            ? std::accumulate(verification_latencies.begin(), verification_latencies.end(), 0.0) / verification_latencies.size() : 0;
+        const double avg_td = !T_d.empty()
+            ? std::accumulate(T_d.begin(), T_d.end(), 0.0) / T_d.size() : 0;
 
-    // [추가] 수락 길이 통계 계산 및 출력
-    if (!acceptance_lengths.empty()) {
-        const double avg_len = std::accumulate(acceptance_lengths.begin()+1, acceptance_lengths.end(), 0.0) / (acceptance_lengths.size()-1);
-        const int min_len = *std::min_element(acceptance_lengths.begin()+1, acceptance_lengths.end());
-        const int max_len = *std::max_element(acceptance_lengths.begin()+1, acceptance_lengths.end());
-
-        LOG_INF("\n");
-        LOG_INF("Acceptance length stats:\n");
-        LOG_INF("  Min length: %d\n", min_len);
-        LOG_INF("  Max length: %d\n", max_len);
-        LOG_INF("  Avg length: %.3f\n", avg_len);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "============================================================\n");
+        fprintf(stderr, "          EAGLE-QNN  Performance Summary\n");
+        fprintf(stderr, "============================================================\n");
+        fprintf(stderr, "  Prefill           : %5d tokens | %9.2f ms | %8.2f t/s\n", n_input, prefill_ms, prefill_tps);
+        fprintf(stderr, "  Decode            : %5d tokens | %9.2f ms | %8.2f t/s\n", n_predict, decode_ms, decode_tps);
+        fprintf(stderr, "  Decode latency    :              | %9.2f ms/tok\n", decode_lat);
+        fprintf(stderr, "------------------------------------------------------------\n");
+        fprintf(stderr, "  Draft length          : %.3f\n", draft_len);
+        fprintf(stderr, "  Avg accept length     : %.3f\n", accept_len);
+        fprintf(stderr, "  Accept ratio          : %.3f%%\n", n_drafted > 0 ? 100.0f * n_accept / n_drafted : 0.0f);
+        fprintf(stderr, "------------------------------------------------------------\n");
+        fprintf(stderr, "  Avg draft phase       : %9.3f ms\n", avg_draft_lat);
+        fprintf(stderr, "  Avg verification      : %9.3f ms\n", avg_verify_lat);
+        fprintf(stderr, "  Avg T_d (1-tok dft)   : %9.3f ms\n", avg_td);
+        fprintf(stderr, "============================================================\n");
     }
 
-    std::ofstream outFile("al_d25.txt");
-
-    if (outFile.is_open()) {
-        for (const auto& number : acceptance_lengths) {
-            outFile << number << std::endl; // 각 숫자를 한 줄에 하나씩 저장
-        }
-        outFile.close();
-        std::cout << "numbers.txt 파일 저장 완료!" << std::endl;
-    } else {
-        std::cerr << "파일을 열 수 없습니다." << std::endl;
+    // Save data files
+    {
+        std::ofstream f1("al_d25.txt");
+        if (f1.is_open()) { for (auto v : acceptance_lengths) f1 << v << "\n"; }
+        std::ofstream f2("cs_d25.txt");
+        if (f2.is_open()) { for (auto v : confidence_scores) f2 << v << "\n"; }
     }
-
-    if (!decoding_latencies.empty() && !verification_latencies.empty()) {
-    const double avg_decoding_latency = std::accumulate(decoding_latencies.begin(), decoding_latencies.end(), 0.0) / decoding_latencies.size();
-    const double avg_verification_latency = std::accumulate(verification_latencies.begin(), verification_latencies.end(), 0.0) / verification_latencies.size();
-    LOG_INF("\navg decoding latency: %.3f ms\n", avg_decoding_latency);
-    LOG_INF("avg verification latency: %.3f ms\n", avg_verification_latency);
-    LOG_INF("avg T_d: %.3f ms\n", std::accumulate(T_d.begin(), T_d.end(), 0.0) / T_d.size());
-    }
-
-    std::ofstream outFile2("cs_d25.txt");
-
-    if (outFile2.is_open()) {
-        for (const auto& number : confidence_scores) {
-            outFile2 << number << std::endl; // 각 숫자를 한 줄에 하나씩 저장
-        }
-        outFile2.close();
-        std::cout << "numbers.txt 파일 저장 완료!" << std::endl;
-    } else {
-        std::cerr << "파일을 열 수 없습니다." << std::endl;
-    }
-
-    // Accepted Token Counts Matrix 출력 (디버깅용)
-    for (int i = 0; i < 15; i++) {
-        for (int j = 0; j < 5; j++) {
-            LOG_INF("accept_counts[%d][%d] = %d\n", i, j, accept_counts[i][j]);
-        }
-    }
-
-    LOG_INF("Verification/Draft Count: %ld", verification_latencies.size());
-
-    LOG_INF("\n");
-    LOG_INF("draft:\n\n");
-    // TODO: print sampling/grammar timings for all drafts
-    llama_perf_context_print(ctx_dft);
-
-    LOG_INF("\n");
-    LOG_INF("target:\n\n");
-    common_perf_print(ctx_tgt, smpl);
 
     common_sampler_free(smpl);
     for (int s = 0; s < n_seq_dft; ++s) {
