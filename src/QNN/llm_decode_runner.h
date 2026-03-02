@@ -29,6 +29,7 @@ struct LLMDecodeConfig {
   int log_level = 0;            // 0=quiet, 1=info, 2=debug
   bool use_multi_context = false; // Enable multi-context (sharding) mode
   int num_shards = 0;           // Number of context shards (0=auto-detect, default)
+  bool deferred_kv_writeback = false; // Defer KV write-back until commit (for speculative decoding)
 };
 
 /**
@@ -148,6 +149,15 @@ class LLMDecodeRunner {
   std::vector<std::unique_ptr<QnnTensorHolder>> prefill_output_holders_;
   std::vector<std::unique_ptr<QnnTensorHolder>> kv_input_holders_;
   std::vector<std::unique_ptr<QnnTensorHolder>> kv_output_holders_;
+
+  // Fragment-Aware KV cache update
+  struct PendingKVWrite {
+    std::vector<std::vector<void*>> k_data;  // [shard][layer*head]
+    std::vector<std::vector<void*>> v_data;  // [shard][layer*head]
+    int32_t slot;         // Starting slot in KV cache
+    int32_t chunk_size;   // Number of tokens
+  };
+  PendingKVWrite pending_write_;
   
   // Helper methods (single-context)
   bool load_graphs();
@@ -161,6 +171,7 @@ class LLMDecodeRunner {
   bool setup_multi_context_kv_cache();
   bool setup_multi_context_io_allocators();
   bool allocate_shared_buffers();
+  void collect_kv_outputs(int shard_idx, std::vector<void*>& v_outputs, std::vector<void*>& k_outputs);
 
  public:
   // Single-context execution
@@ -185,6 +196,11 @@ class LLMDecodeRunner {
    * @return 0 on success, non-zero on failure (matches llama_decode semantics)
    */
   int qnn_decode(llama_context * ctx, llama_batch batch);
+
+  // Fragment-Aware KV cache update
+  bool is_pending_KV_write() const { return !pending_write_.k_data.empty(); }
+
+  bool KV_commit();
 
  private:
   // Shard execution helpers

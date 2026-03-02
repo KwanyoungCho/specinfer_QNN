@@ -16,8 +16,8 @@ namespace llama_qnn {
  * 
  * Key Responsibilities:
  * - Allocate persistent KV cache buffers (input + output)
- * - Update cache: copy output → input after each step
- * - Update attention mask for each iteration
+ * - Rearrange KV cache layout on prefill→decode transition
+ * - Track KV cell metadata for speculative decoding (seq_rm/keep/cp)
  * - Provide memory pointers for graph binding
  */
 class LLMKVCacheManager {
@@ -64,37 +64,6 @@ public:
   bool allocate();
 
   /**
-   * @brief Update KV cache: copy output → input
-   * @param n_past Number of past tokens already in cache
-   * @param n_update Number of new tokens to update
-   */
-  void update_cache(int32_t n_past, int32_t n_update);
-
-  /**
-   * @brief Initialize attention mask for prefill/decode
-   * @param attention_mask Output buffer [ar_len, context_len] as uint16_t*
-   * @param ar_len Current autoregressive length
-   * @param n_past Number of past tokens
-   */
-  void init_attention_mask(
-      uint16_t* attention_mask,
-      int32_t ar_len,
-      int32_t n_past);
-
-  /**
-   * @brief Update attention mask after cache update
-   * @param attention_mask Buffer [ar_len, context_len] as uint16_t*
-   * @param ar_len Current autoregressive length
-   * @param n_past Number of past tokens before update
-   * @param n_update Number of newly added tokens
-   */
-  void update_attention_mask(
-      uint16_t* attention_mask,
-      int32_t ar_len,
-      int32_t n_past,
-      int32_t n_update);
-
-  /**
    * @brief Get K cache buffer for a specific layer and head
    */
   const KVCacheBuffer& get_k_cache(int32_t layer, int32_t head) const {
@@ -139,6 +108,62 @@ public:
     return metadata_.context_len - ar_len;
   }
 
+  /**
+   * @brief Build prefill attention mask (2D: [ar_len, context_len])
+   *
+   * Supports tree attention: causal + seq_id intersection check.
+   * @param attn_mask  Output buffer, caller must allocate ar_len * context_len uint16_t
+   * @param ar_len     Prefill AR length (e.g. prefill_ar_len_)
+   * @param cache_len  Past KV cache length (e.g. prefill_cache_len_)
+   * @param n_tokens   Actual tokens in this chunk (<= ar_len)
+   * @param positions  positions[n_tokens] — batch.pos + processed, nullable (sequential fallback)
+   * @param n_seq_ids  n_seq_ids[n_tokens] — batch.n_seq_id + processed, nullable
+   * @param seq_ids    seq_ids[n_tokens]   — batch.seq_id + processed, nullable
+   */
+  void build_prefill_attn_mask(
+      uint16_t*       attn_mask,
+      int32_t         ar_len,
+      int32_t         cache_len,
+      int32_t         n_tokens,
+      const int32_t*  positions,
+      const int32_t*  n_seq_ids,
+      int32_t* const* seq_ids) const;
+
+  /**
+   * @brief Build decode attention mask (1D: [context_len])
+   *
+   * Attends to all non-empty past KV cells + the last position (current token).
+   * @param attn_mask  Output buffer, caller must allocate context_len uint16_t
+   * @param cache_len  Past KV cache length (e.g. kv_cache_len_)
+   */
+  void build_decode_attn_mask(
+      uint16_t* attn_mask,
+      int32_t   cache_len) const;
+
+  /**
+   * @brief Write QNN KV output buffers back to KV input (persistent) buffers.
+   *
+   * Unified for prefill (n_tokens > 1) and decode (n_tokens == 1).
+   * V layout: [cache_len, head_dim] — sequential, copy n_tokens rows.
+   * K layout: [head_dim, cache_len] — strided, copy n_tokens columns per dim.
+   *
+   * @param v_outputs        V output pointers collected from shard bindings (order = layer*heads + head)
+   * @param k_outputs        K output pointers collected from shard bindings
+   * @param slot             Starting KV cell index (from find_slot)
+   * @param n_tokens         Tokens to write (chunk_size for prefill, 1 for decode)
+   * @param cache_len        Current KV input cache length (prefill_cache_len_ or kv_cache_len_)
+   * @param ar_len           Current AR length (prefill_ar_len_ or kv_ar_len_)
+   * @param shard_layer_base Global layer offset for this shard (shard_idx * layers_per_shard_)
+   */
+  void write_back_kv(
+      const std::vector<void*>& v_outputs,
+      const std::vector<void*>& k_outputs,
+      int32_t slot,
+      int32_t n_tokens,
+      int32_t cache_len,
+      int32_t ar_len,
+      int32_t shard_layer_base);
+
   // ========== KV Cell Metadata API (llama_memory_seq_* compatible) ==========
   
   /**
@@ -158,17 +183,6 @@ public:
    * If p0 == -1, start from 0. If p1 == -1, go to end.
    */
   void seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int32_t p1);
-  
-  /**
-   * @brief Add seq_id to cells in range [slot, slot + count)
-   * Sets position values starting from pos_start (incremented for each cell)
-   * Used during prefill/decode to mark new tokens (apply_ubatch pattern)
-   * @param slot Starting cell index in KV cache
-   * @param count Number of cells to update
-   * @param seq_id Sequence ID to add
-   * @param pos_start Starting position value (logical sequence position)
-   */
-  void seq_add(int32_t slot, int32_t count, int32_t seq_id, int32_t pos_start);
   
   /**
    * @brief Find contiguous empty slots for n_tokens
@@ -246,17 +260,6 @@ private:
   // KV cell metadata: [context_len] - shared across all layers/heads
   std::vector<KVCellMeta> cell_meta_;
 
-  // Helper functions
-  void update_key_cache(
-      const KVCacheBuffer& cache,
-      int32_t n_past,
-      int32_t n_update);
-  
-  void update_value_cache(
-      const KVCacheBuffer& cache,
-      int32_t n_past,
-      int32_t n_update);
-  
   // Rearrange helper functions
   void rearrange_key(
       KVCacheBuffer& cache,

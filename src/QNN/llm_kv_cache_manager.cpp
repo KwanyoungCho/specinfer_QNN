@@ -122,96 +122,6 @@ bool LLMKVCacheManager::allocate() {
     return true;
 }
 
-void LLMKVCacheManager::update_key_cache(const KVCacheBuffer & cache, int32_t n_past, int32_t n_update) {
-    // Key cache layout (SMART_MASK):
-    // Input:  [head_dim, max_cache_len]
-    // Output: [head_dim, max_ar_len]
-    //
-    // Update: For each dimension, copy output[dim][0:n_update] → input[dim][n_past:n_past+n_update]
-
-    uint8_t * write_ptr = reinterpret_cast<uint8_t *>(cache.input_buffer) + n_past;
-    uint8_t * read_ptr  = reinterpret_cast<uint8_t *>(cache.output_buffer);
-
-    for (int32_t dim = 0; dim < metadata_.head_dim; ++dim) {
-        std::memcpy(write_ptr, read_ptr, n_update);
-        write_ptr += metadata_.max_cache_len;
-        read_ptr += metadata_.max_ar_len;
-    }
-}
-
-void LLMKVCacheManager::update_value_cache(const KVCacheBuffer & cache, int32_t n_past, int32_t n_update) {
-    // Value cache layout (SMART_MASK):
-    // Input:  [max_cache_len, head_dim] - sequential
-    // Output: [max_ar_len, head_dim] - sequential
-    //
-    // Update: copy output[0:n_update*head_dim] → input[n_past*head_dim:(n_past+n_update)*head_dim]
-
-    uint8_t * write_ptr = reinterpret_cast<uint8_t *>(cache.input_buffer) + n_past * metadata_.head_dim;
-    uint8_t * read_ptr  = reinterpret_cast<uint8_t *>(cache.output_buffer);
-
-    std::memcpy(write_ptr, read_ptr, n_update * metadata_.head_dim);
-}
-
-void LLMKVCacheManager::update_cache(int32_t n_past, int32_t n_update) {
-    for (int32_t layer = 0; layer < metadata_.num_layers; ++layer) {
-        for (int32_t head = 0; head < metadata_.num_heads; ++head) {
-            update_key_cache(k_cache_[layer][head], n_past, n_update);
-            update_value_cache(v_cache_[layer][head], n_past, n_update);
-        }
-    }
-}
-
-void LLMKVCacheManager::init_attention_mask(uint16_t * attention_mask, int32_t ar_len, int32_t n_past) {
-    // SMART_MASK attention mask initialization
-    // Shape: [ar_len, context_len]
-    // Values: 0 = mask (don't attend), 65535 = attend
-    //
-    // Pattern: Causal mask at the END of context window
-    // For prefill (ar_len > 1):
-    //   Row i attends to [context_len - ar_len, context_len - ar_len + i]
-    // For decode (ar_len = 1):
-    //   Row 0 attends to [0, n_past]
-
-    uint16_t neg_val = 0;
-    uint16_t pos_val = 65535;
-
-    // Clear all to 0 (mask)
-    std::memset(attention_mask, 0, ar_len * metadata_.context_len * sizeof(uint16_t));
-
-    for (int32_t i = 0; i < ar_len; ++i) {
-        uint16_t * row = attention_mask + i * metadata_.context_len;
-
-        // Attend to all past tokens (before this batch)
-        for (int32_t j = 0; j < n_past; ++j) {
-            row[j] = pos_val;
-        }
-
-        // Attend to tokens in current batch (causal)
-        // New tokens are placed at context window end: [context_len - ar_len, context_len)
-        int32_t new_token_start = metadata_.context_len - ar_len;
-        for (int32_t j = 0; j <= i; ++j) {
-            row[new_token_start + j] = pos_val;
-        }
-    }
-}
-
-void LLMKVCacheManager::update_attention_mask(uint16_t * attention_mask,
-                                              int32_t    ar_len,
-                                              int32_t    n_past,
-                                              int32_t    n_update) {
-    // SMART_MASK attention mask update
-    // After cache update, newly added tokens should be attended to
-    //
-    // Update pattern: For each row, fill [n_past, n_past + n_update) with 65535
-
-    uint16_t pos_val = 65535;
-
-    for (int32_t i = 0; i < ar_len; ++i) {
-        uint16_t * row = attention_mask + i * metadata_.context_len;
-        std::fill_n(row + n_past, n_update, pos_val);
-    }
-}
-
 void LLMKVCacheManager::rearrange_key(KVCacheBuffer & cache, int32_t src_cache_len, int32_t dst_cache_len) {
     // ExecutorchReader의 rearrange_key 구현:
     //
@@ -330,6 +240,113 @@ void LLMKVCacheManager::rearrange_cache(int32_t src_ar_len, int32_t dst_ar_len) 
     // }
 }
 
+// ========== Attention Mask & KV Write-back ==========
+
+void LLMKVCacheManager::build_prefill_attn_mask(
+    uint16_t*       attn_mask,
+    int32_t         ar_len,
+    int32_t         cache_len,
+    int32_t         n_tokens,
+    const int32_t*  positions,
+    const int32_t*  n_seq_ids,
+    int32_t* const* seq_ids) const {
+
+    const int32_t ctx_len    = metadata_.context_len;
+    const int32_t chunk_start = ctx_len - ar_len;
+
+    std::memset(attn_mask, 0, ar_len * ctx_len * sizeof(uint16_t));
+
+    for (int i = 0; i < n_tokens; ++i) {
+        int32_t p_i = positions ? positions[i] : i;
+
+        // Part 1: past KV region [0..cache_len-1]
+        for (int j = 0; j < cache_len; ++j) {
+            if (!cell_meta_[j].is_empty()) {
+                attn_mask[i * ctx_len + j] = 65535;
+            }
+        }
+
+        // Part 2: current chunk [chunk_start..chunk_start+ar_len-1] — tree attention
+        for (int k = 0; k < n_tokens; ++k) {
+            int32_t p_k = positions ? positions[k] : k;
+            if (p_k > p_i) continue;    // causal
+
+            bool has_common_seq = false;
+            if (n_seq_ids && seq_ids) {
+                for (int si = 0; si < n_seq_ids[i] && !has_common_seq; ++si)
+                    for (int sk = 0; sk < n_seq_ids[k] && !has_common_seq; ++sk)
+                        if (seq_ids[i][si] == seq_ids[k][sk])
+                            has_common_seq = true;
+            } else {
+                has_common_seq = true;  // no seq_id info: default to causal
+            }
+
+            if (has_common_seq) {
+                attn_mask[i * ctx_len + chunk_start + k] = 65535;
+            }
+        }
+    }
+}
+
+void LLMKVCacheManager::build_decode_attn_mask(
+    uint16_t* attn_mask,
+    int32_t   cache_len) const {
+
+    const int32_t ctx_len = metadata_.context_len;
+    std::memset(attn_mask, 0, ctx_len * sizeof(uint16_t));
+
+    // Part 1: past KV region [0..cache_len-1]
+    for (int j = 0; j < cache_len; ++j) {
+        if (!cell_meta_[j].is_empty()) {
+            attn_mask[j] = 65535;
+        }
+    }
+
+    // Part 2: current token always sits at the last position
+    attn_mask[ctx_len - 1] = 65535;
+}
+
+void LLMKVCacheManager::write_back_kv(
+    const std::vector<void*>& v_outputs,
+    const std::vector<void*>& k_outputs,
+    int32_t slot,
+    int32_t n_tokens,
+    int32_t cache_len,
+    int32_t ar_len,
+    int32_t shard_layer_base) {
+
+    const int32_t head_dim   = metadata_.head_dim;
+    const int32_t num_heads  = metadata_.num_heads;
+    const int32_t num_layers = metadata_.num_layers;
+
+    // V cache layout: [cache_len, head_dim] — sequential
+    for (size_t i = 0; i < v_outputs.size(); ++i) {
+        int global_layer = shard_layer_base + (int)i / num_heads;
+        int head         = (int)i % num_heads;
+        if (global_layer >= num_layers) continue;
+
+        const auto& v_buf = get_v_cache(global_layer, head);
+        uint8_t* src = reinterpret_cast<uint8_t*>(v_outputs[i]);
+        uint8_t* dst = reinterpret_cast<uint8_t*>(v_buf.input_buffer) + slot * head_dim;
+        std::memcpy(dst, src, n_tokens * head_dim);
+    }
+
+    // K cache layout: [head_dim, cache_len] — strided
+    for (size_t i = 0; i < k_outputs.size(); ++i) {
+        int global_layer = shard_layer_base + (int)i / num_heads;
+        int head         = (int)i % num_heads;
+        if (global_layer >= num_layers) continue;
+
+        const auto& k_buf = get_k_cache(global_layer, head);
+        uint8_t* src = reinterpret_cast<uint8_t*>(k_outputs[i]);
+        uint8_t* dst = reinterpret_cast<uint8_t*>(k_buf.input_buffer) + slot;
+
+        for (int32_t dim = 0; dim < head_dim; ++dim) {
+            std::memcpy(dst + (int64_t)dim * cache_len, src + (int64_t)dim * ar_len, n_tokens);
+        }
+    }
+}
+
 // ========== KV Cell Metadata Implementation (llama_memory_seq_* compatible) ==========
 
 void LLMKVCacheManager::seq_rm(int32_t seq_id, int32_t p0, int32_t p1) {
@@ -382,16 +399,6 @@ void LLMKVCacheManager::seq_cp(int32_t src_seq, int32_t dst_seq, int32_t p0, int
         if (cell_meta_[i].seq.count(src_seq) == 0) continue;
         
         cell_meta_[i].seq.insert(dst_seq);
-    }
-}
-
-void LLMKVCacheManager::seq_add(int32_t slot, int32_t count, int32_t seq_id, int32_t pos_start) {
-    if (seq_id < 0) return;
-    
-    for (int32_t i = 0; i < count && (slot + i) < (int32_t)cell_meta_.size(); ++i) {
-        int32_t idx = slot + i;
-        cell_meta_[idx].pos = pos_start + i;  // Logical sequence position
-        cell_meta_[idx].seq.insert(seq_id);
     }
 }
 

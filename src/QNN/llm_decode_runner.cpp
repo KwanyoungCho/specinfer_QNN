@@ -743,4 +743,141 @@ bool LLMDecodeRunner::run_decode_step(int32_t token_in,
   return true;
 }
 
+bool LLMDecodeRunner::KV_commit() {
+  if (pending_write_.k_data.empty() || pending_write_.v_data.empty()) {
+    return true;
+  }
+  
+  const auto& cells = kv_manager_->get_all_cell_meta();
+  const int32_t start_slot = pending_write_.slot;
+  const int32_t end_slot = start_slot + pending_write_.chunk_size;
+  
+  if (config_.log_level >= 2) {
+    std::cout << "[KV Commit] Compacting valid cells from slots [" << start_slot << ".." << end_slot - 1 << "]\n";
+  }
+  
+  // Collect valid cells and their metadata
+  struct ValidCell {
+    int32_t src_slot;      // Original slot in pending_write_
+    int32_t src_offset;    // Offset in pending_write_ data
+    int32_t pos;           // Position value from metadata
+    std::set<int32_t> seq;  // Sequence IDs from metadata
+  };
+  std::vector<ValidCell> valid_cells;
+  std::set<int32_t> seen_positions;  // Track positions to deduplicate
+  
+  for (int32_t cell_idx = start_slot; cell_idx < end_slot; ++cell_idx) {
+    if (cell_idx >= (int32_t)cells.size() || cells[cell_idx].is_empty()) {
+      continue;  // Skip invalid cells
+    }
+    
+    int32_t pos = cells[cell_idx].pos;
+    
+    // Deduplicate: skip if we've already seen this position
+    if (seen_positions.count(pos) > 0) {
+      if (config_.log_level >= 2) {
+        std::cout << "[KV Commit] Skipping duplicate position " << pos 
+                  << " at slot " << cell_idx << "\n";
+      }
+      // Mark this slot as empty since it's a duplicate
+      kv_manager_->set_cell_pos(cell_idx, -1);
+      continue;
+    }
+    
+    seen_positions.insert(pos);
+    
+    ValidCell vc;
+    vc.src_slot = cell_idx;
+    vc.src_offset = cell_idx - start_slot;
+    vc.pos = pos;
+    vc.seq = cells[cell_idx].seq;
+    valid_cells.push_back(vc);
+  }
+  
+  if (config_.log_level >= 2) {
+    std::cout << "[KV Commit] Found " << valid_cells.size() << " valid cells\n";
+  }
+  
+  // Batch write-back: group consecutive valid cells for efficiency
+  int32_t target_slot = start_slot;
+  size_t idx = 0;
+  
+  while (idx < valid_cells.size()) {
+    // Find consecutive batch: cells with sequential src_offset values
+    int32_t batch_start_offset = valid_cells[idx].src_offset;
+    int32_t batch_count = 1;
+    
+    while (idx + batch_count < valid_cells.size() &&
+           valid_cells[idx + batch_count].src_offset == batch_start_offset + batch_count) {
+      ++batch_count;
+    }
+    
+    if (config_.log_level >= 2) {
+      std::cout << "[KV Commit] Batch write: " << batch_count 
+                << " tokens from offset " << batch_start_offset 
+                << " to slots [" << target_slot << ".." << (target_slot + batch_count - 1) << "]\n";
+    }
+    
+    // Batch write-back for all shards
+    for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
+      std::vector<void*> v_src_ptrs, k_src_ptrs;
+      const int32_t head_dim = head_dim_;
+      const size_t entries_per_shard = pending_write_.v_data[shard_idx].size();
+      
+      for (size_t i = 0; i < entries_per_shard; ++i) {
+        // V: [ar_len, head_dim] layout - offset by batch_start_offset tokens
+        uint8_t* v_base = reinterpret_cast<uint8_t*>(pending_write_.v_data[shard_idx][i]);
+        v_src_ptrs.push_back(v_base + batch_start_offset * head_dim);
+      }
+      
+      for (size_t i = 0; i < pending_write_.k_data[shard_idx].size(); ++i) {
+        // K: [head_dim, ar_len] layout - offset by batch_start_offset in column
+        uint8_t* k_base = reinterpret_cast<uint8_t*>(pending_write_.k_data[shard_idx][i]);
+        k_src_ptrs.push_back(k_base + batch_start_offset);
+      }
+      
+      // Write batch to target slots
+      kv_manager_->write_back_kv(v_src_ptrs, k_src_ptrs,
+                                 target_slot, batch_count,
+                                 prefill_cache_len_, prefill_ar_len_,
+                                 shard_idx * layers_per_shard_);
+    }
+    
+    // Update metadata for the batch
+    for (int32_t i = 0; i < batch_count; ++i) {
+      const auto& vc = valid_cells[idx + i];
+      int32_t curr_target = target_slot + i;
+      
+      if (curr_target != vc.src_slot) {
+        kv_manager_->set_cell_pos(curr_target, vc.pos);
+        for (int32_t sid : vc.seq) {
+          kv_manager_->add_cell_seq(curr_target, sid);
+        }
+        kv_manager_->set_cell_pos(vc.src_slot, -1);
+      }
+    }
+    
+    target_slot += batch_count;
+    idx += batch_count;
+  }
+  
+  // Clear metadata for unused slots (if compaction reduced total count)
+  for (int32_t slot = target_slot; slot < end_slot; ++slot) {
+    if (slot < (int32_t)cells.size() && !cells[slot].is_empty()) {
+      kv_manager_->set_cell_pos(slot, -1);
+    }
+  }
+  
+  // Clear pending data
+  pending_write_.k_data.clear();
+  pending_write_.v_data.clear();
+  
+  if (config_.log_level >= 2) {
+    std::cout << "[KV Commit] Compaction completed: " << valid_cells.size() 
+              << " tokens compacted to slots [" << start_slot << ".." << (target_slot - 1) << "]\n";
+  }
+  
+  return true;
+}
+
 } // namespace llama_qnn
