@@ -27,6 +27,41 @@
 #define expand_k 4
 #define rerank_k 10
 
+// Debug helper: print KV cache metadata in bitmap format
+// Format: [cell] pos (seq_ids), 5 per line, 'x' for empty cells
+// static void dump_kv_meta(llama_qnn::LLMDecodeRunner & runner, const char * label) {
+//     auto * kvm = runner.get_kv_manager();
+//     if (!kvm) { fprintf(stderr, "[KV] %s: NULL\n", label); return; }
+//     const auto & cells = kvm->get_all_cell_meta();
+    
+//     // Find last valid cell
+//     int last_valid = -1;
+//     for (int i = (int)cells.size() - 1; i >= 0; --i) {
+//         if (!cells[i].is_empty()) { last_valid = i; break; }
+//     }
+    
+//     fprintf(stderr, "[KV] %s (last=%d):\n", label, last_valid);
+//     if (last_valid < 0) { fprintf(stderr, "(empty)\n"); return; }
+    
+//     for (int i = 0; i <= last_valid; ++i) {
+//         if (cells[i].is_empty()) {
+//             fprintf(stderr, "[%3d] x         ", i);
+//         } else {
+//             // Build seq_id string
+//             std::string seq_str;
+//             bool first = true;
+//             for (int s : cells[i].seq) {
+//                 if (!first) seq_str += ",";
+//                 seq_str += std::to_string(s);
+//                 first = false;
+//             }
+//             fprintf(stderr, "[%3d] %3d  (%s)  ", i, cells[i].pos, seq_str.c_str());
+//         }
+//         if ((i + 1) % 5 == 0) fprintf(stderr, "\n");
+//     }
+//     if ((last_valid + 1) % 5 != 0) fprintf(stderr, "\n");
+// }
+
 struct callback_data { //callback function의 return 값을 저장할 구조체 선언 -ym-
     std::vector<float> data; //float 타입으로 변경 -ym-
 };
@@ -140,6 +175,7 @@ int main(int argc, char ** argv) {
     qnn_config.log_level         = params.qnn_log_level;
     qnn_config.use_multi_context = params.qnn_use_multi_context;
     qnn_config.num_shards        = params.qnn_num_shards;
+    qnn_config.deferred_kv_writeback = params.qnn_deferred_kv_writeback;
 
     // load target model (vocab_only for QNN)
     llama_model_params tgt_model_param = llama_model_default_params();
@@ -615,11 +651,18 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_keep(mem_dft, 0);
 
                 // QNN KV cache management for target model
+                // dump_kv_meta(qnn_runner, "initial");
                 qnn_runner.kv_seq_rm  (s_keep, n_past_tgt, -1);
                 qnn_runner.kv_seq_keep(s_keep);
                 qnn_runner.kv_seq_cp  (s_keep, 0, -1, -1);
                 qnn_runner.kv_seq_keep(0);
-            }
+                // dump_kv_meta(qnn_runner, "Before write-back");
+                // Commit KV write-back after metadata cleanup
+                if (qnn_runner.is_pending_KV_write()) {
+                    qnn_runner.KV_commit();
+                    // dump_kv_meta(qnn_runner, "After write-back");
+                }
+                }
 
             for (int s = 0; s < n_seq_dft; ++s) {
                 drafts[s].active = false;
@@ -659,10 +702,12 @@ int main(int argc, char ** argv) {
             // LOG_DBG("recompute point: %d, n_past_dft: %d, recompute.size(): %zu, batch_dft.n_tokens: %d, backup_data.size(): %zu\n", recompute_point, n_past_dft, recompute.size(), batch_dft.n_tokens, backup_data.size()/hidden_dim);
 
             // LOG_DBG("dft batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_dft, batch_dft).c_str());
+
             const auto recompute_decode_start1 = ggml_time_us();
             llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
             const auto recompute_decode_end1 = ggml_time_us();
             // LOG_DBG("recompute decode latency: %.3f seconds\n", (recompute_decode_end1 - recompute_decode_start1) / 1e6f);
+
             ++n_past_dft;
         }
 

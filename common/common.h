@@ -537,6 +537,7 @@ struct common_params {
     bool        qnn_use_multi_context = false;
     int32_t     qnn_num_shards      = 0;
     bool        qnn_parallel_prefill = false;
+    bool        qnn_deferred_kv_writeback = false; // Defer KV write-back for speculative decoding
 
     // common params
     std::string out_file; // output filename for all example programs

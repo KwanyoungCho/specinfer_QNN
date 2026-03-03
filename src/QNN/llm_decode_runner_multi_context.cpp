@@ -452,6 +452,25 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
   std::vector<float> accumulated_logits;
   accumulated_logits.reserve((size_t)num_tokens * (size_t)std::max(vocab_size, 1));
 
+  int n_iterations = (num_tokens + prefill_ar_len_ - 1) / prefill_ar_len_;
+  bool is_initial_prefill = (n_past_ == 0);  // Initial prefill: all tokens accepted
+  bool use_deferred = config_.deferred_kv_writeback && 
+                      (n_iterations == 1) && 
+                      !is_initial_prefill;  // Only defer for verification prefill
+
+  if (use_deferred) {
+    pending_write_.k_data.clear();
+    pending_write_.v_data.clear();
+    pending_write_.k_data.resize(config_.num_shards);
+    pending_write_.v_data.resize(config_.num_shards);
+    
+    if (config_.log_level >= 2) {
+      std::cout << "[Deferred KV] Enabled for verification prefill\n";
+    }
+  } else if (config_.deferred_kv_writeback && is_initial_prefill && config_.log_level >= 2) {
+    std::cout << "[Deferred KV] Disabled for initial prefill (all tokens accepted)\n";
+  }
+
   // Multiple iteration prefill
   while (processed < num_tokens) {
     int32_t chunk_size = std::min(prefill_ar_len_, num_tokens - processed);
@@ -488,51 +507,14 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     }
     
     // 2. Generate attention mask BEFORE cell_meta_ update (QNN model has separate KV I/O)
-    // cell_meta_ reflects only past tokens with valid KV data at this point
-    // Layout: [0..prefill_cache_len_-1] = past KV region, [prefill_cache_len_..context_len_-1] = current chunk region
-    std::memset(attn_mask, 0, prefill_ar_len_ * context_len_ * sizeof(uint16_t));
-    int chunk_start = context_len_ - prefill_ar_len_;
-    
-    for (int i = 0; i < chunk_size; ++i) {
-      int batch_idx_i = processed + i;
-      int32_t p_i = batch.pos ? batch.pos[batch_idx_i] : batch_idx_i;
-      
-      // Part 1: Past KV region [0..prefill_cache_len_-1]
-      // Past KV always has seq_id=0 after seq_keep(0), so just check pos != -1
-      for (int j = 0; j < prefill_cache_len_; ++j) {
-        if (!kv_manager_->get_cell_meta(j).is_empty()) {
-          attn_mask[i * context_len_ + j] = 65535;
-        }
-      }
-      
-      // Part 2: Current chunk region [chunk_start..chunk_start+prefill_ar_len_-1]
-      // Tree attention: check both pos (causal) AND seq_id (branch ancestry)
-      for (int k = 0; k < chunk_size; ++k) {
-        int batch_idx_k = processed + k;
-        int32_t p_k = batch.pos ? batch.pos[batch_idx_k] : batch_idx_k;
-        
-        // Causal check
-        if (p_k > p_i) continue;
-        
-        // Seq_id intersection check (tree attention)
-        bool has_common_seq = false;
-        if (batch.seq_id && batch.n_seq_id) {
-          for (int si = 0; si < batch.n_seq_id[batch_idx_i] && !has_common_seq; ++si) {
-            for (int sk = 0; sk < batch.n_seq_id[batch_idx_k] && !has_common_seq; ++sk) {
-              if (batch.seq_id[batch_idx_i][si] == batch.seq_id[batch_idx_k][sk]) {
-                has_common_seq = true;
-              }
-            }
-          }
-        } else {
-          has_common_seq = true;  // No seq_id info, default to causal
-        }
-        
-        if (has_common_seq) {
-          attn_mask[i * context_len_ + chunk_start + k] = 65535;
-        }
-      }
-    }
+    kv_manager_->build_prefill_attn_mask(
+        attn_mask,
+        prefill_ar_len_,
+        prefill_cache_len_,
+        chunk_size,
+        batch.pos                          ? batch.pos       + processed : nullptr,
+        (batch.n_seq_id && batch.seq_id)   ? batch.n_seq_id  + processed : nullptr,
+        batch.seq_id                       ? batch.seq_id    + processed : nullptr);
     
     // Build positions array (use batch.pos or generate sequential)
     // Pad to prefill_ar_len_ to match chunk_tokens padding
@@ -540,51 +522,6 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     for (int i = 0; i < chunk_size; ++i) {
       chunk_positions[i] = batch.pos ? batch.pos[processed + i] : (processed + i);
     }
-    
-    // [ATTN_MASK_DEBUG] Attention mask bitmap visualization
-    // Remove this block when debugging is complete
-    #if 0
-    {
-      // Find last valid cell in past KV region
-      int last_valid_past = -1;
-      for (int j = prefill_cache_len_ - 1; j >= 0; --j) {
-        if (!kv_manager_->get_cell_meta(j).is_empty()) { last_valid_past = j; break; }
-      }
-      
-      fprintf(stderr, "[ATTN_MASK] chunk=%d, chunk_size=%d\n", processed / prefill_ar_len_, chunk_size);
-      
-      // Part 1: Past KV (up to last valid cell)
-      if (last_valid_past >= 0) {
-        fprintf(stderr, "=== PAST KV [0..%d] ===\n", last_valid_past);
-        fprintf(stderr, "Q\\K ");
-        for (int k = 0; k <= last_valid_past; ++k) fprintf(stderr, "%d", k % 10);
-        fprintf(stderr, "\n");
-        for (int q = 0; q < chunk_size; ++q) {
-          fprintf(stderr, "%3d ", q);
-          for (int k = 0; k <= last_valid_past; ++k) {
-            fprintf(stderr, "%c", attn_mask[q * context_len_ + k] ? 'O' : 'X');
-          }
-          fprintf(stderr, "\n");
-        }
-      } else {
-        fprintf(stderr, "=== PAST KV: (empty) ===\n");
-      }
-      
-      // Part 2: Current chunk
-      fprintf(stderr, "=== CURRENT [%d..%d] ===\n", chunk_start, chunk_start + chunk_size - 1);
-      fprintf(stderr, "Q\\K ");
-      for (int k = 0; k < chunk_size; ++k) fprintf(stderr, "%d", k % 10);
-      fprintf(stderr, "\n");
-      for (int q = 0; q < chunk_size; ++q) {
-        fprintf(stderr, "%3d ", q);
-        for (int k = 0; k < chunk_size; ++k) {
-          fprintf(stderr, "%c", attn_mask[q * context_len_ + chunk_start + k] ? 'O' : 'X');
-        }
-        fprintf(stderr, "\n");
-      }
-    }
-    #endif
-    // [/ATTN_MASK_DEBUG]
     
     // Run prefill through all shards sequentially
     for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
@@ -595,76 +532,32 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     
     // Update KV cache: copy prefill outputs to KV inputs at found slot
     if (config_.log_level >= 2) {
-      std::cout << "[Multi-Context Prefill] Updating KV cache at slot=" 
+      std::cout << "[Multi-Context Prefill] Updating KV cache at slot="
                 << slot << ", chunk_size=" << chunk_size << "\n";
     }
-    
-    int total_v_updated = 0, total_k_updated = 0;
-    
-    for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
-      auto& shard = shards_[shard_idx];
-      auto& bindings = shard.prefill_alloc->bindings();
-      int shard_layer_base = shard_idx * layers_per_shard_;
-      
-      // Collect V and K cache outputs (in original order, no sorting!)
-      std::vector<void*> v_outputs, k_outputs;
-      for (const auto& t : shard.prefill_graph->outputs) {
-        auto bit = bindings.find(t.name);
-        if (bit == bindings.end()) continue;
+
+    if (use_deferred) {
+      for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
+        std::vector<void*> v_outputs, k_outputs;
+        collect_kv_outputs(shard_idx, v_outputs, k_outputs);
         
-        if (t.name.find("output_aten_view_copy_default_") != std::string::npos) {
-          v_outputs.push_back(bit->second);
-        } else if (t.name.find("output_aten_permute_copy_default_") != std::string::npos) {
-          k_outputs.push_back(bit->second);
-        }
+        pending_write_.v_data[shard_idx].insert(
+          pending_write_.v_data[shard_idx].end(), v_outputs.begin(), v_outputs.end());
+        pending_write_.k_data[shard_idx].insert(
+          pending_write_.k_data[shard_idx].end(), k_outputs.begin(), k_outputs.end());
       }
-      
-      // Process V caches
-      for (size_t i = 0; i < v_outputs.size(); ++i) {
-        int local_layer = i / num_heads_;
-        int head = i % num_heads_;
-        int global_layer = shard_layer_base + local_layer;
-        
-        if (global_layer >= num_layers_) continue;
-        
-        const auto& v_buf = kv_manager_->get_v_cache(global_layer, head);
-        uint8_t* src = reinterpret_cast<uint8_t*>(v_outputs[i]);
-        uint8_t* dst = reinterpret_cast<uint8_t*>(v_buf.input_buffer) + slot * head_dim_;
-        std::memcpy(dst, src, chunk_size * head_dim_);
-        
-        if (config_.log_level >= 2 && shard_idx == 0 && i < 2) {
-          std::cout << "[Prefill KV] Iter: slot=" << slot << " Shard " << shard_idx 
-                    << " V-cache " << i << " → Layer " << global_layer << " Head " << head << "\n";
-        }
-        total_v_updated++;
+      pending_write_.slot = slot;
+      pending_write_.chunk_size = chunk_size;
+    } else {
+      for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
+        std::vector<void*> v_outputs, k_outputs;
+        collect_kv_outputs(shard_idx, v_outputs, k_outputs);
+
+        kv_manager_->write_back_kv(v_outputs, k_outputs,
+                                    slot, chunk_size,
+                                    prefill_cache_len_, prefill_ar_len_,
+                                    shard_idx * layers_per_shard_);
       }
-      
-      // Process K caches
-      for (size_t i = 0; i < k_outputs.size(); ++i) {
-        int local_layer = i / num_heads_;
-        int head = i % num_heads_;
-        int global_layer = shard_layer_base + local_layer;
-        
-        if (global_layer >= num_layers_) continue;
-        
-        const auto& k_buf = kv_manager_->get_k_cache(global_layer, head);
-        uint8_t* src = reinterpret_cast<uint8_t*>(k_outputs[i]);
-        uint8_t* dst = reinterpret_cast<uint8_t*>(k_buf.input_buffer) + slot;
-        
-        // K cache: copy with stride (transposed layout)
-        for (int32_t dim = 0; dim < head_dim_; ++dim) {
-          std::memcpy(dst, src, chunk_size);
-          src += prefill_ar_len_;
-          dst += prefill_cache_len_;
-        }
-        total_k_updated++;
-      }
-    }
-    
-    if (config_.log_level >= 3) {
-      std::cout << "[Multi-Context Prefill] KV cache updated: "
-                << total_v_updated << " V-caches, "
-                << total_k_updated << " K-caches\n";
     }
     
     // 4. Update cell_meta_ AFTER KV cache update (QNN model has separate KV I/O)
@@ -706,25 +599,6 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     }
 
     auto& bindings_iter = shards_[final_shard].prefill_alloc->bindings();
-
-    // // ===== DIAGNOSTIC: Print ALL output tensors of final shard (once) =====
-    // if (processed == 0) {
-    //   fprintf(stderr, "[DIAG-HS] Final shard %d prefill outputs (%zu tensors):\n",
-    //           final_shard, shards_[final_shard].prefill_graph->outputs.size());
-    //   for (size_t ti = 0; ti < shards_[final_shard].prefill_graph->outputs.size(); ++ti) {
-    //     const auto& t = shards_[final_shard].prefill_graph->outputs[ti];
-    //     auto bit = bindings_iter.find(t.name);
-    //     fprintf(stderr, "  [%zu] name='%s' dims=[", ti, t.name.c_str());
-    //     for (size_t d = 0; d < t.dims.size(); ++d)
-    //       fprintf(stderr, "%s%u", d ? "," : "", t.dims[d]);
-    //     fprintf(stderr, "] nbytes=%zu dtype=%s", t.nbytes, t.data_type.c_str());
-    //     if (bit != bindings_iter.end() && bit->second) {
-    //       const float* fptr = reinterpret_cast<const float*>(bit->second);
-    //       fprintf(stderr, " vals=[%.4f,%.4f,%.4f,%.4f]", fptr[0], fptr[1], fptr[2], fptr[3]);
-    //     }
-    //     fprintf(stderr, "\n");
-    //   }
-    // }
 
     const QnnJsonTensorDesc* hidden_state_desc = nullptr;
     for(const auto& t : shards_[final_shard].prefill_graph->outputs){
@@ -783,26 +657,6 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
                 << " tokens (accumulated from all chunks)\n";
     }
   }
-
-  // {
-  //   auto & hs = ctx->final_hiddens;
-  //   size_t n_floats = hs.size();
-  //   size_t hidden_dim = 4096;
-  //   size_t n_tokens = n_floats / hidden_dim;
-
-  //   printf("\n===== [Prefill Hidden States - ALL] =====\n");
-  //   printf("total: %zu floats (%zu tokens x %zu)\n", n_floats, n_tokens, hidden_dim);
-
-  //   for (size_t t = 0; t < n_tokens; ++t) {
-  //       printf("[token %zu] ", t);
-  //       for (size_t d = 0; d < hidden_dim; ++d) {
-  //           printf("%.6f ", hs[t * hidden_dim + d]);
-  //       }
-  //       printf("\n");
-  //   }
-  //   printf("==========================================\n\n");
-  // }
-  
   return true;
 }
 
@@ -868,27 +722,16 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
     // Layout: [0..kv_cache_len_-1] = past KV region, [context_len_-1] = current token
     else if (name_lower.find("atten_mask") != std::string::npos) {
       uint16_t* attn_mask = reinterpret_cast<uint16_t*>(it->second);
-      std::memset(attn_mask, 0, context_len_ * sizeof(uint16_t));
-      
-      // Part 1: Past KV region [0..kv_cache_len_-1]
-      // Past KV always has seq_id=0 after seq_keep(0), so just check pos != -1
-      for (int j = 0; j < kv_cache_len_; ++j) {
-        if (!kv_manager_->get_cell_meta(j).is_empty()) {
-          attn_mask[j] = 65535;
-        }
-      }
-      
-      // Part 2: Current token at last position [context_len_-1]
-      attn_mask[context_len_ - 1] = 65535;
-      
+      kv_manager_->build_decode_attn_mask(attn_mask, kv_cache_len_);
+
       if (config_.log_level >= 2) {
         int attend_count = 0;
-        for (int j = 0; j < context_len_; ++j) {
+        for (int j = 0; j < context_len_; ++j)
           if (attn_mask[j] == 65535) attend_count++;
-        }
-        std::cout << "[Decode Shard 0] Attention mask: attending to " << attend_count << " cells (query pos=" << token_pos << ")\n";
+        std::cout << "[Decode Shard 0] Attention mask: attending to " << attend_count
+                  << " cells (query pos=" << token_pos << ")\n";
       }
-      
+
       // Also copy to shared buffer for other shards
       std::memcpy(shared_buffer_views_["attention_mask"], attn_mask, context_len_ * sizeof(uint16_t));
     }
@@ -911,67 +754,25 @@ bool LLMDecodeRunner::run_multi_context_decode_step(llama_context * ctx, llama_b
   if (config_.log_level >= 2) {
     std::cout << "[Multi-Context Decode] Updating KV cache at slot=" << slot << "...\n";
   }
-  
-  int total_v_updated = 0, total_k_updated = 0;
-  
-  // Copy KV cache outputs to inputs for all shards
+
   for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
-    auto& shard = shards_[shard_idx];
+    auto& shard    = shards_[shard_idx];
     auto& bindings = shard.kv_alloc->bindings();
-    int shard_layer_base = shard_idx * layers_per_shard_;
-    
-    // Collect V and K cache outputs (in original order, no sorting!)
+
     std::vector<void*> v_outputs, k_outputs;
     for (const auto& t : shard.kv_graph->outputs) {
       auto bit = bindings.find(t.name);
       if (bit == bindings.end()) continue;
-      
-      if (t.name.find("output_aten_view_copy_default_") != std::string::npos) {
+      if (t.name.find("output_aten_view_copy_default_") != std::string::npos)
         v_outputs.push_back(bit->second);
-      } else if (t.name.find("output_aten_permute_copy_default_") != std::string::npos) {
+      else if (t.name.find("output_aten_permute_copy_default_") != std::string::npos)
         k_outputs.push_back(bit->second);
-      }
     }
-    
-    // Process V caches (순서대로 layer/head 할당)
-    for (size_t i = 0; i < v_outputs.size(); ++i) {
-      int local_layer = i / num_heads_;
-      int head = i % num_heads_;
-      int global_layer = shard_layer_base + local_layer;
-      
-      if (global_layer >= num_layers_) continue;
-      
-      const auto& v_buf = kv_manager_->get_v_cache(global_layer, head);
-      uint8_t* src = reinterpret_cast<uint8_t*>(v_outputs[i]);
-      uint8_t* dst = reinterpret_cast<uint8_t*>(v_buf.input_buffer) + slot * head_dim_;
-      std::memcpy(dst, src, 1 * head_dim_);
-      total_v_updated++;
-    }
-    
-    // Process K caches (순서대로 layer/head 할당)
-    for (size_t i = 0; i < k_outputs.size(); ++i) {
-      int local_layer = i / num_heads_;
-      int head = i % num_heads_;
-      int global_layer = shard_layer_base + local_layer;
-      
-      if (global_layer >= num_layers_) continue;
-      
-      const auto& k_buf = kv_manager_->get_k_cache(global_layer, head);
-      uint8_t* src = reinterpret_cast<uint8_t*>(k_outputs[i]);
-      uint8_t* dst = reinterpret_cast<uint8_t*>(k_buf.input_buffer) + slot;
-      
-      // K cache: copy with stride (transposed layout)
-      for (int32_t dim = 0; dim < head_dim_; ++dim) {
-        dst[dim * kv_cache_len_] = src[dim];
-      }
-      total_k_updated++;
-    }
-  }
-  
-  if (config_.log_level >= 2) {
-    std::cout << "[Multi-Context Decode] KV cache updated: " 
-              << total_v_updated << " V-caches, " 
-              << total_k_updated << " K-caches\n";
+
+    kv_manager_->write_back_kv(v_outputs, k_outputs,
+                                slot, 1,
+                                kv_cache_len_, kv_ar_len_,
+                                shard_idx * layers_per_shard_);
   }
   
   // 4. Update cell_meta_ AFTER KV cache update (QNN model has separate KV I/O)
@@ -1625,11 +1426,35 @@ int LLMDecodeRunner::qnn_decode(llama_context * ctx, llama_batch batch) {
   return 0;  // Success (matches llama_decode return semantics)
 }
 
+
 void LLMDecodeRunner::reset() {
   n_past_ = 0;
   prefill_done_ = false;
   if (kv_manager_) {
     kv_manager_->reset_cell_meta();
+  }
+}
+
+// ========== Helper Functions ==========
+
+void LLMDecodeRunner::collect_kv_outputs(int shard_idx, 
+                                          std::vector<void*>& v_outputs, 
+                                          std::vector<void*>& k_outputs) {
+  auto& shard = shards_[shard_idx];
+  auto& bindings = shard.prefill_alloc->bindings();
+  
+  v_outputs.clear();
+  k_outputs.clear();
+  
+  for (const auto& t : shard.prefill_graph->outputs) {
+    auto bit = bindings.find(t.name);
+    if (bit == bindings.end()) continue;
+    
+    if (t.name.find("output_aten_view_copy_default_") != std::string::npos) {
+      v_outputs.push_back(bit->second);
+    } else if (t.name.find("output_aten_permute_copy_default_") != std::string::npos) {
+      k_outputs.push_back(bit->second);
+    }
   }
 }
 

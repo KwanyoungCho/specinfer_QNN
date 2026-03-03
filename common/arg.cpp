@@ -1287,7 +1287,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.qnn_parallel_prefill = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
-    
+    add_opt(common_arg(
+        {"--deferred-kv"},
+        "defer KV cache write-back for speculative decoding (fragment-free mode)",
+        [](common_params & params) {
+            params.qnn_deferred_kv_writeback = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
