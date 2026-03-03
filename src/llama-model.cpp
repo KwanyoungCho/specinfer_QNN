@@ -6447,7 +6447,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // ================================================================================================
                     // CURRENT CODE (output tensor sharing support)
                     // ================================================================================================
-                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, 0);
+                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
 
                     // if output is NULL, defer creation for potential sharing with target model
                     if (output == NULL) {

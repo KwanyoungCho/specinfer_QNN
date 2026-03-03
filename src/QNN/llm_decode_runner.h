@@ -185,6 +185,12 @@ class LLMDecodeRunner {
    * @return 0 on success, non-zero on failure (matches llama_decode semantics)
    */
   int qnn_decode(llama_context * ctx, llama_batch batch);
+  
+  /**
+   * @brief Reset runner state for reuse (e.g., between perplexity chunks)
+   * Clears KV cache metadata, resets position tracking and prefill state.
+   */
+  void reset();
 
  private:
   // Shard execution helpers

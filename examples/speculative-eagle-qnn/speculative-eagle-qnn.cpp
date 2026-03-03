@@ -323,7 +323,7 @@ int main(int argc, char ** argv) {
     std::vector<int> decoding_latencies;
     std::vector<int> verification_latencies;
     std::vector<float> T_d;
-    int accept_counts[15][5] = { 0, };
+    std::vector<std::vector<int>> accept_counts(n_seq_dft, std::vector<int>(n_depth, 0));
 
     int rows = n_seq_dft;
     int cols = n_depth;
@@ -673,6 +673,16 @@ int main(int argc, char ** argv) {
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
             break;
+        }
+
+        // Context overflow guard: stop if approaching draft model KV cache limit
+        {
+            const int n_ctx_dft = llama_n_ctx(ctx_dft);
+            if (n_past_dft + n_draft + n_depth >= n_ctx_dft - 2) {
+                fprintf(stderr, "\n[WARN] Draft model context nearly full (n_past_dft=%d, n_ctx=%d). Stopping.\n",
+                        n_past_dft, n_ctx_dft);
+                break;
+            }
         }
 
         // fprintf(stderr, "[DBG] tree drafting start\n");
@@ -1044,6 +1054,11 @@ int main(int argc, char ** argv) {
 
         // evaluate the target model on the drafted tokens using QNN
         {
+            // [CRASH-DIAG] Print state before verification to catch crash point
+            fprintf(stderr, "[STEP] n_predict=%d n_past_tgt=%d n_past_dft=%d batch_tgt.n_tokens=%d\n",
+                    n_predict, n_past_tgt, n_past_dft, batch_tgt.n_tokens);
+            fflush(stderr);
+
             // QNN KV cache management: Copy seq 0 to all active sequences
             qnn_runner.kv_seq_keep(0);
             for (int s = 1; s < n_seq_dft; ++s) {

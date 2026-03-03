@@ -1625,4 +1625,12 @@ int LLMDecodeRunner::qnn_decode(llama_context * ctx, llama_batch batch) {
   return 0;  // Success (matches llama_decode return semantics)
 }
 
+void LLMDecodeRunner::reset() {
+  n_past_ = 0;
+  prefill_done_ = false;
+  if (kv_manager_) {
+    kv_manager_->reset_cell_meta();
+  }
+}
+
 } // namespace llama_qnn

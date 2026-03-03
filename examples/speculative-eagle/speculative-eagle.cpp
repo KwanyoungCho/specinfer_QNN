@@ -380,7 +380,7 @@ int main(int argc, char ** argv) {
     std::vector<int> decoding_latencies;
     std::vector<int> verification_latencies;
     std::vector<float> T_d;
-    int accept_counts[15][5] = { 0, };
+    std::vector<std::vector<int>> accept_counts(n_seq_dft, std::vector<int>(n_depth, 0));
 
     int rows = n_seq_dft;
     int cols = n_depth;
