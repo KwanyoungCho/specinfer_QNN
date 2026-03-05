@@ -1,0 +1,961 @@
+ggml_opencl: selected platform: 'QUALCOMM Snapdragon(TM)'
+
+ggml_opencl: device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
+ggml_opencl: OpenCL driver: OpenCL 3.0 QUALCOMM build: 0800.40.1 Compiler E031.47.18.36
+ggml_opencl: vector subgroup broadcast support: true
+ggml_opencl: device FP16 support: true
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 1024 MB
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: true
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: true
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
+ggml_opencl: loading OpenCL kernels.........................................................................
+ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
+build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
+llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = llama
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                     general.sampling.top_p f32              = 0.900000
+llama_model_loader: - kv   3:                      general.sampling.temp f32              = 0.600000
+llama_model_loader: - kv   4:                               general.name str              = Meta Llama 3 8B Instruct
+llama_model_loader: - kv   5:                           general.finetune str              = Instruct
+llama_model_loader: - kv   6:                           general.basename str              = Meta-Llama-3
+llama_model_loader: - kv   7:                         general.size_label str              = 8B
+llama_model_loader: - kv   8:                            general.license str              = llama3
+llama_model_loader: - kv   9:                               general.tags arr[str,6]       = ["facebook", "meta", "pytorch", "llam...
+llama_model_loader: - kv  10:                          general.languages arr[str,1]       = ["en"]
+llama_model_loader: - kv  11:                          llama.block_count u32              = 32
+llama_model_loader: - kv  12:                       llama.context_length u32              = 8192
+llama_model_loader: - kv  13:                     llama.embedding_length u32              = 4096
+llama_model_loader: - kv  14:                  llama.feed_forward_length u32              = 14336
+llama_model_loader: - kv  15:                 llama.attention.head_count u32              = 32
+llama_model_loader: - kv  16:              llama.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  17:                       llama.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  18:     llama.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  19:                 llama.attention.key_length u32              = 128
+llama_model_loader: - kv  20:               llama.attention.value_length u32              = 128
+llama_model_loader: - kv  21:                           llama.vocab_size u32              = 128256
+llama_model_loader: - kv  22:                 llama.rope.dimension_count u32              = 128
+llama_model_loader: - kv  23:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  24:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  25:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  26:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  27:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  28:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  29:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  30:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  31:               tokenizer.ggml.add_sep_token bool             = false
+llama_model_loader: - kv  32:                    tokenizer.chat_template str              = {% set loop_messages = messages %}{% ...
+llama_model_loader: - kv  33:               general.quantization_version u32              = 2
+llama_model_loader: - kv  34:                          general.file_type u32              = 2
+llama_model_loader: - type  f32:   65 tensors
+llama_model_loader: - type q4_0:  226 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_0
+print_info: file size   = 4.21 GiB (4.50 BPW) 
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.8000 MB
+print_info: arch             = llama
+print_info: vocab_only       = 0
+print_info: n_ctx_train      = 8192
+print_info: n_embd           = 4096
+print_info: n_embd_inp       = 4096
+print_info: n_layer          = 32
+print_info: n_head           = 32
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 4
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 14336
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 8192
+print_info: rope_finetuned   = unknown
+print_info: model type       = 8B
+print_info: model params     = 8.03 B
+print_info: general.name     = Meta Llama 3 8B Instruct
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128009 '<|eot_id|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = false)
+load_tensors: offloading 32 repeating layers to GPU
+load_tensors: offloading output layer to GPU
+load_tensors: offloaded 33/33 layers to GPU
+load_tensors:          CPU model buffer size =   281.81 MiB
+load_tensors:       OpenCL model buffer size =  4026.83 MiB
+.........................................................................................
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 2
+llama_context: n_ctx         = 8192
+llama_context: n_ctx_seq     = 8192
+llama_context: n_batch       = 2048
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = disabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context:        CPU  output buffer size =     0.98 MiB
+llama_kv_cache:     OpenCL KV buffer size =  1024.00 MiB
+llama_kv_cache: size = 1024.00 MiB (  8192 cells,  32 layers,  2/1 seqs), K (f16):  512.00 MiB, V (f16):  512.00 MiB
+llama_context:     OpenCL compute buffer size =   564.01 MiB
+llama_context:        CPU compute buffer size =    28.01 MiB
+llama_context: graph nodes  = 1158
+llama_context: graph splits = 2
+common_init_from_params: added <|end_of_text|> logit bias = -inf
+common_init_from_params: added <|eot_id|> logit bias = -inf
+common_init_from_params: setting dry_penalty_last_n to ctx_size = 8192
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
+llama_model_loader: loaded meta data with 27 key-value pairs and 10 tensors from ../../gguf/EAGLE-llama38i_q4_0_output4.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = eagle
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = EAGLE LLaMA3 Instruct 8B
+llama_model_loader: - kv   3:                           general.finetune str              = Instruct-8b
+llama_model_loader: - kv   4:                           general.basename str              = EAGLE-LLaMA3
+llama_model_loader: - kv   5:                         general.size_label str              = 777M
+llama_model_loader: - kv   6:                          eagle.block_count u32              = 1
+llama_model_loader: - kv   7:                       eagle.context_length u32              = 2048
+llama_model_loader: - kv   8:                     eagle.embedding_length u32              = 4096
+llama_model_loader: - kv   9:                  eagle.feed_forward_length u32              = 14336
+llama_model_loader: - kv  10:                 eagle.attention.head_count u32              = 32
+llama_model_loader: - kv  11:              eagle.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  12:                       eagle.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  13:     eagle.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  14:                           eagle.vocab_size u32              = 128256
+llama_model_loader: - kv  15:                 eagle.rope.dimension_count u32              = 128
+llama_model_loader: - kv  16:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  17:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  18:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  19:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  20:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  21:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  22:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  23:            tokenizer.ggml.padding_token_id u32              = 0
+llama_model_loader: - kv  24:                    tokenizer.chat_template str              = {% set loop_messages = messages %}{% ...
+llama_model_loader: - kv  25:               general.quantization_version u32              = 2
+llama_model_loader: - kv  26:                          general.file_type u32              = 2
+llama_model_loader: - type  f32:    1 tensors
+llama_model_loader: - type q4_0:    9 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_0
+print_info: file size   = 416.83 MiB (4.50 BPW) 
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.8000 MB
+print_info: arch             = eagle
+print_info: vocab_only       = 0
+print_info: n_ctx_train      = 2048
+print_info: n_embd           = 4096
+print_info: n_embd_inp       = 4096
+print_info: n_layer          = 1
+print_info: n_head           = 32
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 4
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 14336
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 2048
+print_info: rope_finetuned   = unknown
+print_info: model type       = ?B
+print_info: model params     = 777.00 M
+print_info: general.name     = EAGLE LLaMA3 Instruct 8B
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128009 '<|eot_id|>'
+print_info: PAD token        = 0 '!'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = false)
+load_tensors: offloading 1 repeating layers to GPU
+load_tensors: offloading output layer to GPU
+load_tensors: offloaded 2/2 layers to GPU
+load_tensors:          CPU model buffer size =   563.62 MiB
+load_tensors:       OpenCL model buffer size =   135.02 MiB
+..
+.
+.
+.
+.
+.
+.
+.
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 2
+llama_context: n_ctx         = 2048
+llama_context: n_ctx_seq     = 2048
+llama_context: n_batch       = 2048
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = disabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context:        CPU  output buffer size =     0.98 MiB
+llama_kv_cache:     OpenCL KV buffer size =     8.00 MiB
+llama_kv_cache: size =    8.00 MiB (  2048 cells,   1 layers,  2/1 seqs), K (f16):    4.00 MiB, V (f16):    4.00 MiB
+llama_context:     OpenCL compute buffer size =   160.01 MiB
+llama_context:        CPU compute buffer size =   258.50 MiB
+llama_context: graph nodes  = 40
+llama_context: graph splits = 3
+common_init_from_params: added <|end_of_text|> logit bias = -inf
+common_init_from_params: added <|eot_id|> logit bias = -inf
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+
+🔍 DEBUG: Target model output tensor: 0xb400006ece0bf1d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400006ff10cc5d0
+🎯 LM HEAD SHARING: Assigning target output tensor to draft model
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400006ece0bf1d0
+✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
+📋 LM HEAD SHARING: Also shared output_norm tensor
+
+🔍 FINAL VERIFICATION:
+🔍 Target model output: 0xb400006ece0bf1d0
+🔍 Draft model output:  0xb400006ece0bf1d0
+✅ FINAL: Output tensors are properly shared!
+🔍 SHARED TENSOR INFO:
+  - Dimensions: [4096, 128256]
+  - Type: 2
+  - Data pointer: 0x4080
+  - Buffer: 0xb400006f810cfe00
+
+
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Lorraine and Colleen are trading stickers for buttons. Each large sticker is worth a large button or three small buttons. A small sticker is worth one small button. A large button is worth three small stickers. Lorraine starts with 30 small stickers and 40 large stickers. She trades 90% of her small stickers for large buttons. She trades 50% of her large stickers for large buttons and trades the rest of them for small buttons. How many buttons does she have by the end?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+batch_tgt.n_tokens: 216, prefill latency: 1.842 seconds
+
+
+Letsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+'s breaksplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ thissplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ down stepsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ by stepsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+!
+
+Initiallysplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+, Lsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+orraine has:
+
+splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+* 30 smallsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers
+* splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+40 largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers
+
+Shesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ trades 90splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+% of her smallsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers forsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ buttons. Tosplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ find thesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ number of smallsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers she tradessplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+, multiplysplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 30splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ by 0splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+.9 (splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+90%):
+
+splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+30splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ xsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 0.9splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ = 27splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ smallsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers
+
+She tradessplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 27splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ small stickers for largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ buttons. Sincesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ each small sticker issplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ worth one small buttonsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+, she getssplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 27 small buttonssplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+.
+
+Nextsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+, she trades splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+50% of hersplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ large stickers for largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ buttons. Tosplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ find the number ofsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ large stickers shesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ trades, multiplysplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 40splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ by 0splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+.5 (splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+50%):
+
+40splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ x 0.splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+5 = 20splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers
+
+She tradessplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 20splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ large stickers for largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ buttons. Since eachsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ large sticker is worthsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ one largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ button orsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ three smallsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ buttons, she getssplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+:
+
+20 largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers xsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 1splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ button (splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+orsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 3splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ smallsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ buttons)splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ = 20splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ large buttons (splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+or 60splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ small buttons)
+
+splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+Shesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ trades the remaining splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+20 large stickers (splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+40 -splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 20splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ = 20)splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ for smallsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ buttons. Since eachsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ large sticker is worthsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ three small stickerssplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+, she gets:
+
+splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+20 large stickers xsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 3 smallsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers = 60splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ small stickerssplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+
+
+Nowsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+, let's addsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ up the buttonssplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ she has:
+
+*splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 27splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ small buttonssplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ (trsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+aded forsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ small stickers)
+*splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 20splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ large buttons (trsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+aded for largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers)
+* splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+60 small buttons (splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+traded for largesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ stickers)
+
+Insplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ total, Lsplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+orraine has:
+
+splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+27splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ + 20 +splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ 60splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ = 107splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ buttonssplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+
+
+Shesplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ has asplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ total of 107splitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+ buttonssplitting seq   0 into   1
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+temp.size(): 2, batch_dft.n_tokens: 2
+batch_tgt.n_tokens: 7
+.<|eot_id|><|start_header_id|>assistant
+
+
+============================================================
+            EAGLE  Performance Summary
+============================================================
+  Prefill           :   217 tokens |   1971.88 ms |   110.05 t/s
+  Decode            :   330 tokens |  26901.08 ms |    12.27 t/s
+  Decode latency    :              |     81.52 ms/tok
+------------------------------------------------------------
+  Draft length          : 3.000
+  Avg accept length     : 2.812
+  Accept ratio          : 60.399%
+------------------------------------------------------------
+  Avg draft phase       :    75.795 ms
+  Avg verification      :   151.661 ms
+  Avg T_d (1-tok dft)   :     0.000 ms
+============================================================
+numbers.txt 파일 저장 완료!
+numbers.txt 파일 저장 완료!
+
+draft:
+
+llama_perf_context_print:        load time =     803.89 ms
+llama_perf_context_print: prompt eval time =    7102.42 ms /  1231 tokens (    5.77 ms per token,   173.32 tokens per second)
+llama_perf_context_print:        eval time =     266.62 ms /    13 runs   (   20.51 ms per token,    48.76 tokens per second)
+llama_perf_context_print:       total time =   28877.16 ms /  1244 tokens
+llama_perf_context_print:    graphs reused =        230
+
+target:
+
+common_perf_print:    sampling time =     353.59 ms
+common_perf_print:    samplers time =     137.40 ms /   330 tokens
+common_perf_print:        load time =    8516.20 ms
+common_perf_print: prompt eval time =   19251.14 ms /  1035 tokens (   18.60 ms per token,    53.76 tokens per second)
+common_perf_print:        eval time =     128.39 ms /     1 runs   (  128.39 ms per token,     7.79 tokens per second)
+common_perf_print:       total time =   29681.12 ms /  1036 tokens
+common_perf_print: unaccounted time =    9947.99 ms /  33.5 %      (total - sampling - prompt eval - eval) / (total)
+common_perf_print:    graphs reused =        114
+llama_memory_breakdown_print: | memory breakdown [MiB]                  | total   free    self   model   context   compute       unaccounted |
+llama_memory_breakdown_print: |   - GPUOpenCL (QUALCOMM Adreno(TM) 830) |     0 =    0 + (5614 =  4026 +    1024 +     564) + 17592186038801 |
+llama_memory_breakdown_print: |   - Host                                |                  309 =   281 +       0 +      28                   |
+
+

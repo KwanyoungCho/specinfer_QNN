@@ -1,0 +1,191 @@
+ggml_opencl: selected platform: 'QUALCOMM Snapdragon(TM)'
+
+ggml_opencl: device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
+ggml_opencl: OpenCL driver: OpenCL 3.0 QUALCOMM build: 0800.40.1 Compiler E031.47.18.36
+ggml_opencl: vector subgroup broadcast support: true
+ggml_opencl: device FP16 support: true
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 1024 MB
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: true
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: true
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
+ggml_opencl: loading OpenCL kernels.........................................................................
+ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
+build: 15 (35b5065) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+main: llama backend init
+main: load the model and apply lora adapter, if any
+llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
+llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = llama
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                     general.sampling.top_p f32              = 0.900000
+llama_model_loader: - kv   3:                      general.sampling.temp f32              = 0.600000
+llama_model_loader: - kv   4:                               general.name str              = Meta Llama 3 8B Instruct
+llama_model_loader: - kv   5:                           general.finetune str              = Instruct
+llama_model_loader: - kv   6:                           general.basename str              = Meta-Llama-3
+llama_model_loader: - kv   7:                         general.size_label str              = 8B
+llama_model_loader: - kv   8:                            general.license str              = llama3
+llama_model_loader: - kv   9:                               general.tags arr[str,6]       = ["facebook", "meta", "pytorch", "llam...
+llama_model_loader: - kv  10:                          general.languages arr[str,1]       = ["en"]
+llama_model_loader: - kv  11:                          llama.block_count u32              = 32
+llama_model_loader: - kv  12:                       llama.context_length u32              = 8192
+llama_model_loader: - kv  13:                     llama.embedding_length u32              = 4096
+llama_model_loader: - kv  14:                  llama.feed_forward_length u32              = 14336
+llama_model_loader: - kv  15:                 llama.attention.head_count u32              = 32
+llama_model_loader: - kv  16:              llama.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  17:                       llama.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  18:     llama.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  19:                 llama.attention.key_length u32              = 128
+llama_model_loader: - kv  20:               llama.attention.value_length u32              = 128
+llama_model_loader: - kv  21:                           llama.vocab_size u32              = 128256
+llama_model_loader: - kv  22:                 llama.rope.dimension_count u32              = 128
+llama_model_loader: - kv  23:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  24:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  25:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  26:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  27:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  28:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  29:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  30:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  31:               tokenizer.ggml.add_sep_token bool             = false
+llama_model_loader: - kv  32:                    tokenizer.chat_template str              = {% set loop_messages = messages %}{% ...
+llama_model_loader: - kv  33:               general.quantization_version u32              = 2
+llama_model_loader: - kv  34:                          general.file_type u32              = 2
+llama_model_loader: - type  f32:   65 tensors
+llama_model_loader: - type q4_0:  226 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_0
+print_info: file size   = 4.21 GiB (4.50 BPW) 
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.8000 MB
+print_info: arch             = llama
+print_info: vocab_only       = 0
+print_info: n_ctx_train      = 8192
+print_info: n_embd           = 4096
+print_info: n_embd_inp       = 4096
+print_info: n_layer          = 32
+print_info: n_head           = 32
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 4
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 14336
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 8192
+print_info: rope_finetuned   = unknown
+print_info: model type       = 8B
+print_info: model params     = 8.03 B
+print_info: general.name     = Meta Llama 3 8B Instruct
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128009 '<|eot_id|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true)
+load_tensors: offloading 32 repeating layers to GPU
+load_tensors: offloading output layer to GPU
+load_tensors: offloaded 33/33 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =   281.81 MiB
+load_tensors:       OpenCL model buffer size =  4026.83 MiB
+.........................................................................................
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 1
+llama_context: n_ctx         = 4096
+llama_context: n_ctx_seq     = 4096
+llama_context: n_batch       = 2048
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = disabled
+llama_context: kv_unified    = false
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (4096) < n_ctx_train (8192) -- the full capacity of the model will not be utilized
+llama_context:        CPU  output buffer size =     0.49 MiB
+llama_kv_cache:     OpenCL KV buffer size =   512.00 MiB
+llama_kv_cache: size =  512.00 MiB (  4096 cells,  32 layers,  1/1 seqs), K (f16):  256.00 MiB, V (f16):  256.00 MiB
+llama_context:     OpenCL compute buffer size =   300.01 MiB
+llama_context:        CPU compute buffer size =    20.01 MiB
+llama_context: graph nodes  = 1158
+llama_context: graph splits = 2
+common_init_from_params: added <|end_of_text|> logit bias = -inf
+common_init_from_params: added <|eot_id|> logit bias = -inf
+common_init_from_params: setting dry_penalty_last_n to ctx_size = 4096
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+main: llama threadpool init, n_threads = 8
+
+system_info: n_threads = 8 (n_threads_batch = 8) / 8 | CPU : NEON = 1 | ARM_FMA = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+
+sampler seed: 322703247
+sampler params: 
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 4096
+	top_k = 40, top_p = 0.900, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.600
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000
+sampler chain: logits -> logit-bias -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+generate: n_ctx = 4096, n_batch = 2048, n_predict = 512, n_keep = 1
+
+system
+
+You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.user
+
+Kim sleepwalks, to monitor her sleeping hours, she installs a camera in her room. Kim usually goes to sleep at 10 p.m. and wakes up at 6 a.m. She is a sleepwalker. One day, after reviewing the cameras, she finds that she woke up that day and was sleepwalking from 2:15 to 2:38 am.  Also, that day she woke up 5 minutes earlier than usual to go to the bathroom. How many minutes did she sleep on her bed that day?assistant
+Let's break down the information we have:
+
+* Kim usually goes to sleep at 10 p.m. and wakes up at 6 a.m.
+* She woke up 5 minutes earlier than usual to go to the bathroom, so she woke up at 5:55 a.m. (6 a.m. - 5 minutes)
+* She was sleepwalking from 2:15 to 2:38 a.m., which is a total of 23 minutes.
+
+To find the total sleep time, we need to subtract the sleepwalking period from the total sleep time. The total sleep time is the time from 10 p.m. to 5:55 a.m., which is:
+
+* 10 p.m. to 2:15 a.m. = 3 hours 15 minutes = 195 minutes
+* Subtract the sleepwalking period: 195 minutes - 23 minutes = 172 minutes
+
+So, Kim slept for 172 minutes on her bed that day. [end of text]
+
+
+common_perf_print:    sampling time =     212.63 ms
+common_perf_print:    samplers time =      87.87 ms /   425 tokens
+common_perf_print:        load time =    8264.74 ms
+common_perf_print: prompt eval time =    2051.06 ms /   225 tokens (    9.12 ms per token,   109.70 tokens per second)
+common_perf_print:        eval time =   17804.80 ms /   199 runs   (   89.47 ms per token,    11.18 tokens per second)
+common_perf_print:       total time =   20095.61 ms /   424 tokens
+common_perf_print: unaccounted time =      27.12 ms /   0.1 %      (total - sampling - prompt eval - eval) / (total)
+common_perf_print:    graphs reused =        197
+llama_memory_breakdown_print: | memory breakdown [MiB]                  | total   free    self   model   context   compute       unaccounted |
+llama_memory_breakdown_print: |   - GPUOpenCL (QUALCOMM Adreno(TM) 830) |     0 =    0 + (4838 =  4026 +     512 +     300) + 17592186039577 |
+llama_memory_breakdown_print: |   - Host                                |                  301 =   281 +       0 +      20                   |

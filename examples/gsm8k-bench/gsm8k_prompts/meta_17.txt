@@ -1,0 +1,2 @@
+Category: math
+Question: A basket contains 25 oranges among which 1 is bad, 20% are unripe, 2 are sour and the rest are good. How many oranges are good?
