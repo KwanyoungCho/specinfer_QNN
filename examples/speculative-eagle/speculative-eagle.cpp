@@ -894,7 +894,7 @@ int main(int argc, char ** argv) {
                     // if (n_seq_cur < n_seq_dft && cur_p->data[f].p > p_draft_split) {
                     if (n_seq_cur < n_seq_dft) {
                 //////////////////////////////////////////////
-                        LOG("splitting seq %3d into %3d\n", s, n_seq_cur);
+                        // LOG("splitting seq %3d into %3d\n", s, n_seq_cur);
 
                         llama_memory_seq_rm(mem_dft,    n_seq_cur, -1, -1);
                         llama_memory_seq_cp(mem_dft, s, n_seq_cur, -1, -1);
@@ -1050,7 +1050,7 @@ int main(int argc, char ** argv) {
                 break;
             }
 
-            LOG("temp.size(): %d, batch_dft.n_tokens: %d\n", temp.size()/4096, batch_dft.n_tokens);
+            // LOG("temp.size(): %d, batch_dft.n_tokens: %d\n", temp.size()/4096, batch_dft.n_tokens);
 
             // evaluate the drafted tokens on the draft model
             const auto dft_model_decode_start = ggml_time_us(); //dft_model decode 시작 시간 기록 -ym-
@@ -1082,7 +1082,7 @@ int main(int argc, char ** argv) {
 
         verification_start = ggml_time_us(); //verification 시작 시간 기록 -ym-
 
-        LOG("batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
+        // LOG("batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
 
         // evaluate the target model on the drafted tokens
         {

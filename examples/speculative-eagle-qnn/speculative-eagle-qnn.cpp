@@ -359,6 +359,8 @@ int main(int argc, char ** argv) {
     std::vector<int> decoding_latencies;
     std::vector<int> verification_latencies;
     std::vector<float> T_d;
+    std::vector<float> tgt_smpl_latencies;
+    std::vector<float> dft_smpl_latencies;
     std::vector<std::vector<int>> accept_counts(n_seq_dft, std::vector<int>(n_depth, 0));
 
     int rows = n_seq_dft;
@@ -420,7 +422,11 @@ int main(int argc, char ** argv) {
                 bool accept = false;
                 if (params.sampling.temp > 0) {
                     // stochastic verification
-                    common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft], true);
+                    {
+                        const auto _ts = ggml_time_us();
+                        common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft], true);
+                        tgt_smpl_latencies.push_back((ggml_time_us() - _ts) / 1000.0f);
+                    }
 
                     auto & dist_tgt = *common_sampler_get_candidates(smpl, true);
 
@@ -549,7 +555,11 @@ int main(int argc, char ** argv) {
 
                     // sample from the target model
                     // LOG_DBG("sampling target: s_keep = %3d, i_dft = %3d, i_batch_tgt = %3d\n", s_keep, i_dft, drafts[s_keep].i_batch_tgt[i_dft]);
-                    token_id = common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft]);
+                    {
+                        const auto _ts = ggml_time_us();
+                        token_id = common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft]);
+                        tgt_smpl_latencies.push_back((ggml_time_us() - _ts) / 1000.0f);
+                    }
 
                     common_sampler_accept(smpl, token_id, true);
 
@@ -824,7 +834,7 @@ int main(int argc, char ** argv) {
                 const auto common_sampler_sample_start = ggml_time_us(); //common_sampler_sample 시작 시간 기록 -ym-
                 common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft, true);
                 const auto common_sampler_sample_end = ggml_time_us(); //common_sampler_sample 시작 시간 기록 -ym-
-                // LOG_DBG("common_sampler_sample took %f seconds\n", (common_sampler_sample_end - common_sampler_sample_start) / 1e6f);
+                dft_smpl_latencies.push_back((common_sampler_sample_end - common_sampler_sample_start) / 1000.0f);
 
                 const auto common_sampler_get_candidates_start = ggml_time_us(); //common_sampler_get_candidates 시작 시간 기록 -ym-
                 const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
@@ -1159,6 +1169,12 @@ int main(int argc, char ** argv) {
         const double avg_td = !T_d.empty()
             ? std::accumulate(T_d.begin(), T_d.end(), 0.0) / T_d.size() : 0;
 
+        const double avg_step_ms = avg_draft_lat + avg_verify_lat;
+        const double avg_tgt_smpl = !tgt_smpl_latencies.empty()
+            ? std::accumulate(tgt_smpl_latencies.begin(), tgt_smpl_latencies.end(), 0.0) / tgt_smpl_latencies.size() : 0;
+        const double avg_dft_smpl = !dft_smpl_latencies.empty()
+            ? std::accumulate(dft_smpl_latencies.begin(), dft_smpl_latencies.end(), 0.0) / dft_smpl_latencies.size() : 0;
+
         fprintf(stderr, "\n");
         fprintf(stderr, "============================================================\n");
         fprintf(stderr, "          EAGLE-QNN  Performance Summary\n");
@@ -1174,6 +1190,10 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  Avg draft phase       : %9.3f ms\n", avg_draft_lat);
         fprintf(stderr, "  Avg verification      : %9.3f ms\n", avg_verify_lat);
         fprintf(stderr, "  Avg T_d (1-tok dft)   : %9.3f ms\n", avg_td);
+        fprintf(stderr, "  Avg (draft+verify)    : %9.3f ms\n", avg_step_ms);
+        fprintf(stderr, "------------------------------------------------------------\n");
+        fprintf(stderr, "  Avg tgt sampling      : %9.3f ms\n", avg_tgt_smpl);
+        fprintf(stderr, "  Avg dft sampling      : %9.3f ms\n", avg_dft_smpl);
         fprintf(stderr, "============================================================\n");
     }
 
