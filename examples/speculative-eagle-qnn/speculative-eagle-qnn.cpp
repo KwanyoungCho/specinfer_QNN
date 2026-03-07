@@ -1100,9 +1100,9 @@ int main(int argc, char ** argv) {
         // evaluate the target model on the drafted tokens using QNN
         {
             // [CRASH-DIAG] Print state before verification to catch crash point
-            fprintf(stderr, "[STEP] n_predict=%d n_past_tgt=%d n_past_dft=%d batch_tgt.n_tokens=%d\n",
-                    n_predict, n_past_tgt, n_past_dft, batch_tgt.n_tokens);
-            fflush(stderr);
+            // fprintf(stderr, "[STEP] n_predict=%d n_past_tgt=%d n_past_dft=%d batch_tgt.n_tokens=%d\n",
+            //         n_predict, n_past_tgt, n_past_dft, batch_tgt.n_tokens);
+            // fflush(stderr);
 
             // QNN KV cache management: Copy seq 0 to all active sequences
             qnn_runner.kv_seq_keep(0);

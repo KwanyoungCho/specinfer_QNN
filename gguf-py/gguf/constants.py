@@ -443,6 +443,7 @@ class MODEL_ARCH(IntEnum):
     MINIMAXM2        = auto()
     RND1             = auto()
     PANGU_EMBED      = auto()
+    EAGLE            = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -465,6 +466,7 @@ class MODEL_TENSOR(IntEnum):
     OUTPUT               = auto()
     DENSE_2_OUT          = auto() # embeddinggemma 2_Dense
     DENSE_3_OUT          = auto() # embeddinggemma 3_Dense
+    FC                   = auto()
     OUTPUT_NORM          = auto()
     ROPE_FREQS           = auto()
     ROPE_FACTORS_LONG    = auto()
@@ -712,6 +714,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MMPROJ:           "clip", # dummy arch for clip.cpp
     MODEL_ARCH.LLAMA:            "llama",
     MODEL_ARCH.LLAMA4:           "llama4",
+    MODEL_ARCH.EAGLE:            "eagle",
     MODEL_ARCH.DECI:             "deci",
     MODEL_ARCH.FALCON:           "falcon",
     MODEL_ARCH.BAICHUAN:         "baichuan",
@@ -831,6 +834,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.TOKEN_EMBD_NORM:           "token_embd_norm",
     MODEL_TENSOR.TOKEN_TYPES:               "token_types",
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
+    MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
     MODEL_TENSOR.DENSE_2_OUT:                "dense_2", # embeddinggemma 2_Dense
@@ -3027,6 +3031,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.PANGU_EMBED: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.EAGLE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.FC,
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_Q,

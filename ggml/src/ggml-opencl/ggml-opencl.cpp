@@ -6986,7 +6986,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         // <--------------------------------------------> //
 
         // transpose activation for Skyler's gemm
-        if (N != 1) {
+        if (N != 1 || (N==1 && M ==128256)) {
             //how many extra elements beyond multiple of 8
             int extra_elements = N % 8;
 
@@ -7109,7 +7109,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
         // choose gemm or gemv kernel
         // <--------------------------------------------> //
-        if (N == 1) {
+        if (N == 1 && M != 128256) {
             kernel = backend_ctx->CL_mul_mat_vec_q4_0_f32_1d_4x_flat_general;
             if (M == 4096 && K == 4096) {
                 kernel = backend_ctx->CL_mul_mat_vec_q4_0_f32_1d_4x_flat_4096_1_4096;
@@ -7129,7 +7129,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         // <--------------------------------------------> //
         cl_uint k_arg = 0;
 
-        if (N == 1) {
+        if (N == 1 && M != 128256) {
             CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &A_image1d));
             CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &extra0_q4_0->d));
             CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &B_image1d));
@@ -7184,11 +7184,19 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         size_t WI_N = 1;
         size_t WI_M = 128;
         size_t WI_K = 1;
-        if(N <= 8){
+        if(M == 128256 && N <= 4){
+            WI_M = 32;
+            WI_K = 4;
+        }
+        else if(M == 128256){
+            WI_M = 64;
+            WI_K = 2;
+        }
+        else if(N <= 8){
             WI_M = 4;
             WI_K = 32;
         }
-        if(N <= 128){
+        else if(N <= 128){
             WI_M = 32;
             WI_K = 4;
         }
@@ -7210,22 +7218,22 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         local_work_size[1]  = WI_M;
         local_work_size[2]  = WI_K;
 
-        //WGS tuning
-        if (ne0 == 4096 && ne1 == 128 && ne10 == 4096) {
-            local_work_size[0] = 1;
-            local_work_size[1] = 128;
-        } else if (ne0 == 11008 && ne1 == 128 && ne10 == 4096) {
-            local_work_size[0] = 2;
-            local_work_size[1] = 64;
-        } else if (ne0 == 4096 && ne1 == 128 && ne10 == 11008) {
-            local_work_size[0] = 2;
-            local_work_size[1] = 64;
-        } else if (ne0 == 32000 && ne1 == 128 && ne10 == 4096) {
-            local_work_size[0] = 2;
-            local_work_size[1] = 64;
-        }
+        // //WGS tuning
+        // if (ne0 == 4096 && ne1 == 128 && ne10 == 4096) {
+        //     local_work_size[0] = 1;
+        //     local_work_size[1] = 128;
+        // } else if (ne0 == 11008 && ne1 == 128 && ne10 == 4096) {
+        //     local_work_size[0] = 2;
+        //     local_work_size[1] = 64;
+        // } else if (ne0 == 4096 && ne1 == 128 && ne10 == 11008) {
+        //     local_work_size[0] = 2;
+        //     local_work_size[1] = 64;
+        // } else if (ne0 == 32000 && ne1 == 128 && ne10 == 4096) {
+        //     local_work_size[0] = 2;
+        //     local_work_size[1] = 64;
+        // }
 
-        if (N == 1) {
+        if (N == 1 && M != 128256) {
             size_t wavesize = backend_ctx->adreno_wave_size;
             local_work_size[0] = wavesize; // localsize
             local_work_size[1] = 4; // reduce factor
@@ -7248,7 +7256,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         CL_CHECK(clReleaseMemObject(B_sub_buffer));
         CL_CHECK(clReleaseMemObject(B_image1d));
 
-        if (N != 1) {
+        if (N != 1 || (N==1 && M ==128256)) {
             CL_CHECK(clReleaseMemObject(B_d));
             CL_CHECK(clReleaseMemObject(B_d_input_image));
             CL_CHECK(clReleaseMemObject(C_d));

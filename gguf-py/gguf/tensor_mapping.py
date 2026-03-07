@@ -317,6 +317,10 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_GATE: (
             "model.layers.{bid}.self_attn.gate_proj", # afmoe
         ),
+        
+        MODEL_TENSOR.FC: (
+            "fc", #EAGLE
+        ),
 
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
