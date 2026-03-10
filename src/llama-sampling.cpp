@@ -266,15 +266,15 @@ static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) 
         size_t max_i = 0;
         float  max_l = cur_p->data[0].logit;
 
-        for (size_t i = 1; i < cur_p->size; ++i) {
-            if (cur_p->data[i    ].logit > max_l) {
-                cur_p->data[max_i].logit = -INFINITY;
-                max_i = i;
-                max_l = cur_p->data[i].logit;
-            } else {
-                cur_p->data[i].logit = -INFINITY;
-            }
-        }
+        // for (size_t i = 1; i < cur_p->size; ++i) {
+        //     if (cur_p->data[i    ].logit > max_l) {
+        //         cur_p->data[max_i].logit = -INFINITY;
+        //         max_i = i;
+        //         max_l = cur_p->data[i].logit;
+        //     } else {
+        //         cur_p->data[i].logit = -INFINITY;
+        //     }
+        // }
 
         return;
     }

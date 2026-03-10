@@ -219,11 +219,16 @@ int main(int argc, char ** argv) {
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
-    const bool vocab_type_tgt = llama_vocab_type(vocab_tgt);
-    // LOG_DBG("vocab_type tgt: %d\n", vocab_type_tgt);
+    // EAGLE vocab trimming: load vocab_map from draft model
+    const auto & dft_vocab_map = model_dft->vocab_map;
+    const bool has_vocab_trim = !dft_vocab_map.empty();
+    if (has_vocab_trim) {
+        LOG_INF("[EAGLE] Vocab trimming active: %zu entries in vocab_map (output_vocab_size=%u)\n",
+                dft_vocab_map.size(), model_dft->hparams.n_vocab_output);
+    }
 
+    const bool vocab_type_tgt = llama_vocab_type(vocab_tgt);
     const bool vocab_type_dft = llama_vocab_type(vocab_dft);
-    // LOG_DBG("vocab_type dft: %d\n", vocab_type_dft);
 
     if (vocab_type_tgt != vocab_type_dft) {
         LOG_ERR("%s: draft model vocab type must match target model to use speculation but ", __func__);
@@ -248,22 +253,26 @@ int main(int argc, char ** argv) {
             ? n_vocab_tgt - n_vocab_dft
             : n_vocab_dft - n_vocab_tgt;
 
-        if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
+        // Skip vocab size difference check when vocab trimming is active
+        if (!has_vocab_trim && vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
             LOG_ERR("%s: draft model vocab must closely match target model to use speculation but ", __func__);
             LOG_ERR("target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
                     n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
             return 1;
         }
 
-        for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
-            const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
-            const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
-            if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-                LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
-                LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
-                        common_token_to_piece(ctx_tgt, i).c_str(),
-                        common_token_to_piece(ctx_dft, i).c_str());
-                return 1;
+        // Skip per-token text check when vocab trimming is active (tokenizer is shared, only lm_head is trimmed)
+        if (!has_vocab_trim) {
+            for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
+                const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
+                const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
+                if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
+                    LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
+                    LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
+                            common_token_to_piece(ctx_tgt, i).c_str(),
+                            common_token_to_piece(ctx_dft, i).c_str());
+                    return 1;
+                }
             }
         }
     }
@@ -837,9 +846,19 @@ int main(int argc, char ** argv) {
                 dft_smpl_latencies.push_back((common_sampler_sample_end - common_sampler_sample_start) / 1000.0f);
 
                 const auto common_sampler_get_candidates_start = ggml_time_us(); //common_sampler_get_candidates 시작 시간 기록 -ym-
-                const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
+                auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
                 const auto common_sampler_get_candidates_end = ggml_time_us(); //common_sampler_get_candidates 시작 시간 기록 -ym-
                 // LOG_DBG("common_sampler_get_candidates took %f seconds\n", (common_sampler_get_candidates_end - common_sampler_get_candidates_start) / 1e6f);
+
+                // EAGLE vocab trimming: remap candidate IDs from trimmed logits index to original token IDs
+                if (has_vocab_trim) {
+                    for (size_t ci = 0; ci < cur_p->size; ++ci) {
+                        const int idx = cur_p->data[ci].id;
+                        if (idx >= 0 && idx < (int)dft_vocab_map.size()) {
+                            cur_p->data[ci].id = dft_vocab_map[idx];
+                        }
+                    }
+                }
 
                 // for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
                 //     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",

@@ -297,6 +297,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_PREFIX_ID, "tokenizer.ggml.prefix_token_id" },
     { LLM_KV_TOKENIZER_SUFFIX_ID, "tokenizer.ggml.suffix_token_id" },
     { LLM_KV_TOKENIZER_MIDDLE_ID, "tokenizer.ggml.middle_token_id" },
+
+    // EAGLE vocab trimming
+    { LLM_KV_OUTPUT_VOCAB_SIZE,   "%s.output_vocab_size"           },
+    { LLM_KV_VOCAB_MAP,           "%s.vocab_map"                   },
 };
 
 static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_NAMES = {

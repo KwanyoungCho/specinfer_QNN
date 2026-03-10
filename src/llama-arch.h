@@ -302,6 +302,10 @@ enum llm_kv {
     LLM_KV_DENSE_2_FEAT_OUT,
     LLM_KV_DENSE_3_FEAT_IN,
     LLM_KV_DENSE_3_FEAT_OUT,
+
+    // EAGLE vocab trimming
+    LLM_KV_OUTPUT_VOCAB_SIZE,
+    LLM_KV_VOCAB_MAP,
 };
 
 enum llm_tensor {

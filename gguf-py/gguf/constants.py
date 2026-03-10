@@ -147,6 +147,7 @@ class Keys:
         EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
+        OUTPUT_VOCAB_SIZE                 = "{arch}.output_vocab_size"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"

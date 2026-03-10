@@ -429,6 +429,9 @@ struct llama_model {
     struct ggml_tensor * embd_fc    = nullptr;  // for eagle
     struct ggml_tensor * embd_fc_b  = nullptr;  // for eagle
 
+    // EAGLE vocab trimming: maps trimmed logits index -> original token ID
+    std::vector<int32_t> vocab_map;
+
     struct ggml_tensor * output_norm     = nullptr;
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
@@ -484,6 +487,9 @@ struct llama_model {
 
     std::string arch_name() const;
     std::string type_name() const;
+
+    // output vocab size for logits (may differ from tokenizer vocab when using vocab trimming)
+    uint32_t n_vocab_out() const;
 
     std::string desc() const;
 

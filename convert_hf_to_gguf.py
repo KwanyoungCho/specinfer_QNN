@@ -2525,6 +2525,8 @@ class LlamaModel(TextModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.base_model_dir: Path | None = None
+        self.vocab_trim_file: Path | None = None
+        self.vocab_trim: bool = False
         # fix for SmolVLM2, missing `num_attention_heads` in config.json
         if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
@@ -2789,7 +2791,42 @@ class LlamaModel(TextModel):
                         break
 
             if "lm_head.weight" in found:
-                yield (self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), found["lm_head.weight"])
+                lm_head = found["lm_head.weight"]
+                full_vocab_size = lm_head.shape[0]
+
+                # Determine vocab_map: which token IDs to keep
+                vocab_map = None
+                if self.vocab_trim_file is not None:
+                    # Load token ID list from JSON file
+                    with open(self.vocab_trim_file, "r") as f:
+                        vocab_map = json.load(f)
+                    assert isinstance(vocab_map, list), "vocab-trim-file must contain a JSON list of integer token IDs"
+                    vocab_map = sorted(set(int(x) for x in vocab_map))
+                    logger.info(f"EAGLE: Loaded {len(vocab_map)} token IDs from {self.vocab_trim_file}")
+                elif self.vocab_trim:
+                    # --vocab-trim flag: keep first quarter of vocab
+                    trimmed_size = full_vocab_size // 4
+                    vocab_map = list(range(trimmed_size))
+                    logger.info(f"EAGLE: --vocab-trim enabled, keeping first quarter ({trimmed_size}/{full_vocab_size})")
+
+                if vocab_map is not None:
+                    # Validate all IDs are in range
+                    max_id = max(vocab_map)
+                    assert max_id < full_vocab_size, f"vocab_map contains ID {max_id} >= full vocab size {full_vocab_size}"
+
+                    # Index-select rows from lm_head: trimmed[i] = lm_head[vocab_map[i]]
+                    indices = torch.tensor(vocab_map, dtype=torch.long)
+                    lm_head_trimmed = lm_head.index_select(0, indices)
+                    logger.info(f"EAGLE: Trimmed lm_head from {lm_head.shape} to {lm_head_trimmed.shape}")
+
+                    # Store vocab_map and output_vocab_size as GGUF metadata
+                    self._eagle_vocab_map = vocab_map
+                    self._eagle_output_vocab_size = len(vocab_map)
+
+                    yield (self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), lm_head_trimmed)
+                else:
+                    # No trimming - use full lm_head
+                    yield (self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), lm_head)
             else:
                 logger.warning("EAGLE: lm_head.weight not found in base model!")
 
@@ -2802,6 +2839,15 @@ class LlamaModel(TextModel):
 
     def prepare_tensors(self):
         super().prepare_tensors()
+
+        # Write EAGLE vocab trim metadata after generate_extra_tensors has run
+        if hasattr(self, '_eagle_output_vocab_size'):
+            self.gguf_writer.add_output_vocab_size(self._eagle_output_vocab_size)
+            logger.info(f"EAGLE: Writing output_vocab_size = {self._eagle_output_vocab_size}")
+        if hasattr(self, '_eagle_vocab_map'):
+            key = f"{gguf.MODEL_ARCH_NAMES[self.model_arch]}.vocab_map"
+            self.gguf_writer.add_array(key, self._eagle_vocab_map)
+            logger.info(f"EAGLE: Writing vocab_map with {len(self._eagle_vocab_map)} entries")
 
         if self._experts is not None:
             # flatten `list[dict[str, Tensor]]` into `list[str]`
@@ -10521,6 +10567,18 @@ def parse_args() -> argparse.Namespace:
         help="path to base model directory (e.g. for EAGLE models that need lm_head from base model)",
     )
 
+    parser.add_argument(
+        "--vocab-trim", action="store_true",
+        help="Enable EAGLE lm_head vocab trimming (keeps first half of vocab by default). "
+             "Use --vocab-trim-file to specify custom token IDs instead.",
+    )
+
+    parser.add_argument(
+        "--vocab-trim-file", type=Path, default=None,
+        help="path to JSON file containing list of token IDs to keep for trimmed lm_head "
+             "(e.g. for EAGLE vocab trimming). Implies --vocab-trim.",
+    )
+
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
@@ -10660,6 +10718,10 @@ def main() -> None:
                                      )
         if hasattr(model_instance, 'base_model_dir'):
             model_instance.base_model_dir = args.base_model
+        if hasattr(model_instance, 'vocab_trim_file'):
+            model_instance.vocab_trim_file = args.vocab_trim_file
+        if hasattr(model_instance, 'vocab_trim'):
+            model_instance.vocab_trim = args.vocab_trim or (args.vocab_trim_file is not None)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")

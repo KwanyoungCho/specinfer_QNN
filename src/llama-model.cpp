@@ -2228,6 +2228,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_EAGLE:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // EAGLE vocab trimming: read output_vocab_size (0 means no trimming)
+                ml.get_key(LLM_KV_OUTPUT_VOCAB_SIZE, hparams.n_vocab_output, false);
+
+                // EAGLE vocab trimming: read vocab_map array
+                ml.get_arr(LLM_KV_VOCAB_MAP, vocab_map, false);
+                if (!vocab_map.empty()) {
+                    LLAMA_LOG_INFO("%s: EAGLE vocab_map loaded with %zu entries\n", __func__, vocab_map.size());
+                }
             } break;
         default: throw std::runtime_error("unsupported model architecture");
     }
@@ -6427,37 +6436,26 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
                     embd_fc   = create_tensor(tn(LLM_TENSOR_EMBD_FC, "weight"), {n_embd * 2, n_embd}, 0);
-                    // embd_fc_b = create_tensor(tn(LLM_TENSOR_EMBD_FC, "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
+                    embd_fc_b = create_tensor(tn(LLM_TENSOR_EMBD_FC, "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
 
                     // output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, TENSOR_NOT_REQUIRED);
 
-                    // ================================================================================================
-                    // ORIGINAL CODE (output tensor creation)
-                    // ================================================================================================
-                    /*
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    // Determine output vocab size: use trimmed size if available, otherwise full n_vocab
+                    const int64_t n_vocab_out = hparams.n_vocab_output > 0
+                        ? (int64_t)hparams.n_vocab_output : n_vocab;
 
-                    // if output is NULL, init from the input tok embed
-                    if (output == NULL) {
-                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED_EAGLE);
-                        ml.n_created--;
+                    if (hparams.n_vocab_output > 0) {
+                        LLAMA_LOG_INFO("%s: EAGLE using trimmed output vocab: %u (full: %d)\n",
+                                       __func__, hparams.n_vocab_output, (int)n_vocab);
                     }
-                    */
 
-                    // ================================================================================================
-                    // CURRENT CODE (output tensor sharing support)
-                    // ================================================================================================
-                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab_out}, TENSOR_NOT_REQUIRED);
 
                     // if output is NULL, defer creation for potential sharing with target model
                     if (output == NULL) {
-                        // CRITICAL: Keep output as NULL for true pointer sharing at runtime
-                        // Do NOT create fallback tensor - let runtime handle target model sharing
                         LLAMA_LOG_DEBUG("%s: EAGLE draft model has no output tensor - will share with target at runtime\n", __func__);
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED_EAGLE);
                         ml.n_created--;
-                        // Note: model.output remains NULL, speculative-eagle.cpp will detect this
-                        // and assign target model's output tensor directly
                     }
 
                     for (int i = 0; i < n_layer; ++i) {
@@ -6625,6 +6623,10 @@ std::string llama_model::arch_name() const {
 
 std::string llama_model::type_name() const {
     return llm_type_name(type);
+}
+
+uint32_t llama_model::n_vocab_out() const {
+    return hparams.n_vocab_output > 0 ? hparams.n_vocab_output : vocab.n_tokens();
 }
 
 std::string llama_model::desc() const {

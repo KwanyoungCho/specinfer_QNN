@@ -689,7 +689,7 @@ void llama_set_logits_external(
     }
 
     const llama_model & model = ctx->get_model();
-    const uint32_t n_vocab = model.vocab.n_tokens();
+    const uint32_t n_vocab = model.n_vocab_out();
 
     std::memcpy(dst, logits, sizeof(float) * (size_t) n_outputs * n_vocab);
 
@@ -936,7 +936,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_embd  = hparams.n_embd_inp();
-    const int64_t n_vocab = model.vocab.n_tokens();
+    const int64_t n_vocab = model.n_vocab_out();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
     if (!balloc->init(batch_inp, model.vocab, nullptr, n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
@@ -1103,7 +1103,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & vocab   = model.vocab;
     const auto & hparams = model.hparams;
 
-    const int64_t n_vocab = vocab.n_tokens();
+    const int64_t n_vocab = model.n_vocab_out();
     const int64_t n_embd  = hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
@@ -1407,7 +1407,7 @@ int llama_context::decode_eagle(llama_batch & batch_inp, void * data) {
     const auto & vocab   = model.vocab;
     const auto & hparams = model.hparams;
 
-    const int64_t n_vocab = vocab.n_tokens();
+    const int64_t n_vocab = model.n_vocab_out();
     const int64_t n_embd  = hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
@@ -1706,7 +1706,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const int64_t n_outputs_max = std::max<int64_t>(n_outputs, n_seq_max());
 
     const auto n_batch = cparams.n_batch;
-    const auto n_vocab = vocab.n_tokens();
+    const auto n_vocab = model.n_vocab_out();
     const auto n_embd  = hparams.n_embd;
 
     bool has_logits = true;
@@ -1770,7 +1770,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 }
 
 void llama_context::output_reorder() {
-    const uint64_t n_vocab = model.vocab.n_tokens();
+    const uint64_t n_vocab = model.n_vocab_out();
     const uint64_t n_embd  = model.hparams.n_embd;
 
     for (size_t s = 0; s < output_swaps.size(); ++s) {
