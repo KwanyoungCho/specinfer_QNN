@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -231,31 +231,41 @@ What an intriguing problem!
 
 Let me break it down step by step:
 
-Let's start by finding Gunther's total number of 48 bananas.
+Let's start by identifying the initial number of bananas Gunther had: 48 banana.
 
-When Arnold stole half of the bananas (48/2 = 24 bananas were stolen. Then, Gunther added 25 more bananas, making the total 48 + 25 = ?
+When Arnold stole half, Gunther had 48 / 2= 24 bananas left.
 
-Next, Arnold stole the first 6 bananas from the new pile (24 + 25 -  the first 6 taken = 49). So, Gunther has 49 - 6 = 6 = 49 bananas.
+The next morning, Gunter added 25 bananas, making their total 24 + 25= 49 bananas.
 
-On the third day of counting bananas, Gunther adds 6 more bananas, making his total stash + Now, let's count the 6 bananas Arnold stole the second time to the original stash. 48 - 12 = 24 bananas left. Then, 6 more were added, leaving Gunther with 48 - 2 = ?
+Later that evening, Arnold stole 12 more bananas, leaving Gunther with:
 
-Gunther's total stash now includes his original 48 bananas, the 25 he added later, and the 6 he added, plus the 12 that Arnold took away fromThe total number of bananas Gunther has at the end of the third day is 48 + 25 + ?<|eot_id|><|start_header_id|>
+49 -12 = 37 bananas38 bananas - 1 because we can't divide a of 48)
 
+On the third day, Gunther added another 6 bananas. Let's count the total number of bananas he has:
 
+37 + 6= 43 bananas. 
+
+So, Gunther found 43 bananas in the pile.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   220 tokens |    858.79 ms |   256.17 t/s
-  Decode            :   246 tokens |  17393.93 ms |    14.14 t/s
-  Decode latency    :              |     70.71 ms/tok
+  Prefill           :   220 tokens |    853.00 ms |   257.91 t/s
+  Decode            :   163 tokens |   9768.65 ms |    16.69 t/s
+  Decode latency    :              |     59.93 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.141
-  Accept ratio          : 53.526%
+  Avg accept length     : 3.115
+  Accept ratio          : 52.885%
 ------------------------------------------------------------
-  Avg draft phase       :   106.013 ms
-  Avg verification      :   114.000 ms
-  Avg T_d (1-tok dft)   :    18.777 ms
+
+
+  Avg draft phase       :    72.962 ms
+  Avg verification      :   111.283 ms
+  Avg T_d (1-tok dft)   :     9.724 ms
+  Avg (draft+verify)    :   184.245 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.206 ms
+  Avg dft sampling      :     0.148 ms
 ============================================================
 
 

@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb400006ea0a821d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb40000708d0fd190
+🔍 DEBUG: Target model output tensor: 0xb40000731871f1d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb4000073d6a22d90
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400006ea0a821d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb40000731871f1d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb400006ea0a821d0
-🔍 Draft model output:  0xb400006ea0a821d0
+🔍 Target model output: 0xb40000731871f1d0
+🔍 Draft model output:  0xb40000731871f1d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb40000707d04cb50
+  - Buffer: 0xb4000074469987d0
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -292,246 +292,31 @@ If a question does not make any sense, or is not factually coherent, explain why
 
 Tyrion changes his face mask two times every time he goes out. If he goes out three times a day, how many face masks does he use every 2 days?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
-batch_tgt.n_tokens: 151, prefill latency: 1.590 seconds
+batch_tgt.n_tokens: 151, prefill latency: 1.334 seconds
 
 
-Letsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-'s breaksplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- it down stepsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- by stepsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-!
+Let's break it down step by step!
 
-Tsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-yrion changessplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- his face masksplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- two times everysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- time he goes outsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-. Since he goessplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- out threesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- times asplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- day, thatsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- means he changessplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- his face mask asplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- total of 3splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- xsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 2 =splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- times a day.
+Tyrion changes his face mask two times every time he goes out. Since he goes out three times a day, that means he changes his face mask a total of 3 x 2 = 6 times a day.
 
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-Nowsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-, let's findsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- outsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- how many facesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- masks he uses everysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 2 days.splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Since he usessplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- facesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- masks insplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- a day, hesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- would usesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- x 2 =splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 12splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- facesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- masks in splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-2 days.
+Now, let's find out how many face masks he uses every 2 days. Since he uses 6 face masks in a day, he would use 6 x 2 = 12 face masks in 2 days.
 
-Sosplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-, Tyrsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ion usessplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 12splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- face masks everysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 2 days.splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-<|eot_id|><|start_header_id|>assistant
+So, Tyrion uses 12 face masks every 2 days.<|eot_id|><|start_header_id|>assistant
+
+
 ============================================================
             EAGLE  Performance Summary
-
-
 ============================================================
-  Prefill           :   152 tokens |   1722.93 ms |    88.22 t/s
-  Decode            :   118 tokens |   9903.01 ms |    11.92 t/s
-  Decode latency    :              |     83.92 ms/tok
+  Prefill           :   152 tokens |   1442.63 ms |   105.36 t/s
+  Decode            :   118 tokens |   9132.88 ms |    12.92 t/s
+  Decode latency    :              |     77.40 ms/tok
 ------------------------------------------------------------
   Draft length          : 3.000
   Avg accept length     : 2.721
   Accept ratio          : 57.364%
 ------------------------------------------------------------
-  Avg draft phase       :    70.535 ms
-  Avg verification      :   154.682 ms
+  Avg draft phase       :    61.884 ms
+  Avg verification      :   145.727 ms
   Avg T_d (1-tok dft)   :     0.000 ms
 ============================================================
 numbers.txt 파일 저장 완료!
@@ -539,21 +324,21 @@ numbers.txt 파일 저장 완료!
 
 draft:
 
-llama_perf_context_print:        load time =     788.37 ms
-llama_perf_context_print: prompt eval time =    2579.08 ms /   519 tokens (    4.97 ms per token,   201.23 tokens per second)
-llama_perf_context_print:        eval time =      93.95 ms /     5 runs   (   18.79 ms per token,    53.22 tokens per second)
-llama_perf_context_print:       total time =   11629.43 ms /   524 tokens
+llama_perf_context_print:        load time =    1065.94 ms
+llama_perf_context_print: prompt eval time =    2268.42 ms /   519 tokens (    4.37 ms per token,   228.79 tokens per second)
+llama_perf_context_print:        eval time =      67.32 ms /     5 runs   (   13.46 ms per token,    74.27 tokens per second)
+llama_perf_context_print:       total time =   10578.68 ms /   524 tokens
 llama_perf_context_print:    graphs reused =         85
 
 target:
 
-common_perf_print:    sampling time =     108.20 ms
-common_perf_print:    samplers time =      41.60 ms /   118 tokens
-common_perf_print:        load time =    6339.74 ms
-common_perf_print: prompt eval time =    8266.29 ms /   452 tokens (   18.29 ms per token,    54.68 tokens per second)
-common_perf_print:        eval time =     131.85 ms /     1 runs   (  131.85 ms per token,     7.58 tokens per second)
-common_perf_print:       total time =   12417.86 ms /   453 tokens
-common_perf_print: unaccounted time =    3911.52 ms /  31.5 %      (total - sampling - prompt eval - eval) / (total)
+common_perf_print:    sampling time =      92.20 ms
+common_perf_print:    samplers time =      35.31 ms /   118 tokens
+common_perf_print:        load time =    7712.77 ms
+common_perf_print: prompt eval time =    7629.03 ms /   452 tokens (   16.88 ms per token,    59.25 tokens per second)
+common_perf_print:        eval time =     107.52 ms /     1 runs   (  107.52 ms per token,     9.30 tokens per second)
+common_perf_print:       total time =   11644.67 ms /   453 tokens
+common_perf_print: unaccounted time =    3815.92 ms /  32.8 %      (total - sampling - prompt eval - eval) / (total)
 common_perf_print:    graphs reused =         41
 llama_memory_breakdown_print: | memory breakdown [MiB]                  | total   free    self   model   context   compute       unaccounted |
 llama_memory_breakdown_print: |   - GPUOpenCL (QUALCOMM Adreno(TM) 830) |     0 =    0 + (5614 =  4026 +    1024 +     564) + 17592186038801 |

@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb40000726d7a21d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb40000739b8cf5d0
+🔍 DEBUG: Target model output tensor: 0xb40000755c53a1d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007797f73a10
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb40000726d7a21d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb40000755c53a1d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb40000726d7a21d0
-🔍 Draft model output:  0xb40000726d7a21d0
+🔍 Target model output: 0xb40000755c53a1d0
+🔍 Draft model output:  0xb40000755c53a1d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb4000074db8342d0
+  - Buffer: 0xb400007687f1b050
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -292,366 +292,41 @@ If a question does not make any sense, or is not factually coherent, explain why
 
 Bethany can run 10 laps on the track in one hour.  Trey can run 4 more laps than Bethany.  Shaelyn can run half as many laps as Trey.  Quinn can run 2 fewer laps than Shaelyn.  How many more laps can Bethany run compared to Quinn?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
-batch_tgt.n_tokens: 178, prefill latency: 1.598 seconds
+batch_tgt.n_tokens: 178, prefill latency: 1.588 seconds
 
 
-Letsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-'s breaksplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- itsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- down stepsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- by stepsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-!
+Let's break it down step by step!
 
-Bethsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-any cansplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- run 10splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- laps insplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- one hour.
+Bethany can run 10 laps in one hour.
 
-Tsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-rey cansplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- run 4 moresplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- laps than Bethanysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-, so Treysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- can run 10splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- + 4splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- = 14splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- laps.
+Trey can run 4 more laps than Bethany, so Trey can run 10 + 4 = 14 laps.
 
-Shasplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-elyn can run halfsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- as manysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- laps as Treysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-, sosplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Shasplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-elyn can run splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-14 �splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-�splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 2 =splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 7splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- laps.
+Shaelyn can run half as many laps as Trey, so Shaelyn can run 14 ÷ 2 = 7 laps.
 
-Qusplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-inn can run splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-2 fewer laps thansplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Shasplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-elyn, sosplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Quinnsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- can run 7splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- - 2splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- = 5splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- laps.
+Quinn can run 2 fewer laps than Shaelyn, so Quinn can run 7 - 2 = 5 laps.
 
-Nowsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-, let's findsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- outsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- how many moresplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- laps Bethsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-any can run comparedsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- to Quinn:
+Now, let's find out how many more laps Bethany can run compared to Quinn:
 
-Bethsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-any can run splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-10 laps, andsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Quinn can run splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-5 laps.splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Tosplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- find thesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- difference, subtractsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Quinnsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-'s lapssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- from Bethsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-any's laps:
+Bethany can run 10 laps, and Quinn can run 5 laps. To find the difference, subtract Quinn's laps from Bethany's laps:
 
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-10 (splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-Bethsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-any)splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- - 5splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- (Qusplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-inn) = splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-5
+10 (Bethany) - 5 (Quinn) = 5
 
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-So, Bethsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-any can run splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-5 more laps comparedsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- to Quinn.<|eot_id|>
+So, Bethany can run 5 more laps compared to Quinn.<|eot_id|>
 
 
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   179 tokens |   1721.65 ms |   103.97 t/s
-  Decode            :   179 tokens |  14167.98 ms |    12.63 t/s
-  Decode latency    :              |     79.15 ms/tok
+  Prefill           :   179 tokens |   1698.59 ms |   105.38 t/s
+  Decode            :   179 tokens |  14471.41 ms |    12.37 t/s
+  Decode latency    :              |     80.85 ms/tok
 ------------------------------------------------------------
   Draft length          : 3.000
-  Avg accept length     : 2.738
-  Accept ratio          : 57.949%
+  Avg accept length     : 2.697
+  Accept ratio          : 56.566%
 ------------------------------------------------------------
-  Avg draft phase       :    66.154 ms
-  Avg verification      :   148.136 ms
+  Avg draft phase       :    62.121 ms
+  Avg verification      :   153.597 ms
   Avg T_d (1-tok dft)   :     0.000 ms
 ============================================================
 numbers.txt 파일 저장 완료!
@@ -659,22 +334,22 @@ numbers.txt 파일 저장 완료!
 
 draft:
 
-llama_perf_context_print:        load time =    1218.73 ms
-llama_perf_context_print: prompt eval time =    3650.92 ms /   734 tokens (    4.97 ms per token,   201.05 tokens per second)
-llama_perf_context_print:        eval time =     160.25 ms /     9 runs   (   17.81 ms per token,    56.16 tokens per second)
-llama_perf_context_print:       total time =   15898.25 ms /   743 tokens
-llama_perf_context_print:    graphs reused =        129
+llama_perf_context_print:        load time =     818.06 ms
+llama_perf_context_print: prompt eval time =    3446.50 ms /   740 tokens (    4.66 ms per token,   214.71 tokens per second)
+llama_perf_context_print:        eval time =     119.33 ms /     9 runs   (   13.26 ms per token,    75.42 tokens per second)
+llama_perf_context_print:       total time =   16178.05 ms /   749 tokens
+llama_perf_context_print:    graphs reused =        131
 
 target:
 
-common_perf_print:    sampling time =     136.32 ms
-common_perf_print:    samplers time =      54.19 ms /   179 tokens
-common_perf_print:        load time =    8178.77 ms
-common_perf_print: prompt eval time =   11211.60 ms /   633 tokens (   17.71 ms per token,    56.46 tokens per second)
-common_perf_print:        eval time =     121.93 ms /     1 runs   (  121.93 ms per token,     8.20 tokens per second)
-common_perf_print:       total time =   17117.03 ms /   634 tokens
-common_perf_print: unaccounted time =    5647.18 ms /  33.0 %      (total - sampling - prompt eval - eval) / (total)
-common_perf_print:    graphs reused =         63
+common_perf_print:    sampling time =     146.91 ms
+common_perf_print:    samplers time =      56.10 ms /   179 tokens
+common_perf_print:        load time =    9471.08 ms
+common_perf_print: prompt eval time =   11690.04 ms /   640 tokens (   18.27 ms per token,    54.75 tokens per second)
+common_perf_print:        eval time =     110.58 ms /     1 runs   (  110.58 ms per token,     9.04 tokens per second)
+common_perf_print:       total time =   16996.19 ms /   641 tokens
+common_perf_print: unaccounted time =    5048.65 ms /  29.7 %      (total - sampling - prompt eval - eval) / (total)
+common_perf_print:    graphs reused =         64
 llama_memory_breakdown_print: | memory breakdown [MiB]                  | total   free    self   model   context   compute       unaccounted |
 llama_memory_breakdown_print: |   - GPUOpenCL (QUALCOMM Adreno(TM) 830) |     0 =    0 + (5614 =  4026 +    1024 +     564) + 17592186038801 |
 llama_memory_breakdown_print: |   - Host                                |                  309 =   281 +       0 +      28                   |

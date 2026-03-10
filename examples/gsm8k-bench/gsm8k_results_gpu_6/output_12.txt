@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb40000707f0ea1d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb4000071ded26190
+🔍 DEBUG: Target model output tensor: 0xb400006ff4c491d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007276f05d90
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb40000707f0ea1d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400006ff4c491d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb40000707f0ea1d0
-🔍 Draft model output:  0xb40000707f0ea1d0
+🔍 Target model output: 0xb400006ff4c491d0
+🔍 Draft model output:  0xb400006ff4c491d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb4000072eed2a930
+  - Buffer: 0xb400007206e9fe50
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -292,191 +292,36 @@ If a question does not make any sense, or is not factually coherent, explain why
 
 Kira bought 3 apples, 5 bananas and 6 oranges at the grocery store. Lola ate 2 pieces of the fruit. How many pieces are left?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
-batch_tgt.n_tokens: 149, prefill latency: 1.509 seconds
+batch_tgt.n_tokens: 149, prefill latency: 1.484 seconds
 
 
-Letsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-'s countsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- the total number ofsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- fruit Ksplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ira bought:
+Let's count the total number of fruit Kira bought:
 
-*splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Apples: splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-3
-* Bansplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-anas: 5splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
+* Apples: 3
+* Bananas: 5
+* Oranges: 6
+* Total: 3 + 5 + 6 = 14
 
-* Orsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-anges: 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
+Since Lola ate 2 pieces of fruit, we need to subtract 2 from the total:
 
-* Totalsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-:splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 3 +splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 5 +splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 6 = splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-14
+* 14 (total) - 2 (eaten) = 12
 
-Since Lolasplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- atesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 2 piecessplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- of fruit, wesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- need to subtract splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-2 from the totalsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-:
-
-*splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 14 (totalsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-) - 2splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- (esplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-aten)splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- = 12splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-
-
-Sosplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-, there are splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-12 pieces of fruitsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- left.splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+So, there are 12 pieces of fruit left.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   150 tokens |   1629.14 ms |    92.07 t/s
-  Decode            :    99 tokens |   6786.08 ms |    14.59 t/s
-  Decode latency    :              |     68.55 ms/tok
+  Prefill           :   150 tokens |   1595.59 ms |    94.01 t/s
+  Decode            :    99 tokens |   6787.41 ms |    14.59 t/s
+  Decode latency    :              |     68.56 ms/tok
 ------------------------------------------------------------
   Draft length          : 3.000
-  Avg accept length     : 3.161
-  Accept ratio          : 72.043%
+  Avg accept length     : 3.062
+  Accept ratio          : 68.750%
 ------------------------------------------------------------
-  Avg draft phase       :    68.452 ms
-  Avg verification      :   143.875 ms
+  Avg draft phase       :    61.688 ms
+  Avg verification      :   144.303 ms
   Avg T_d (1-tok dft)   :     0.000 ms
 ============================================================
 numbers.txt 파일 저장 완료!
@@ -484,22 +329,22 @@ numbers.txt 파일 저장 완료!
 
 draft:
 
-llama_perf_context_print:        load time =     835.44 ms
-llama_perf_context_print: prompt eval time =    1861.85 ms /   428 tokens (    4.35 ms per token,   229.88 tokens per second)
-llama_perf_context_print:        eval time =      35.01 ms /     2 runs   (   17.51 ms per token,    57.12 tokens per second)
-llama_perf_context_print:       total time =    8417.77 ms /   430 tokens
-llama_perf_context_print:    graphs reused =         62
+llama_perf_context_print:        load time =     814.63 ms
+llama_perf_context_print: prompt eval time =    1732.27 ms /   434 tokens (    3.99 ms per token,   250.54 tokens per second)
+llama_perf_context_print:        eval time =      28.07 ms /     2 runs   (   14.04 ms per token,    71.24 tokens per second)
+llama_perf_context_print:       total time =    8385.64 ms /   436 tokens
+llama_perf_context_print:    graphs reused =         64
 
 target:
 
-common_perf_print:    sampling time =      77.99 ms
-common_perf_print:    samplers time =      29.65 ms /    99 tokens
-common_perf_print:        load time =    7350.90 ms
-common_perf_print: prompt eval time =    6024.94 ms /   366 tokens (   16.46 ms per token,    60.75 tokens per second)
-common_perf_print:        eval time =     119.38 ms /     1 runs   (  119.38 ms per token,     8.38 tokens per second)
-common_perf_print:       total time =    9253.75 ms /   367 tokens
-common_perf_print: unaccounted time =    3031.45 ms /  32.8 %      (total - sampling - prompt eval - eval) / (total)
-common_perf_print:    graphs reused =         30
+common_perf_print:    sampling time =      77.25 ms
+common_perf_print:    samplers time =      29.83 ms /    99 tokens
+common_perf_print:        load time =    7380.05 ms
+common_perf_print: prompt eval time =    6158.48 ms /   373 tokens (   16.51 ms per token,    60.57 tokens per second)
+common_perf_print:        eval time =     110.85 ms /     1 runs   (  110.85 ms per token,     9.02 tokens per second)
+common_perf_print:       total time =    9200.33 ms /   374 tokens
+common_perf_print: unaccounted time =    2853.76 ms /  31.0 %      (total - sampling - prompt eval - eval) / (total)
+common_perf_print:    graphs reused =         31
 llama_memory_breakdown_print: | memory breakdown [MiB]                  | total   free    self   model   context   compute       unaccounted |
 llama_memory_breakdown_print: |   - GPUOpenCL (QUALCOMM Adreno(TM) 830) |     0 =    0 + (5614 =  4026 +    1024 +     564) + 17592186038801 |
 llama_memory_breakdown_print: |   - Host                                |                  309 =   281 +       0 +      28                   |

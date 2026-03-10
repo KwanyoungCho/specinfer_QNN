@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb4000076259871d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb4000077a0666d90
+🔍 DEBUG: Target model output tensor: 0xb4000077820331d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb40000787eb945d0
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb4000076259871d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb4000077820331d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb4000076259871d0
-🔍 Draft model output:  0xb4000076259871d0
+🔍 Target model output: 0xb4000077820331d0
+🔍 Draft model output:  0xb4000077820331d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb4000077b066e110
+  - Buffer: 0xb40000795eb188f0
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -292,406 +292,53 @@ If a question does not make any sense, or is not factually coherent, explain why
 
 Jonathan has 2/3 as many measuring spoons as measuring cups. If he has two dozen cups and gifts Pedro 6 measuring spoons for his birthday, calculate the total number of utensils Jonathan has remaining.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
-batch_tgt.n_tokens: 159, prefill latency: 1.513 seconds
+batch_tgt.n_tokens: 159, prefill latency: 1.597 seconds
 
 
-Letsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-'s breaksplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- thissplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- down stepsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- by stepsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-!
+Let's break this down step by step!
 
-Jonathansplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- has 2 dozensplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- measuringsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- cups, which issplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- equalsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- to 2 xsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 12 =splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 24splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- measuringsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- cups.
+Jonathan has 2/3 as many measuring spoons as measuring cups. Since he has two dozen cups, we can convert that to a decimal by dividing by 12 (since there are 12 cups in a dozen):
 
-Since Jonathansplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- has 2/splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-3 assplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- many measuring sposplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ons as measuringsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- cups, wesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- can findsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- the numbersplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- of measuring sposplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ons by multiplyingsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- thesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- number of measuring cupssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- by 2/splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-3.
+2 dozen cups = 2/12 = 1/6
 
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-24splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- measuringsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- cups xsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 2/splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-3 = 16splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- measuring sposplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ons
+So, Jonathan has 1/6 as many measuring cups as measuring spoons. Since he has 2/3 as many measuring spoons as measuring cups, we can set up a proportion:
 
-Jonathansplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- giftssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Pedrosplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 6 measuring sposplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ons,splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- so wesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- subtractsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- from the totalsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- number of measuring sposplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ons:
+1/6 (measuring cups) = 2/3 (measuring spoons)
 
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-16 measuring sposplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ons - 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- measuring spoons =splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 10splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- measuring spoons
+To find the number of measuring spoons, we can cross-multiply:
 
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-Nowsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-, let's findsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- the total number ofsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- utensils Jonathansplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- has remainingsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-. Hesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- has 24splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- measuring cups andsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 10splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- measuring sposplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ons.
+1 × 2/3 = 6/6
 
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-Total number of utenssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ils = 24splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- measuring cups +splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 10 measuring sposplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ons =splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 34splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- utenssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ils
+So, Jonathan has 6 measuring spoons initially.
 
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-So, Jonathan hassplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 34splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- utenssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ils remainingsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-.<|eot_id|><|start_header_id|>assistant
+After gifting 6 measuring spoons to Pedro, Jonathan has:
+
+6 (initial measuring spoons) - 6 (gifted measuring spoons) = 0 measuring spoons
+
+Jonathan has 0 measuring spoons remaining.
+
+As for measuring cups, Jonathan still has the original 2 dozen cups, which is:
+
+2 × 12 = 24 measuring cups
+
+In total, Jonathan has:
+
+24 measuring cups + 0 measuring spoons = 24 utensils<|eot_id|><|start_header_id|>assistant
 
 
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   160 tokens |   1635.77 ms |    97.81 t/s
-  Decode            :   188 tokens |  16284.62 ms |    11.54 t/s
-  Decode latency    :              |     86.62 ms/tok
+  Prefill           :   160 tokens |   1708.78 ms |    93.63 t/s
+  Decode            :   263 tokens |  25124.26 ms |    10.47 t/s
+  Decode latency    :              |     95.53 ms/tok
 ------------------------------------------------------------
   Draft length          : 3.000
-  Avg accept length     : 2.562
-  Accept ratio          : 52.055%
+  Avg accept length     : 2.426
+  Accept ratio          : 47.531%
 ------------------------------------------------------------
-  Avg draft phase       :    70.123 ms
-  Avg verification      :   149.595 ms
+  Avg draft phase       :    69.204 ms
+  Avg verification      :   160.688 ms
   Avg T_d (1-tok dft)   :     0.000 ms
 ============================================================
 numbers.txt 파일 저장 완료!
@@ -699,22 +346,22 @@ numbers.txt 파일 저장 완료!
 
 draft:
 
-llama_perf_context_print:        load time =     844.85 ms
-llama_perf_context_print: prompt eval time =    4197.58 ms /   768 tokens (    5.47 ms per token,   182.96 tokens per second)
-llama_perf_context_print:        eval time =     251.62 ms /    13 runs   (   19.36 ms per token,    51.67 tokens per second)
-llama_perf_context_print:       total time =   17923.44 ms /   781 tokens
-llama_perf_context_print:    graphs reused =        144
+llama_perf_context_print:        load time =     776.84 ms
+llama_perf_context_print: prompt eval time =    5989.16 ms /  1046 tokens (    5.73 ms per token,   174.65 tokens per second)
+llama_perf_context_print:        eval time =     283.46 ms /    20 runs   (   14.17 ms per token,    70.56 tokens per second)
+llama_perf_context_print:       total time =   26843.62 ms /  1066 tokens
+llama_perf_context_print:    graphs reused =        215
 
 target:
 
-common_perf_print:    sampling time =     168.40 ms
-common_perf_print:    samplers time =      65.42 ms /   188 tokens
-common_perf_print:        load time =    7432.34 ms
-common_perf_print: prompt eval time =   12373.15 ms /   670 tokens (   18.47 ms per token,    54.15 tokens per second)
-common_perf_print:        eval time =     121.69 ms /     1 runs   (  121.69 ms per token,     8.22 tokens per second)
-common_perf_print:       total time =   18768.35 ms /   671 tokens
-common_perf_print: unaccounted time =    6105.10 ms /  32.5 %      (total - sampling - prompt eval - eval) / (total)
-common_perf_print:    graphs reused =         71
+common_perf_print:    sampling time =     278.45 ms
+common_perf_print:    samplers time =     110.10 ms /   263 tokens
+common_perf_print:        load time =    7020.48 ms
+common_perf_print: prompt eval time =   18725.07 ms /   915 tokens (   20.46 ms per token,    48.86 tokens per second)
+common_perf_print:        eval time =     112.36 ms /     1 runs   (  112.36 ms per token,     8.90 tokens per second)
+common_perf_print:       total time =   27620.57 ms /   916 tokens
+common_perf_print: unaccounted time =    8504.69 ms /  30.8 %      (total - sampling - prompt eval - eval) / (total)
+common_perf_print:    graphs reused =        106
 llama_memory_breakdown_print: | memory breakdown [MiB]                  | total   free    self   model   context   compute       unaccounted |
 llama_memory_breakdown_print: |   - GPUOpenCL (QUALCOMM Adreno(TM) 830) |     0 =    0 + (5614 =  4026 +    1024 +     564) + 17592186038801 |
 llama_memory_breakdown_print: |   - Host                                |                  309 =   281 +       0 +      28                   |

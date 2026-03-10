@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -233,29 +233,35 @@ Let's break it down step by step. We know:
 
 * 1 orange is bad, so we'll remove that out of the basket.
 
-Next, 20% of the oranges are unripe. To find 20 percent out of a whole, we need to find 20% of 25 (which is 25 x 0.2 = 12.5). Since we have 25 oranges and we're taking 12.5 to the left, which it's a fraction whole number, so we 0,4 to the left, So we can't take 12.4 oranges out of the unripe oranges will take 12. Since we can't take whole oranges, we'll take 12 oranges that are unripe.
+Next, 20% of the oranges are unripe. To find 20 percent out of a whole, we need to find 20% of 25 (which is 25 x 0.2 = 12.5). Since you can't have a fraction of an orange, we'll round up to 13 oranges that are unripe. So, we'll remove those 13 (unripe + 1 bad) from the basket, leaving:
 
-Now we have 25 - 12, which is 23 oranges. And we've taken 12 unripe oranges and 1, that's a bad, so we've got 1 orange that is sour. So we have 23 - 1 - 12 - 2 oranges) -14). So we have 23.
+25 (25 - 1 + 13) - (2 (2 sour = -2) = 18
 
-Now, let's add 1, 12, which is 2 (bad and sour). And 12 + 2 = 14. So we have 23 - 14, 2. So we have 23 - 14, which is 9.
+Now, we're left with 18 oranges. We know 2 are sour, so we'll subtracting those 2, leaving:
 
-So the oranges are 25 oranges among which 1 is bad, 20 percent are unripe, 2 are sour and the rest is good. So the rest of good oranges is 25 - 14, 2, which is 9.<|eot_id|><|start_header_id|>assistant
+18 - 2 + (good oranges) + 0 (sour oranges)
+
+The remaining 18 oranges remaining are the good oranges.<|eot_id|><|start_header_id|>assistant
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   152 tokens |    610.41 ms |   249.01 t/s
-  Decode            :   338 tokens |  24553.38 ms |    13.77 t/s
-  Decode latency    :              |     72.64 ms/tok
+  Prefill           :   152 tokens |    615.61 ms |   246.91 t/s
+  Decode            :   211 tokens |  13192.31 ms |    15.99 t/s
+  Decode latency    :              |     62.52 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.064
-  Accept ratio          : 51.591%
+  Avg accept length     : 2.958
+  Accept ratio          : 48.944%
 ------------------------------------------------------------
-  Avg draft phase       :   106.936 ms
-  Avg verification      :   114.000 ms
-  Avg T_d (1-tok dft)   :    19.706 ms
+  Avg draft phase       :    72.563 ms
+  Avg verification      :   110.306 ms
+  Avg T_d (1-tok dft)   :     9.483 ms
+  Avg (draft+verify)    :   182.869 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.155 ms
+  Avg dft sampling      :     0.145 ms
 ============================================================
 
 

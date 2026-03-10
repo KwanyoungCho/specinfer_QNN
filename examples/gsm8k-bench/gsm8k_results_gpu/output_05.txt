@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 15 (35b5065) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb40000747e0201d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb40000755b3d25d0
+🔍 DEBUG: Target model output tensor: 0xb400007b562c31d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007c75d26190
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb40000747e0201d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400007b562c31d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb40000747e0201d0
-🔍 Draft model output:  0xb40000747e0201d0
+🔍 Target model output: 0xb400007b562c31d0
+🔍 Draft model output:  0xb400007b562c31d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb40000770b347980
+  - Buffer: 0xb400007cf5cd4390
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -298,27 +298,30 @@ What a fun problem!
 Let's break it down step by step:
 
 1. Initially, there are 5 children following the truck.
-2. On the second street, each of the original 5 children is joined by another child, so the total number of children becomes 5 + 5 = 10 children.
-3. On the third street, each of the 10 children is joined by another 2 children, so the total number of children becomes 10 + (10 x 2) = 10 + 20 = 30 children.
-4. The original 5 children then give up and leave the group, so we subtract 5 from the total: 30 - 5 = 25 children.
+2. On the second street, each of the 5 children is joined by another child, so the total number of children becomes 5 + 5 = 10.
+3. On the third street, each of the 10 children is joined by another 2 children, so the total number of children becomes 10 + 20 = 30.
 
-Therefore, there are now 25 children following the ice cream truck!<|eot_id|><|start_header_id|>assistant
+Now, the original 5 children give up and leave the group, so we subtract 5 from the total:
+
+30 - 5 = 25
+
+Therefore, there are 25 children now following the ice cream truck!<|eot_id|><|start_header_id|>assistant
 
 
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   212 tokens |   2080.82 ms |   101.88 t/s
-  Decode            :   163 tokens |  24085.23 ms |     6.77 t/s
-  Decode latency    :              |    147.76 ms/tok
+  Prefill           :   212 tokens |   2003.31 ms |   105.82 t/s
+  Decode            :   147 tokens |  22426.71 ms |     6.55 t/s
+  Decode latency    :              |    152.56 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.951
-  Accept ratio          : 73.780%
+  Avg accept length     : 3.744
+  Accept ratio          : 68.590%
 ------------------------------------------------------------
-  Avg draft phase       :   129.488 ms
-  Avg verification      :   445.429 ms
-  Avg T_d (1-tok dft)   :    17.460 ms
+  Avg draft phase       :   120.615 ms
+  Avg verification      :   441.525 ms
+  Avg T_d (1-tok dft)   :    11.856 ms
 ============================================================
 
 

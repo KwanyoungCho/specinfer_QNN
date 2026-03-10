@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -233,37 +233,43 @@ Let's set up an equation using the information given. Since the cat is 5 times f
 
 The turtle's speed is unknown, so we can represent it as x. Since the cat is 40-second speed is equal to this rate multiplied by 40 (since speed equals distance divided by time), we can set up the equation as follows:
 
-1. The cat's distance traveled in 15 feet per second * 40 seconds = 600 feet
-2. The turtle's distance traveled = the turtle's 40-second speed * 40 seconds
-3. The turtle's 40-second speed = x * 40 seconds
+1. The cat's distance traveled in 15 feet/second x 40 seconds = ?
 
-Since the cat is 5 times faster than the turtle (15 feet per second), the turtle's 40-second distance is equal to 3 feet/second * 40 seconds = 300 feet ( 40 minutes
+2. The turtle's distance traveled is 5 times the turtle's distance:
 
-So, the turtle's speed in one second is 300 feet / 40 seconds = 7.75 feet/ (1/40) seconds = (1.5 feet/second.
+15 feet/second x 40 seconds = 5x
 
-2.5 feet per 8.5 seconds).
+Now, we can solve for x, or the turtle's speed. To do so, we need to divide both sides by 5x by 1 (which means multiplying both sides by 1/5), like:
 
-Now, we need to find the turtle's speed in seconds. Multiply by 40 (:
+1/5 x 5x = 1/5 x 5) x x. So, the turtle's distance:
 
-1.75 feet/second * 40 seconds = 70 feet).
+x = 1/5 x 15/second
 
-There you have it! 70 feet. The answer to how many feet the turtle's speed is 70 feet.<|eot_id|>
+x = 3 feet/second
+
+Now we have the turtle's speed (3 feet/second). To find the turtle's 40-second distance, we multiply the speed by 40:
+
+Turtle's 40-second speed = x x 3 feet/second x 40 seconds = 120 feet<|eot_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   152 tokens |    610.73 ms |   248.88 t/s
-  Decode            :   315 tokens |  20621.23 ms |    15.28 t/s
-  Decode latency    :              |     65.46 ms/tok
+  Prefill           :   152 tokens |    604.95 ms |   251.26 t/s
+  Decode            :   297 tokens |  16779.71 ms |    17.70 t/s
+  Decode latency    :              |     56.50 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.340
-  Accept ratio          : 58.511%
+  Avg accept length     : 3.364
+  Accept ratio          : 59.091%
 ------------------------------------------------------------
-  Avg draft phase       :   103.351 ms
-  Avg verification      :   113.484 ms
-  Avg T_d (1-tok dft)   :    18.502 ms
+  Avg draft phase       :    74.261 ms
+  Avg verification      :   113.843 ms
+  Avg T_d (1-tok dft)   :     9.685 ms
+  Avg (draft+verify)    :   188.104 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.231 ms
+  Avg dft sampling      :     0.148 ms
 ============================================================
 
 

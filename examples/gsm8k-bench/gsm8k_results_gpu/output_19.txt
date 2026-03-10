@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 15 (35b5065) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb400006d8c87b1d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400006f694e7d90
+🔍 DEBUG: Target model output tensor: 0xb400007c95fc31d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007d282e85d0
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400006d8c87b1d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400007c95fc31d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb400006d8c87b1d0
-🔍 Draft model output:  0xb400006d8c87b1d0
+🔍 Target model output: 0xb400007c95fc31d0
+🔍 Draft model output:  0xb400007c95fc31d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb400006f094cf650
+  - Buffer: 0xb400007e28257960
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -295,7 +295,7 @@ Tyrion changes his face mask two times every time he goes out. If he goes out th
 
 Let's break it down step by step!
 
-Tyrion changes his face mask two times every time he goes out. Since he goes out three times a day, that means he changes his face mask a total of 3 x 2 = 6 times a day.
+Tyrion changes his face mask two times every time he goes out. Since he goes out three times a day, he changes his face mask a total of 3 x 2 = 6 times a day.
 
 Now, let's find out how many face masks he uses every 2 days. Since he uses 6 face masks in a day, he would use 6 x 2 = 12 face masks in 2 days.
 
@@ -305,17 +305,17 @@ So, Tyrion uses 12 face masks every 2 days.<|eot_id|><|start_header_id|>
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   152 tokens |   1655.98 ms |    91.79 t/s
-  Decode            :   117 tokens |  18857.29 ms |     6.20 t/s
-  Decode latency    :              |    161.17 ms/tok
+  Prefill           :   152 tokens |   1702.36 ms |    89.29 t/s
+  Decode            :   115 tokens |  17789.72 ms |     6.46 t/s
+  Decode latency    :              |    154.69 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.314
-  Accept ratio          : 57.857%
+  Avg accept length     : 3.455
+  Accept ratio          : 61.364%
 ------------------------------------------------------------
-  Avg draft phase       :   123.686 ms
-  Avg verification      :   401.778 ms
-  Avg T_d (1-tok dft)   :    16.664 ms
+  Avg draft phase       :   116.455 ms
+  Avg verification      :   408.529 ms
+  Avg T_d (1-tok dft)   :    11.460 ms
 ============================================================
 
 

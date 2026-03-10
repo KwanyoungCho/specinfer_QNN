@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -229,39 +229,55 @@ Kim sleepwalks, to monitor her sleeping hours, she installs a camera in her room
 
 What an interesting question! Let's break it down step by step.
 
-Kim usually sleeps-up at 6 a.m., but this day because she woke up 5 minutes earlier than usual. So, she actually woke up at 5:55 a.m.
+Kim usually sleeps-up at 6 a.m., but that particular day, she woke up 5 minutes earlier than usual. So, she woke up at:
 
-The camera footage shows that she was sleepwalking from 2:15 to 02:38 am. That's a 38-minute period, was sleepwalking.
+6:55 a.m.
 
-To find out how many minutes she slept, we need to subtract the sleeping hours from the usual wake-up time. Kim's total wake-up time would be:
+The camera footage shows that she was sleepwalking from 2:15 a.m to 6-38 am) to 4:15 a.
 
-6:00 a.m. (usual wake-up time) - 5:55 a.m. (actual wake-up time) = 0:05 (or 5 minutes)
+To find the woke up 5 minutes earlier than usual, we subtract 5 minutes from her usual waking time:
 
-Now, subtract the sleep time from the total wake up time:
+6:00 (usual waking time) - 5 (minutes earlier than usual) = 5:55
 
-6:55 a.m. - 2:38 a.m. = 3:22 (or 3 hours and 22 minutes)
+Since she woke up at 5:55 am, she must have spent some time sleeping. Let's find the time she slept by subtracting her wake-up time from:
 
-So, she slept for 3 hours and 55 minutes (6 hours - 5 minutes) - 38 minutes (sleepwalking period) = 5 hours and 17 minutes.
+2:55:
 
-Therefore Kim slept for 317 minutes (or 5:17 hours) on that day. 
+6:00 (usual waking time) - 5:50 (actual wake-up time) = ?
 
-Please let me know if you have another question or if there's something else I can help you with!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+This means she slept for:
+
+:
+
+6:00 - 5:55 = 6:45 a.m. to
+
+10:00 - 2.00 = 2 hours
+
+However, the question asks us to sleep time on her bed. Since she was sleepwalking from 2:15 to 2:15 a, she spent 4 hours and 38 minutes sleepwalking.The time she between her usual hours is 2 hours (6:45-6:00 a.m.). Adding these times, she spent:
+
+4 hours 38 minutes (sleepwalking) + 2 hours (waking time) in total, which is 6 hours 38 minutes + 2 = 6 hours 38 minutes.
+
+So, Kim slept for approximately 2 hours and 38 minutes on that particular day.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   225 tokens |    957.19 ms |   235.06 t/s
-  Decode            :   279 tokens |  18842.15 ms |    14.81 t/s
-  Decode latency    :              |     67.53 ms/tok
+  Prefill           :   225 tokens |    939.69 ms |   239.44 t/s
+  Decode            :   359 tokens |  20275.76 ms |    17.71 t/s
+  Decode latency    :              |     56.48 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.310
-  Accept ratio          : 57.738%
+  Avg accept length     : 3.346
+  Accept ratio          : 58.645%
 ------------------------------------------------------------
-  Avg draft phase       :   105.655 ms
-  Avg verification      :   115.882 ms
-  Avg T_d (1-tok dft)   :    18.990 ms
+  Avg draft phase       :    73.981 ms
+  Avg verification      :   113.241 ms
+  Avg T_d (1-tok dft)   :     9.862 ms
+  Avg (draft+verify)    :   187.222 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.173 ms
+  Avg dft sampling      :     0.149 ms
 ============================================================
 
 

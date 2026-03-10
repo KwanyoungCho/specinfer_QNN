@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 15 (35b5065) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb400007aaf5491d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007b8db11d90
+🔍 DEBUG: Target model output tensor: 0xb4000070f0c4c1d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb4000072acd3e190
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400007aaf5491d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb4000070f0c4c1d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb400007aaf5491d0
-🔍 Draft model output:  0xb400007aaf5491d0
+🔍 Target model output: 0xb4000070f0c4c1d0
+🔍 Draft model output:  0xb4000070f0c4c1d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb400007cddb1e650
+  - Buffer: 0xb40000718cd52940
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -303,35 +303,35 @@ You have 15 liters of pineapple drink that is three-fifths water, which means th
 
 15 liters x (3/5) = 9 liters
 
-You pour the orange drink into the pineapple drink, but you spill 1 liter of the orange drink. So, you're left with:
+You pour the orange drink into the pineapple drink, but you spill 1 liter of the orange drink. So, the total amount of orange drink that goes into the pineapple drink is:
 
-10 liters - 1 liter = 9 liters of orange drink
+10 liters - 1 liter = 9 liters
 
-Now, you have a total of 9 liters of orange drink and 15 liters of pineapple drink, making a total of:
+Now, you have a total of 9 liters of orange drink mixed with 15 liters of pineapple drink, making a total of:
 
 9 liters + 15 liters = 24 liters
 
 To find the total amount of water, you need to add the amount of water in the orange drink and the pineapple drink:
 
-6.67 liters (orange) + 9 liters (pineapple) = 15.67 liters
+6.67 liters (orange drink) + 9 liters (pineapple drink) = 15.67 liters
 
-So, the remaining 24 liters contain approximately 15.67 liters of water.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+So, the total amount of water in the remaining 24 liters is approximately 15.67 liters.<|eot_id|><|start_header_id|>
 
 
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   176 tokens |   1715.58 ms |   102.59 t/s
-  Decode            :   240 tokens |  41613.21 ms |     5.77 t/s
-  Decode latency    :              |    173.39 ms/tok
+  Prefill           :   176 tokens |   1831.49 ms |    96.10 t/s
+  Decode            :   251 tokens |  43402.70 ms |     5.78 t/s
+  Decode latency    :              |    172.92 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.515
-  Accept ratio          : 62.868%
+  Avg accept length     : 3.378
+  Accept ratio          : 59.459%
 ------------------------------------------------------------
-  Avg draft phase       :   147.559 ms
-  Avg verification      :   456.232 ms
-  Avg T_d (1-tok dft)   :    18.349 ms
+  Avg draft phase       :   124.514 ms
+  Avg verification      :   454.640 ms
+  Avg T_d (1-tok dft)   :    11.976 ms
 ============================================================
 
 

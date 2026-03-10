@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -235,45 +235,47 @@ Let Allen's current age be 11x and Darrell's current age be 7x, as their ages ar
 
 The total age of years they have together is 162, so we can set up the equation:
 
-11x + 7x = 162)
+11x + 7x = 162
 
 Combine like terms:
 
-18x = 162)
+18x = 7x = 162)
 
-Divide both sides by 18:
+Combine like variables:
 
-x = 9
+25x = 162
 
-So 11x is Allen's current age, Allen's current age is:
+Divide 25:
 
-11x = 11 * 9 = 99
+x = 0.72 (or 72/100)
 
-Now, Allen's current age is 99 years.
+So, we know Allen's current age is 11x ≈ 7.88 (or 7.88 years).
 
-To calculate Allen's age 10years from now, we will add 10 to his current age:
+To find Allen's age 10 years from now, we need to add 10 years to his current age:
 
-Allen's age 10 years from now = ?
+Allen's age 10 years from now ≈  (7.88 + 10)
 
-99
-
-So, Allen will be 109years old in 10years!<|eot_id|><|start_header_id|>
+Allen's Age 10 years from now ≈ 17.8<|eot_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   151 tokens |    608.95 ms |   247.97 t/s
-  Decode            :   187 tokens |  11473.51 ms |    16.30 t/s
-  Decode latency    :              |     61.36 ms/tok
+  Prefill           :   151 tokens |    610.81 ms |   247.21 t/s
+  Decode            :   198 tokens |  11244.77 ms |    17.61 t/s
+  Decode latency    :              |     56.79 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.444
-  Accept ratio          : 61.111%
+  Avg accept length     : 3.177
+  Accept ratio          : 54.435%
 ------------------------------------------------------------
-  Avg draft phase       :    97.944 ms
-  Avg verification      :   110.982 ms
-  Avg T_d (1-tok dft)   :    17.791 ms
+  Avg draft phase       :    70.113 ms
+  Avg verification      :   108.238 ms
+  Avg T_d (1-tok dft)   :     9.559 ms
+  Avg (draft+verify)    :   178.351 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.116 ms
+  Avg dft sampling      :     0.125 ms
 ============================================================
 
 

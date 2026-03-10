@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb400006efdba31d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400006faaf4bd90
+🔍 DEBUG: Target model output tensor: 0xb400006f06c2b1d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400006ff332bd90
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400006efdba31d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400006f06c2b1d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb400006efdba31d0
-🔍 Draft model output:  0xb400006efdba31d0
+🔍 Target model output: 0xb400006f06c2b1d0
+🔍 Draft model output:  0xb400006f06c2b1d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb40000716af66c80
+  - Buffer: 0xb400007043283a80
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -292,540 +292,58 @@ If a question does not make any sense, or is not factually coherent, explain why
 
 As Sally walked to school, she was holding the strings to 25 red balloons, 7 green balloons, and 12 yellow balloons. Suddenly, a gust of wind caused 40% of the red balloons to burst.  The shockingly loud sound startled Sally, and she accidentally released half of the yellow balloons.  But as she neared the school grounds, she found 8 blue balloons caught in a tree, and she added 75% of them to her remaining clutch of balloons, which she carried into the school.  What number of balloons did she finally carry into the school?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
-batch_tgt.n_tokens: 235, prefill latency: 2.407 seconds
+batch_tgt.n_tokens: 235, prefill latency: 2.237 seconds
 
 
-Letsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-'s breaksplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- thissplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- down stepsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- by stepsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-!
+Let's break this down step by step!
 
-Initiallysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-, Sallysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- had:
+Initially, Sally had:
 
-*splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 25 red balloonssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
+* 25 red balloons
+* 7 green balloons
+* 12 yellow balloons
 
-* 7splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- green balloons
-*splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 12splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- yellow balloons
+The wind burst 40% of the red balloons, which is:
 
-Thesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- windsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- burstsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-40% of thesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- red balloons,splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- which issplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-:
+25 x 0.4 = 10 red balloons burst
+25 - 10 = 15 remaining red balloons
 
-25splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- xsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 0.4splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- = 10splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- redsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- balloons burstsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
+Sally accidentally released half of the yellow balloons, which is:
 
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-25 -splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 10splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- = 15splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- remainingsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- red balloons
+12 ÷ 2 = 6 yellow balloons released
+12 - 6 = 6 remaining yellow balloons
 
-Ssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-ally accidentallysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- released half of thesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- yellow balloons, whichsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- is:
+She found 8 blue balloons caught in a tree and added 75% of them to her remaining clutch, which is:
 
-12splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- ÷ splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-2 = 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- yellowsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- balloons releasedsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
+8 x 0.75 = 6 blue balloons added
+6 (remaining yellow) + 6 (added blue) = 12 total yellow/blue balloons
 
-12splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- -splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- = 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- remaining yellowsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- balloons
+Now, let's combine the remaining balloons:
 
-Shesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- foundsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 8splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- blue balloons andsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- added 75splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-% of themsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- to hersplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- remaining clutchsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-,splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- which is:
+* 15 red balloons
+* 7 green balloons
+* 12 yellow/blue balloons
 
-8splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- x 0.splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-75 = 6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- blue balloons addedsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
+In total, Sally carried:
 
-6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- (splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-remainingsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- yellow) + splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-6 (bluesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-) =splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 12splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- balloonssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- addedsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- tosplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- the remainingsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- red andsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- green balloons
+15 + 7 + 12 = 34 balloons
 
-Thesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- total number of balloonssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- Sallysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- carriedsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- into the school issplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-:
-
-*splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 15 remainingsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- red balloons
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-* 7splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- green balloons
-*splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 12 balloonssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- added (splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-6splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- yellow andsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 6 bluesplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-)
-splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-* Totalsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-:splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 15splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- + 7splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- + 12splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- = 34splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- balloonssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-
-
-So, Sallysplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- carriedsplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- 34splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- balloonssplitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
- into the school.splitting seq   0 into   1
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-temp.size(): 2, batch_dft.n_tokens: 2
-batch_tgt.n_tokens: 7
-<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+into the school.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   236 tokens |   2547.66 ms |    92.63 t/s
-  Decode            :   233 tokens |  24130.49 ms |     9.66 t/s
-  Decode latency    :              |    103.56 ms/tok
+  Prefill           :   236 tokens |   2358.88 ms |   100.05 t/s
+  Decode            :   218 tokens |  20516.23 ms |    10.63 t/s
+  Decode latency    :              |     94.11 ms/tok
 ------------------------------------------------------------
   Draft length          : 3.000
-  Avg accept length     : 2.392
-  Accept ratio          : 46.392%
+  Avg accept length     : 2.523
+  Accept ratio          : 50.775%
 ------------------------------------------------------------
-  Avg draft phase       :    76.309 ms
-  Avg verification      :   169.449 ms
+  Avg draft phase       :    71.291 ms
+  Avg verification      :   164.069 ms
   Avg T_d (1-tok dft)   :     0.000 ms
 ============================================================
 numbers.txt 파일 저장 완료!
@@ -833,22 +351,22 @@ numbers.txt 파일 저장 완료!
 
 draft:
 
-llama_perf_context_print:        load time =     801.87 ms
-llama_perf_context_print: prompt eval time =    5789.53 ms /  1021 tokens (    5.67 ms per token,   176.35 tokens per second)
-llama_perf_context_print:        eval time =     526.16 ms /    25 runs   (   21.05 ms per token,    47.51 tokens per second)
-llama_perf_context_print:       total time =   26686.76 ms /  1046 tokens
-llama_perf_context_print:    graphs reused =        193
+llama_perf_context_print:        load time =     793.39 ms
+llama_perf_context_print: prompt eval time =    4824.05 ms /   947 tokens (    5.09 ms per token,   196.31 tokens per second)
+llama_perf_context_print:        eval time =     274.66 ms /    18 runs   (   15.26 ms per token,    65.53 tokens per second)
+llama_perf_context_print:       total time =   22879.05 ms /   965 tokens
+llama_perf_context_print:    graphs reused =        171
 
 target:
 
-common_perf_print:    sampling time =     227.08 ms
-common_perf_print:    samplers time =      86.87 ms /   233 tokens
-common_perf_print:        load time =    6534.15 ms
-common_perf_print: prompt eval time =   18699.79 ms /   914 tokens (   20.46 ms per token,    48.88 tokens per second)
-common_perf_print:        eval time =     140.79 ms /     1 runs   (  140.79 ms per token,     7.10 tokens per second)
-common_perf_print:       total time =   27489.27 ms /   915 tokens
-common_perf_print: unaccounted time =    8421.61 ms /  30.6 %      (total - sampling - prompt eval - eval) / (total)
-common_perf_print:    graphs reused =         95
+common_perf_print:    sampling time =     234.64 ms
+common_perf_print:    samplers time =      89.73 ms /   218 tokens
+common_perf_print:        load time =    7469.73 ms
+common_perf_print: prompt eval time =   16177.89 ms /   837 tokens (   19.33 ms per token,    51.74 tokens per second)
+common_perf_print:        eval time =     120.26 ms /     1 runs   (  120.26 ms per token,     8.32 tokens per second)
+common_perf_print:       total time =   23672.51 ms /   838 tokens
+common_perf_print: unaccounted time =    7139.72 ms /  30.2 %      (total - sampling - prompt eval - eval) / (total)
+common_perf_print:    graphs reused =         84
 llama_memory_breakdown_print: | memory breakdown [MiB]                  | total   free    self   model   context   compute       unaccounted |
 llama_memory_breakdown_print: |   - GPUOpenCL (QUALCOMM Adreno(TM) 830) |     0 =    0 + (5614 =  4026 +    1024 +     564) + 17592186038801 |
 llama_memory_breakdown_print: |   - Host                                |                  309 =   281 +       0 +      28                   |

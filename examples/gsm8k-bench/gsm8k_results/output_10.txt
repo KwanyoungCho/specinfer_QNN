@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -231,46 +231,35 @@ Let's break this first plane's flights into parts:
 
 *. Flights to Greece: 3/4 of the total trips
 Let's call this total number "x". Then, flights to Greece are 3 * x / 4
-2. Flights to France: Split equally with flights to Germany. Since the total flights minus Greece is the sum of France and Germany, we can set up an equation:
-2 * (x + 3/4 x) = x = total flights
-(2 * 7/4 x) x / x = x / x = total flights
-Total flights to Poland ( the second plane's2 * (x + 3/4 * x) / x = total flights, are equal to half of flights of the first airplane. So, the total flights to flights to Poland = total flights for flights to France + flights to Greece. We set up equalities:
+2. Flights to France: Split equally with flights to Germany. Since the total flights minus Greece is equal to flights to France + Germany, we can set up an equation:
 
-2 * (x + 3/4 x) / x / x / 2
-
-Now, we can solve for x. First, we can simplify the equation:
-
-4 * 3 x / (2 * x / 2
-
-Now, multiply both sides by 4:
-
-3 x = x
-
-Now, solve for x:
-
-x - 3
-
-Now, we can find the total flights for the first plane, which is 3. We want the number of trips to France, which is the remaining part (1/4) of the flight, since the first plane goes to Greece for 3/4 of its flights. We want the number of flight to France, which is:
-
-(3/4 * 4) = (1/4) = 3 * 4
-
-So, the first flight takes 3 x4 to France.<|eot_id|><|start_header_id|>
+x - (x - 2 * x / 4) = flights2 * x
+Combine all the terms:
+x = 3 * x / 4
+x = 3 / 4 = 1 1/4
+x = 1 1/4 (x is the total flights)
+4 * 1 1/4 = 4 (the number of trips)
+The first plane's trips to France are 1 1/4 * x / 2 = 1/2 * (4 * x)<|eot_id|><|start_header_id|>assistant
 ============================================================
           EAGLE-QNN  Performance Summary
-
-
 ============================================================
-  Prefill           :   205 tokens |    847.75 ms |   241.82 t/s
-  Decode            :   366 tokens |  26678.81 ms |    13.72 t/s
-  Decode latency    :              |     72.89 ms/tok
+  Prefill           :   205 tokens |    836.12 ms |   245.18 t/s
+
+
+  Decode            :   200 tokens |  11850.34 ms |    16.88 t/s
+  Decode latency    :              |     59.25 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.349
-  Accept ratio          : 58.716%
+  Avg accept length     : 3.159
+  Accept ratio          : 53.968%
 ------------------------------------------------------------
-  Avg draft phase       :   123.771 ms
-  Avg verification      :   118.618 ms
-  Avg T_d (1-tok dft)   :    20.696 ms
+  Avg draft phase       :    72.825 ms
+  Avg verification      :   112.203 ms
+  Avg T_d (1-tok dft)   :     9.610 ms
+  Avg (draft+verify)    :   185.029 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.195 ms
+  Avg dft sampling      :     0.143 ms
 ============================================================
 
 

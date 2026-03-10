@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -236,56 +236,34 @@ Lorraine starts with:
 
 She trades 90% of her small stickers for large buttons. Since 30 is equal to 9/10 or 0.9, she trades a total amount of:
 
-0.9 x 30) = 0.9 * 30 = (0.9 * (30 = 27 small stickers.
+0.9 x 30 =) 27 small stickers for large buttons.
 
-Now she has 30 small buttons have been reduced to 30 - 27 = 3. So, Lorraine still has 3 small buttons left.
+Now, Lorraine has:
 
-She also trades 40 large buttons for large buttons. Each small stick is worth 4 small buttons, so she gets:
+* (initial) large button from the 30 small stickers she traded for large buttons = 1
+27 small stickers traded for large buttons (initial large stickers) + 27 = 31 large buttons
 
-* 40 / (3) = (40/3) = 13.33 large stickers
-
-Since we can't have a fraction of an item (in this case, a large button), it's safe to round down to the nearest whole number, which is 14 large stickers. She has 14 large stickers now.
-
-She trades 50% of her large stickers for large buttons. Since 50 is equal to 1/2 or 50% = 0.5. She trades:
-
-* (0.5 * 40) large stickers for the same number of large buttons. So, she gets 2 large buttons.
-
-She trades the remaining large buttons for small buttons. She had 40 large stickers initially and traded 20 (0. So, she has 40 - 20 = (40 - 40 = 0 large stickers left. Each large sticker is worth 3 small buttons. So, she gets 3 x 40 = 120 small buttons.
-
-Now, let her total number of buttons:
-
-* Large buttons: 2
-	+ Small buttons: 3 + (40 x 3) = 1 + 40 x 3)
-* Total1 (1 + 40)
-	+ 1 + (1 x 3)
-	= (40 x 40)
-	= (1 + (40 x) + 40 x 40)
-	= 1 + (3
-	+40 x 4
-	= (40 x 3)
-* = (40 x 3)
-* = (40 x) + 3
-	= (40 x)
-	= 40 x)
-	+ 40 x 40
-	= 1 + (40 x
-	+ (40 x)<|eot_id|>
+She trades 50% (initial) stickers, so she has large stickers left.<|eot_id|><|start_header_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   217 tokens |    851.09 ms |   254.97 t/s
-  Decode            :   512 tokens |  32211.05 ms |    15.90 t/s
-  Decode latency    :              |     62.91 ms/tok
+  Prefill           :   217 tokens |    835.50 ms |   259.72 t/s
+  Decode            :   146 tokens |   8286.75 ms |    17.62 t/s
+  Decode latency    :              |     56.76 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.676
-  Accept ratio          : 66.906%
+  Avg accept length     : 3.152
+  Accept ratio          : 53.804%
 ------------------------------------------------------------
-  Avg draft phase       :   113.187 ms
-  Avg verification      :   116.521 ms
-  Avg T_d (1-tok dft)   :    19.251 ms
+  Avg draft phase       :    69.978 ms
+  Avg verification      :   106.426 ms
+  Avg T_d (1-tok dft)   :     9.453 ms
+  Avg (draft+verify)    :   176.404 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.117 ms
+  Avg dft sampling      :     0.123 ms
 ============================================================
 
 

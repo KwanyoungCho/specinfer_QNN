@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -231,29 +231,33 @@ What a fun scenario!
 
 Let's break this down step:
 
-1st on the 5 children start following the truck.
+1st On the 5 children start following the truck.
 
-2nd Street: Each of the 5 children is joined by another child, making a total5+5 = 6 children following the truck in this street.
-3rd Street: Each of these 6 children (already following the truck) is joined by 2 more children joining the group. So, the total number of children following the truck in the 3rd street is 6 (original children) + 6 new children (joined by the 6 children in the previous street) = 2 more new kids (joined by the 1st 6 children) = 13 children.
-The original 5 children give up and leave, leaving the 13 children who have joined the group to continue following the truck.
+2nd Street: Each of the 5 children is joined by 1 more child, so the group now has 10 children (5 + 5 = 10).
+3rd Street: Each of these 10 children are joined by 2 additional child (2 children each), making a total of 20 children (10 + [1 = 20).
+4 (The original 5 children): They give up and leave the group, leaving they are no longer part of the group.
 
-So, the answer to your question is: 13 children are now following the truck.<|eot_id|><|eot_id|>assistant
+Now that we have 20 children following the truck.<|eot_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   212 tokens |    844.32 ms |   251.09 t/s
-  Decode            :   193 tokens |  12418.49 ms |    15.54 t/s
-  Decode latency    :              |     64.34 ms/tok
+  Prefill           :   212 tokens |    836.33 ms |   253.49 t/s
+  Decode            :   135 tokens |   6500.96 ms |    20.77 t/s
+  Decode latency    :              |     48.16 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.368
-  Accept ratio          : 59.211%
+  Avg accept length     : 3.722
+  Accept ratio          : 68.056%
 ------------------------------------------------------------
-  Avg draft phase       :   102.263 ms
-  Avg verification      :   112.172 ms
-  Avg T_d (1-tok dft)   :    17.986 ms
+  Avg draft phase       :    69.694 ms
+  Avg verification      :   106.405 ms
+  Avg T_d (1-tok dft)   :     9.431 ms
+  Avg (draft+verify)    :   176.100 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.128 ms
+  Avg dft sampling      :     0.126 ms
 ============================================================
 
 

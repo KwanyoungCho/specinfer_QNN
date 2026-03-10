@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -233,23 +233,27 @@ Max bought 16 snowflake stamps. He bought 3 more truck stamps than snowflake sti
 
 He bought 9 fewer rose stamps than truck stickers, so he bought 18 - 9 = 9 rose stickers.
 
-To find the total number of stamps, we need 16 snowflake stickers, 18 truck stickers, and nine sticks.<|eot_id|>
+To find the total number of stamps, we need 16 (snowflake) + 18 (truck) + 34, and 9 (rose) more. So, Max bought 16 + 18 + 9 = 52 stickers. The answer is 52.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   186 tokens |    731.82 ms |   254.16 t/s
-  Decode            :    95 tokens |   5798.40 ms |    16.38 t/s
-  Decode latency    :              |     61.04 ms/tok
+  Prefill           :   186 tokens |    716.44 ms |   259.62 t/s
+  Decode            :   130 tokens |   7258.91 ms |    17.91 t/s
+  Decode latency    :              |     55.84 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.357
-  Accept ratio          : 58.929%
+  Avg accept length     : 3.225
+  Accept ratio          : 55.625%
 ------------------------------------------------------------
-  Avg draft phase       :    96.643 ms
-  Avg verification      :   104.759 ms
-  Avg T_d (1-tok dft)   :    18.386 ms
+  Avg draft phase       :    70.650 ms
+  Avg verification      :   106.585 ms
+  Avg T_d (1-tok dft)   :     9.604 ms
+  Avg (draft+verify)    :   177.235 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.143 ms
+  Avg dft sampling      :     0.133 ms
 ============================================================
 
 

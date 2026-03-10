@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -230,23 +230,45 @@ Kira bought 3 apples, 5 bananas and 6 oranges at the grocery store. Lola ate 2 p
 Let's count the total number pieces of fruit Kira bought.
 
 Apples: 3
-Each apple has one piece, so 3 (since there's no mention of a third piece), bananas: 5, each is one piece, so 5 bananas, 5 pieces, oranges: 6, and each is one piece, so 6 oranges = 2 (since there's no mention for a third piece), so 6 oranges = 3 (since there's no mention for a third piece), so 3 apples, 5 bananas, 3 oranges, 6 oranges, 2 oranges, 2 oranges, 3 oranges, 2 oranges,<|eot_id|>
+Apple pieces: Each apple is a single piece, so there are 3 apple pieces.
+Since Kira bought 3 apples (3), there would have been 2 apple, but Lola ate only 2 pieces, so there are no more apples left.
+
+Bananas: 5
+Banan pieces: Each piece is a single piece, so there are 5 banana pieces.
+
+Since Lola ate 2 banana pieces, there are 3 banana left.
+
+Oranges: 6
+Orange pieces: There is one orange piece per orange, so there are 6 orange pieces.
+
+Since Lola ate 2 orange pieces, there are 4 orange pieces left.
+
+Now, let's total the total pieces, considering the fruits that Lola ate.
+
+Total fruit of fruit: 3 (apple) + 5 (banana) - (1 (orange) = 3 = 12
+Total pieces of fruit left: 1 (banana) + 2 (orange) + 4 = 4
+
+There are  one banana pieces and 2 orange pieces left, so the answer is 5.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   150 tokens |    613.29 ms |   244.58 t/s
-  Decode            :   139 tokens |   9262.86 ms |    15.01 t/s
-  Decode latency    :              |     66.64 ms/tok
+  Prefill           :   150 tokens |    606.08 ms |   247.49 t/s
+  Decode            :   245 tokens |  12703.56 ms |    19.29 t/s
+  Decode latency    :              |     51.85 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.366
-  Accept ratio          : 59.146%
+  Avg accept length     : 3.536
+  Accept ratio          : 63.406%
 ------------------------------------------------------------
-  Avg draft phase       :   109.537 ms
-  Avg verification      :   111.929 ms
-  Avg T_d (1-tok dft)   :    19.317 ms
+  Avg draft phase       :    72.145 ms
+  Avg verification      :   109.057 ms
+  Avg T_d (1-tok dft)   :     9.493 ms
+  Avg (draft+verify)    :   181.202 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.156 ms
+  Avg dft sampling      :     0.142 ms
 ============================================================
 
 

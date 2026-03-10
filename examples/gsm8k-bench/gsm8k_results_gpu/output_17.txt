@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 15 (35b5065) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb400007c96f081d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007e47d64d90
+🔍 DEBUG: Target model output tensor: 0xb4000072ec1461d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb4000073aafaad90
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400007c96f081d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb4000072ec1461d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb400007c96f081d0
-🔍 Draft model output:  0xb400007c96f081d0
+🔍 Target model output: 0xb4000072ec1461d0
+🔍 Draft model output:  0xb4000072ec1461d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb400007dd7d19e90
+  - Buffer: 0xb4000073bafc7430
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -295,33 +295,37 @@ A basket contains 25 oranges among which 1 is bad, 20% are unripe, 2 are sour an
 
 Let's break this down step by step!
 
-We know that 1 orange is bad, so that leaves 24 oranges that are not bad.
+We know that 1 orange is bad, so that leaves 24 oranges.
 
-We also know that 20% of the oranges are unripe. To find the number of unripe oranges, we can multiply the total number of oranges (25) by the percentage of unripe oranges (20%):
+We also know that 20% of the oranges are unripe. To find the number of unripe oranges, we can calculate 20% of 25:
 
-25 x 0.20 = 5
+20% of 25 = 0.20 x 25 = 5 oranges
 
-So, 5 oranges are unripe. This leaves 19 oranges that are not bad and not unripe.
+So, 5 oranges are unripe. This leaves us with:
 
-We also know that 2 oranges are sour. This leaves 17 oranges that are not bad, not unripe, and not sour.
+24 (total oranges) - 1 (bad orange) - 5 (unripe oranges) = 18 oranges
 
-Therefore, the number of good oranges is 17.<|eot_id|>
+We're told that 2 oranges are sour, so we subtract those from the remaining good oranges:
+
+18 (good oranges) - 2 (sour oranges) = 16 good oranges
+
+Therefore, 16 oranges in the basket are good.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   152 tokens |   1552.75 ms |    97.89 t/s
-  Decode            :   147 tokens |  29252.25 ms |     5.03 t/s
-  Decode latency    :              |    198.99 ms/tok
+  Prefill           :   152 tokens |   1446.63 ms |   105.07 t/s
+  Decode            :   169 tokens |  29617.68 ms |     5.71 t/s
+  Decode latency    :              |    175.25 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 2.920
-  Accept ratio          : 48.000%
+  Avg accept length     : 3.170
+  Accept ratio          : 54.245%
 ------------------------------------------------------------
-  Avg draft phase       :   141.480 ms
-  Avg verification      :   433.294 ms
-  Avg T_d (1-tok dft)   :    17.712 ms
+  Avg draft phase       :   114.094 ms
+  Avg verification      :   435.037 ms
+  Avg T_d (1-tok dft)   :    11.707 ms
 ============================================================
 
 

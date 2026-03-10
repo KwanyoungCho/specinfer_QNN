@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -230,29 +230,29 @@ As Sally walked to school, she was holding the strings to 25 red balloons, 7 gre
 Let's break it down step by step!
 
 Initially, Sally had:
-25 red balloon bunches (25 balloons ÷ 6.25 balloons per bunch = 2.67) 4, so 4 bunchs) and 7 green balloon bunchs and 12 yellow balloon bunch.
+25 red, 12 yellow, and 25 red + 7 green, and 12 yellow balloons. So, number of red, green, yellow balloons is: 25 + 25 = 32 red, 7 + 12 = green.
 
-The wind caused 40% of 4 red balloon bunchs to burst. 40% of 4 = 4 x 0.4 = 1.6 bunches. Since the bunch is, by definition, the whole, so you can't burst the whole bunch burst. It's like asking what 1.6 bunchs is. You can't have a fraction of a whole, so you have to round up to 1.6 bunches to1.6 bunches = 0) to 1 bunch. So, one bunch burst, and Sally had 3 bunchs left. So, the red balloon bunches is now 3.
-
-Now, half of 12 yellow balloon bunches burst. Half is 12 is, by definition, = 6 = 6 bunches (6 bunches = 4 bunches, 1.5 bunches + 1.5 bunches = 2.0 bunches = 0) 0, so 0, the whole bunch burst), but you have 1. the half bunches you can't have a half bunch, so 1.5 bunches, like the 1.5 bunch, 0 and 1, so you half bunch burst, and you have 5 bunches left, so 5 bunches left.
-
-So, the number of the remaining bunches Sally, the school is 3, 7 + (5) = 8/3 = 75/4 = 15 + 2 = 17.<|eot_id|><|start_header_id|>assistant
+When the wind caused 40% of the red balloons away (0.4 x 25 = 10 red balloons burst. So she still had 32 + (25 - 10 = 7 green, and 12 yellow (12 + 0), she has 32 + 7 + (12 = 51 balloons.<|eot_id|><|start_header_id|>
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   236 tokens |    958.52 ms |   246.21 t/s
-  Decode            :   380 tokens |  32738.86 ms |    11.61 t/s
-  Decode latency    :              |     86.15 ms/tok
+
+
+  Prefill           :   236 tokens |    979.41 ms |   240.96 t/s
+  Decode            :   136 tokens |   7960.44 ms |    17.08 t/s
+  Decode latency    :              |     58.53 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 2.787
-  Accept ratio          : 44.669%
+  Avg accept length     : 3.068
+  Accept ratio          : 51.705%
 ------------------------------------------------------------
-
-
-  Avg draft phase       :   120.706 ms
-  Avg verification      :   117.920 ms
-  Avg T_d (1-tok dft)   :    20.016 ms
+  Avg draft phase       :    70.523 ms
+  Avg verification      :   106.556 ms
+  Avg T_d (1-tok dft)   :     9.460 ms
+  Avg (draft+verify)    :   177.078 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.123 ms
+  Avg dft sampling      :     0.122 ms
 ============================================================
 
 

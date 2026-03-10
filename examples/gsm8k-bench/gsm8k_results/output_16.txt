@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -231,33 +231,33 @@ Let's break it down step by step.
 
 Amy made 20 more friends than Lily, and Lily made 5 more friends. This is a clever way of saying that Amy has 20 more than Lily.
 
-Lily is stated to have made 20 more, so we know Lily has 50 friends, Amy has 20 more, so Amy has 50 (Lily's number of friends count) + 20 = 70 friends
+Lily is stated to have makes 50 friends. So, if Amy has 50 friends, and Amy made 20 more than Lily, then Amy made:
 
-To find the total friends count with Amy, we need to combine their combined total of friends. Lily has 50, Amy has 70. To add them combined total:
+50 + 20 = 70 friends.
 
-50 (Lily's friend's friends count)  + 70 (Amy's friend's friends count) = ?
+To find the total number of friends that Lily and Amy have together, we need to add the number of friends. So, 50 + 50 = 100.
 
-50 + 70 is 120.
-
-The combined total of friends for Lily and Lily is:
-
-120.<|eot_id|>
-
-
+Lily and Amy have 100 friends together.<|eot_id|><|eot_id|>assistant
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   149 tokens |    613.74 ms |   242.78 t/s
-  Decode            :   171 tokens |  10596.33 ms |    16.14 t/s
-  Decode latency    :              |     61.97 ms/tok
+  Prefill           :   149 tokens |    602.97 ms |   247.11 t/s
+  Decode            :   131 tokens |   5945.35 ms |    22.03 t/s
+  Decode latency    :              |     45.38 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.400
-  Accept ratio          : 60.000%
+  Avg accept length     : 3.939
+  Accept ratio          : 73.485%
+
+
 ------------------------------------------------------------
-  Avg draft phase       :    99.880 ms
-  Avg verification      :   108.235 ms
-  Avg T_d (1-tok dft)   :    18.770 ms
+  Avg draft phase       :    69.303 ms
+  Avg verification      :   106.000 ms
+  Avg T_d (1-tok dft)   :     9.578 ms
+  Avg (draft+verify)    :   175.303 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.109 ms
+  Avg dft sampling      :     0.114 ms
 ============================================================
 
 

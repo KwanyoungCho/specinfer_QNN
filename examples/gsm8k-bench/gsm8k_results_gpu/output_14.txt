@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 15 (35b5065) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb400006ed77aa1d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007012d18190
+🔍 DEBUG: Target model output tensor: 0xb400006e503cd1d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007052f0a190
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400006ed77aa1d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400006e503cd1d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb400006ed77aa1d0
-🔍 Draft model output:  0xb400006ed77aa1d0
+🔍 Target model output: 0xb400006e503cd1d0
+🔍 Draft model output:  0xb400006e503cd1d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb4000070e2ca7170
+  - Buffer: 0xb400006fa2e5ce10
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -299,31 +299,29 @@ On Saturday, Jill and her friends watch 4 movies.
 
 On Sunday, they watch half the number of movies as on Saturday, which means they watch 4/2 = 2 movies.
 
-In total, they watch 4 + 2 = 6 movies on Saturday and Sunday.
+In one weekend, they watch a total of 4 (Saturday) + 2 (Sunday) = 6 movies.
 
-Since they watch movies every weekend, they can watch 6 movies per weekend.
+Since they watch movies every weekend, let's calculate the total number of movies they can watch in 4 weeks:
 
-In 4 weeks, they can watch 6 movies per weekend multiplied by 4 weeks, which is:
+6 movies/weekend × 4 weekends = 24 movies
 
-6 movies/weekend × 4 weeks = 24 movies
-
-So, Jill and her friends can watch a total of 24 movies in 4 weeks!<|eot_id|><|start_header_id|>
-
-
+So, Jill and her friends can watch a total of 24 movies in 4 weeks!<|eot_id|>
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   157 tokens |   1593.20 ms |    98.54 t/s
-  Decode            :   140 tokens |  23589.61 ms |     5.93 t/s
-  Decode latency    :              |    168.50 ms/tok
+
+
+  Prefill           :   157 tokens |   1523.40 ms |   103.06 t/s
+  Decode            :   130 tokens |  20379.12 ms |     6.38 t/s
+  Decode latency    :              |    156.76 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.390
-  Accept ratio          : 59.756%
+  Avg accept length     : 3.395
+  Accept ratio          : 59.868%
 ------------------------------------------------------------
-  Avg draft phase       :   141.561 ms
-  Avg verification      :   421.667 ms
-  Avg T_d (1-tok dft)   :    17.839 ms
+  Avg draft phase       :   111.789 ms
+  Avg verification      :   412.282 ms
+  Avg T_d (1-tok dft)   :    11.192 ms
 ============================================================
 
 

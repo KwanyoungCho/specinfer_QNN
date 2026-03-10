@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -229,29 +229,37 @@ Indras has 6 letters in her name. Her sister's name has 4 more letters than half
 
 Let's break it down step by step!
 
-Indras' name has 6 letters, and we're asked to find out how many letters are in Indaras' and her sister's names combined.
+Indras' name has 6 letters, and we're told that her sister's name has 4 more letters than half the letters in Indras' name.
 
-The problem asks for the number of letters in her sister's name, which is 4 more than half of the letters in Indras' name.
+Half of Indras (6/2) is equal to 3 letters. So, her sister's name has 4 more letters than 3, which means her sister's name has (3 + 4 = or 7 letters.
 
-Half of the letters in Indras' name would be 6 / 2) or simply 3. So, her sister's name has (3 + 4 = 7 letters.
+Now, let's add up the number of letter: Indras' name (6) and her sister's name (7) to find the total, we add the numbers together:
 
-Now, let's add the number of letters in both their names: Indras' name has 6, and her sister's name has 7, which makes.<|eot_id|>
+6 = Indras' name: 6
+7 = Sister' names: 4
+Total: 6 + 7 = 13
+
+So, the total number of letters is 13.<|eot_id|><|start_header_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   159 tokens |    606.19 ms |   262.29 t/s
-  Decode            :   144 tokens |   8608.68 ms |    16.73 t/s
-  Decode latency    :              |     59.78 ms/tok
+  Prefill           :   159 tokens |    604.12 ms |   263.19 t/s
+  Decode            :   171 tokens |   8445.85 ms |    20.25 t/s
+  Decode latency    :              |     49.39 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.667
-  Accept ratio          : 66.667%
+  Avg accept length     : 3.617
+  Accept ratio          : 65.426%
 ------------------------------------------------------------
-  Avg draft phase       :   108.051 ms
-  Avg verification      :   108.250 ms
-  Avg T_d (1-tok dft)   :    19.741 ms
+  Avg draft phase       :    69.447 ms
+  Avg verification      :   106.521 ms
+  Avg T_d (1-tok dft)   :     9.396 ms
+  Avg (draft+verify)    :   175.968 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.106 ms
+  Avg dft sampling      :     0.106 ms
 ============================================================
 
 

@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -229,31 +229,35 @@ Tyrion changes his face mask two times every time he goes out. If he goes out th
 
 What an interesting question!
 
-Let's break it down step by step. Tyrion changes his face mask 2 times he goes out, and he uses a new mask for for each of those two times. If he goes out three times a day, that means he uses two face mask changes (2 times a day).
+Let's break it down step by step. Tyrion changes his face mask 2 times he goes out, and he uses a new mask for for each of those times.
 
-Since he goes out 3 times a day, he would use 2 * 3 = 6 face masks every day.
+Since he goes out three times a day, he uses 2 face mask (3 * 2 = 3 times a day.
 
-Now, let's think about how many face masks he'll use in 2 days. Since he uses 6 masks he goes outside, he'll use:
+Since he goes out three times a day, he uses a total of 3 face masks in 1 day.
 
-6 face maps per day × 2 days (since the question asks about 2 days, not 1) = 12 face masks!
+To find out how many face mask he uses in 2 days, we can multiply the number of face masks he uses in 1 day by 2. So, is two times as many days, we multiply 3 * 2 = ?
 
-So, Tyrion uses 12 face masks in 2 days!<|eot_id|><|end_header_id|>assistant<|end_header_id|>
+So, Tyrions uses a total of 6 face masks in 2 days.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   152 tokens |    615.50 ms |   246.95 t/s
-  Decode            :   169 tokens |  12165.82 ms |    13.89 t/s
-  Decode latency    :              |     71.99 ms/tok
+  Prefill           :   152 tokens |    601.22 ms |   252.82 t/s
+  Decode            :   161 tokens |   8364.27 ms |    19.25 t/s
+  Decode latency    :              |     51.95 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.360
-  Accept ratio          : 59.000%
+  Avg accept length     : 3.478
+  Accept ratio          : 61.957%
 ------------------------------------------------------------
-  Avg draft phase       :   122.900 ms
-  Avg verification      :   116.569 ms
-  Avg T_d (1-tok dft)   :    18.017 ms
+  Avg draft phase       :    70.913 ms
+  Avg verification      :   107.234 ms
+  Avg T_d (1-tok dft)   :     9.393 ms
+  Avg (draft+verify)    :   178.147 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.141 ms
+  Avg dft sampling      :     0.130 ms
 ============================================================
 
 

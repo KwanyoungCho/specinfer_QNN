@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -227,32 +227,34 @@ If a question does not make any sense, or is not factually coherent, explain why
 Bethany can run 10 laps on the track in one hour.  Trey can run 4 more laps than Bethany.  Shaelyn can run half as many laps as Trey.  Quinn can run 2 fewer laps than Shaelyn.  How many more laps can Bethany run compared to Quinn?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
-Let's break down the information:
+Let's break down the problem step by step!
 
-* Bethany runs 10 laps in one hour.
-* Trey's lap count is equal to Bethany's lap count (10) plus + 4 (since he runs 4 more laps than Bethany, and Bethany runs 10 laps in one hour, so she runs 3 more than Bethany). So, Trey runs 10 + 3 = 13.
-* Shaelyn's lap count is half of Trey (13) which means her lap count. So, Shaelyn's lap count is 13 / 2 = 6.5 laps. Since you can't run whole numbers of laps (not fractions), we'll round it to the closest whole number, which is 6 laps.
-* Quinn's lap count is Shaelyn's lap count - 2 times 2 (since Quinn runs 2 less laps 1 lap of Shaelyn). So, Quinn's lap count is 6 - 2 = 4.
+1. Bethany can run 10 laps in one hour.
+2. Trey can run 4 more laps than Bethany, so Trey can run 10 + 4 = 14 laps.
+4. Shaelyn can run half as many laps as Trey, so Shaelyn can run 14/2 = 7 laps.
+4.Quiinncanrun2fewerlapsthanShaelyn, so Quinn cans runs 7 - 2 = 5 laps.
 
-The question is  "How many more laps can Bethany" run compared with Quinn?"
-
-Bethany runs 10 laps - Quinn's 4, means the difference is the difference, which means Bethany can in 6 more laps than Quinn.<|eot_id|><|start_header_id|>
+Now, we  us find out how many more laps Bethany cans can Quinn run. Bethany can 10 laps in which is 10 - 5 = 5 more laps than Quinn cans.<|eot_id|><|start_header_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   179 tokens |    725.05 ms |   246.88 t/s
-  Decode            :   252 tokens |  18143.58 ms |    13.89 t/s
-  Decode latency    :              |     72.00 ms/tok
+  Prefill           :   179 tokens |    720.16 ms |   248.56 t/s
+  Decode            :   150 tokens |   8915.77 ms |    16.82 t/s
+  Decode latency    :              |     59.44 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.177
-  Accept ratio          : 54.430%
+  Avg accept length     : 3.041
+  Accept ratio          : 51.020%
 ------------------------------------------------------------
-  Avg draft phase       :   112.405 ms
-  Avg verification      :   114.575 ms
-  Avg T_d (1-tok dft)   :    18.156 ms
+  Avg draft phase       :    70.898 ms
+  Avg verification      :   107.500 ms
+  Avg T_d (1-tok dft)   :     9.431 ms
+  Avg (draft+verify)    :   178.398 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.131 ms
+  Avg dft sampling      :     0.122 ms
 ============================================================
 
 

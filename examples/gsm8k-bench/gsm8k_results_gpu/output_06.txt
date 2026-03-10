@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 15 (35b5065) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb4000075550d31d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007645785a10
+🔍 DEBUG: Target model output tensor: 0xb4000079bc5091d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007c2df085d0
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb4000075550d31d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb4000079bc5091d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb4000075550d31d0
-🔍 Draft model output:  0xb4000075550d31d0
+🔍 Target model output: 0xb4000079bc5091d0
+🔍 Draft model output:  0xb4000079bc5091d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb4000077456e1750
+  - Buffer: 0xb400007a6defe8a0
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -295,31 +295,31 @@ Kim sleepwalks, to monitor her sleeping hours, she installs a camera in her room
 
 Let's break it down step by step!
 
-Kim usually sleeps from 10 p.m. to 6 a.m., which is 8 hours. Since she woke up 5 minutes earlier than usual to go to the bathroom, she woke up at 5:55 a.m. (6 a.m. - 5 minutes).
+Kim usually sleeps from 10 p.m. to 6 a.m., which is 8 hours. However, she woke up 5 minutes earlier than usual, so she woke up at 5:55 a.m. (6 a.m. - 5 minutes).
 
-Now, let's find out how many minutes she slept on her bed that day. She was sleepwalking from 2:15 to 2:38 a.m., which is a total of 23 minutes.
+She also found that she was sleepwalking from 2:15 to 2:38 a.m., which is a total of 23 minutes.
 
-To find out how many minutes she slept on her bed that day, we need to subtract the time she was sleepwalking from the total sleeping time. So, we'll subtract 23 minutes from the total sleeping time of 8 hours (480 minutes).
+To find out how many minutes she slept on her bed that day, we need to subtract the time she was sleepwalking from the total sleeping time. Let's subtract 23 minutes from the total sleeping time:
 
-480 minutes - 23 minutes = 457 minutes
+8 hours - 23 minutes = 7 hours and 37 minutes
 
-Therefore, Kim slept on her bed for 457 minutes that day.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+So, Kim slept on her bed for 7 hours and 37 minutes that day.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   225 tokens |   2114.01 ms |   106.43 t/s
-  Decode            :   190 tokens |  34946.63 ms |     5.44 t/s
-  Decode latency    :              |    183.93 ms/tok
+  Prefill           :   225 tokens |   2270.02 ms |    99.12 t/s
+  Decode            :   173 tokens |  31417.58 ms |     5.51 t/s
+  Decode latency    :              |    181.60 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.203
-  Accept ratio          : 55.085%
+  Avg accept length     : 3.245
+  Accept ratio          : 56.132%
 ------------------------------------------------------------
-  Avg draft phase       :   143.966 ms
-  Avg verification      :   439.450 ms
-  Avg T_d (1-tok dft)   :    17.492 ms
+  Avg draft phase       :   127.245 ms
+  Avg verification      :   455.444 ms
+  Avg T_d (1-tok dft)   :    11.865 ms
 ============================================================
 
 

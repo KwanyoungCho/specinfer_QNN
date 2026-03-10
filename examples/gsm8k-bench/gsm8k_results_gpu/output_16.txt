@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 15 (35b5065) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 35 key-value pairs and 291 tensors from ../../gguf/llama-38i_q4_0_output4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -266,22 +266,22 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
 
-🔍 DEBUG: Target model output tensor: 0xb4000072fcb851d0
-🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb40000745835fd90
+🔍 DEBUG: Target model output tensor: 0xb400007107eaa1d0
+🔍 DEBUG: Draft model output tensor BEFORE sharing: 0xb400007374d0ba10
 🎯 LM HEAD SHARING: Assigning target output tensor to draft model
-✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb4000072fcb851d0
+✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: 0xb400007107eaa1d0
 ✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!
 📋 LM HEAD SHARING: Also shared output_norm tensor
 
 🔍 FINAL VERIFICATION:
-🔍 Target model output: 0xb4000072fcb851d0
-🔍 Draft model output:  0xb4000072fcb851d0
+🔍 Target model output: 0xb400007107eaa1d0
+🔍 Draft model output:  0xb400007107eaa1d0
 ✅ FINAL: Output tensors are properly shared!
 🔍 SHARED TENSOR INFO:
   - Dimensions: [4096, 128256]
   - Type: 2
   - Data pointer: 0x4080
-  - Buffer: 0xb4000074a835cbc0
+  - Buffer: 0xb4000071d4c77f80
 
 
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -295,31 +295,38 @@ After transferring to a new school, Amy made 20 more friends than Lily. If Lily 
 
 Let's break it down step by step!
 
-Amy made 20 more friends than Lily, and Lily made 50 friends. So, Amy made 50 + 20 = 70 friends.
+Amy made 20 more friends than Lily, and Lily made 50 friends. To find out how many friends Amy made, we can add 20 to 50:
 
-To find the total number of friends Lily and Amy have together, we add the number of friends they each have:
+50 (Lily's friends) + 20 = 70
 
-Lily: 50 friends
-Amy: 70 friends
-Total: 50 + 70 = 120 friends
+So, Amy made 70 friends.
 
-So, Lily and Amy have 120 friends together!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+Now, let's find the total number of friends Lily and Amy have together:
+
+Lily's friends: 50
+Amy's friends: 70
+
+To find the total, we add the number of friends each of them made:
+
+50 (Lily's friends) + 70 (Amy's friends) = 120
+
+Therefore, Lily and Amy have a total of 120 friends together!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
             EAGLE  Performance Summary
 ============================================================
-  Prefill           :   149 tokens |   1601.84 ms |    93.02 t/s
-  Decode            :   102 tokens |  17107.23 ms |     5.96 t/s
-  Decode latency    :              |    167.72 ms/tok
+  Prefill           :   149 tokens |   1489.70 ms |   100.02 t/s
+  Decode            :   149 tokens |  25076.09 ms |     5.94 t/s
+  Decode latency    :              |    168.30 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.258
-  Accept ratio          : 56.452%
+  Avg accept length     : 3.289
+  Accept ratio          : 57.222%
 ------------------------------------------------------------
-  Avg draft phase       :   136.968 ms
-  Avg verification      :   399.906 ms
-  Avg T_d (1-tok dft)   :    18.080 ms
+  Avg draft phase       :   122.311 ms
+  Avg verification      :   424.022 ms
+  Avg T_d (1-tok dft)   :    11.647 ms
 ============================================================
 
 

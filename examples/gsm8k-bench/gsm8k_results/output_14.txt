@@ -15,7 +15,7 @@ ggml_opencl: flattening quantized weights representation as struct of arrays (GG
 ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
 ggml_opencl: loading OpenCL kernels.........................................................................
 ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
-build: 20 (30b4d26) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
+build: 25 (764f9ea) with Android (11349228, +pgo, +bolt, +lto, -mlgo, based on r487747e) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362) for x86_64-unknown-linux-gnu
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from ../../gguf/tokenizer.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
@@ -229,55 +229,39 @@ Jill and her friends watch 4 movies every Saturday and half the number of movies
 
 Let's break it up step by step!
 
-Weekend 1:
-Saturday: 4 movies and Sunday: 2 movies (half of Saturday's 4 months)
-
-Total movies in Week 1: 4 (Saturday) + 2 (Sunday) = 6 movies
-
-Weekend 2:
-Saturday): same as before, 4 movies
-Weekend 2 (Sunday): same as before, 2 movies
-
-Week 3:
-Saturday: 4 movies
-Wednesday (half of Saturday, 4 movies): same as before, 4 movies (not mentioned in the question, but I'll consider it)
-
-We will consider this as Sunday (not mentioned in the question, but I'll consider it's the same)
+Weekend 1 (Saturday & Sunday):
+Saturday: Tuesday: 4 movies (4 movies on Saturday) + 4 half movies (2 movies on Saturday / 2 = 6 total moviesWeekend 2:
+Same pattern as Weekend 1: 6 movies (4 movies on Saturday + 2 half movies) = 6 total
+Weekend 2 & 1: 6 movies (2 movies (4 + 2 half) = 8
 
 Week 4:
-Saturday: 4 movies
-Wednesday (half of Saturday, 4 movies) same as before, 2 (not mentioned in the question)
+4: Same pattern, same number of movies watched: 6 movies +2 half = 6 movies x 4 = 8
 
-Weekend 4th) Sunday: same as before, 4 (not mentioned in the question)
+Week 4 & 1:
 
-Let's add all movies for 1st weekend: 4 (Saturday) and 2 (Sunday)
+4: Total movies = 4 weeks (4 =8 +4 movies x 2 half movie) *4 =16 movies
 
- + 4 (Saturday + 2) = 10 movies
-2 weekends)
-2nd weekend: 4 (Saturday) + 2 + 4 +4th weekend) = 10 movies
-3 weekends)
-3rd weekend: 4 + 2, 6 movies (1 weekend)
-
-3rd week + 4 + 2 = 6 (1 week)
-)
-
-Total movies in total 1 = 2 + 3 = 3 = 12 movies<|eot_id|>
+So, in 4 weeks, Jill & friends watch a total of: 4 * 4 weeks x 2 half + 2 movies) *4 =16.<|eot_id|>
 
 
 ============================================================
           EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   157 tokens |    616.42 ms |   254.70 t/s
-  Decode            :   324 tokens |  20804.86 ms |    15.57 t/s
-  Decode latency    :              |     64.21 ms/tok
+  Prefill           :   157 tokens |    604.42 ms |   259.75 t/s
+  Decode            :   207 tokens |  12034.18 ms |    17.20 t/s
+  Decode latency    :              |     58.14 ms/tok
 ------------------------------------------------------------
   Draft length          : 4.000
-  Avg accept length     : 3.713
-  Accept ratio          : 67.816%
+  Avg accept length     : 3.219
+  Accept ratio          : 55.469%
 ------------------------------------------------------------
-  Avg draft phase       :   119.069 ms
-  Avg verification      :   117.250 ms
-  Avg T_d (1-tok dft)   :    19.834 ms
+  Avg draft phase       :    73.453 ms
+  Avg verification      :   111.523 ms
+  Avg T_d (1-tok dft)   :     9.468 ms
+  Avg (draft+verify)    :   184.976 ms
+------------------------------------------------------------
+  Avg tgt sampling      :     0.167 ms
+  Avg dft sampling      :     0.151 ms
 ============================================================
 
 
