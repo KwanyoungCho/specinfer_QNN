@@ -1655,6 +1655,252 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
+void llm_graph_input_snapkv_pack::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (k_dst_idx && k_dst_idx->data) {
+        int64_t * data = (int64_t *) k_dst_idx->data;
+        for (uint32_t i = 0; i < budget; ++i) {
+            data[i] = (int64_t) i;
+        }
+    }
+
+    if (v_pack_idxs && v_pack_idxs->data && v_trans) {
+        int64_t * data = (int64_t *) v_pack_idxs->data;
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            for (uint32_t j = 0; j < budget; ++j) {
+                for (uint32_t d = 0; d < n_embd_v_gqa; ++d) {
+                    const uint32_t src_i = d + j * n_embd_v_gqa + s * n_embd_v_gqa * budget;
+                    const uint32_t dst_i = d * kv_size + j + s * n_embd_v_gqa * kv_size;
+                    data[src_i] = (int64_t) dst_i;
+                }
+            }
+        }
+    }
+}
+
+llm_graph_input_snapkv_pack * llm_graph_context::build_snapkv_pack_inp(
+        const llama_kv_cache_context * mctx_cur) const {
+
+    const int64_t n_kv     = mctx_cur->get_n_kv();
+    const int64_t kv_size  = mctx_cur->get_kv_size();
+    const bool    v_trans_ = mctx_cur->get_v_trans();
+    const int64_t n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+    const int64_t budget   = std::min((int64_t) cparams.snapkv_budget, n_kv);
+
+    auto inp_pack = std::make_unique<llm_graph_input_snapkv_pack>(
+            (uint32_t) budget, (uint32_t) n_embd_v_gqa, (uint32_t) kv_size, (uint32_t) n_stream, v_trans_);
+
+    inp_pack->k_dst_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, budget);
+    ggml_set_input(inp_pack->k_dst_idx);
+    ggml_set_name(inp_pack->k_dst_idx, "snapkv_k_dst_idx");
+
+    if (v_trans_) {
+        const int64_t v_total_sel = n_embd_v_gqa * budget * n_stream;
+        inp_pack->v_pack_idxs = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, v_total_sel);
+        ggml_set_input(inp_pack->v_pack_idxs);
+        ggml_set_name(inp_pack->v_pack_idxs, "snapkv_v_pack_idxs");
+    }
+
+    return (llm_graph_input_snapkv_pack *) res->add_input(std::move(inp_pack));
+}
+
+ggml_tensor * llm_graph_context::build_attn_snapkv(
+        llm_graph_input_attn_kv * inp,
+        llm_graph_input_snapkv_pack * inp_pack,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+            float     kq_scale,
+            int       il) const {
+
+    const auto * mctx_cur = inp->mctx;
+    const int64_t n_kv     = mctx_cur->get_n_kv();
+    const int64_t kv_size  = mctx_cur->get_kv_size();
+    const bool    v_trans_  = mctx_cur->get_v_trans();
+    const int64_t n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+    const int64_t n_tps    = n_tokens / n_stream;
+    const int64_t budget   = std::min((int64_t) cparams.snapkv_budget, n_kv);
+    const int64_t obs_w    = std::min((int64_t) cparams.snapkv_obs_window, n_tps);
+    const int64_t n_sel    = budget - obs_w;
+    const int64_t n_past   = n_tps - obs_w;
+    const int64_t D_k      = n_embd_head_k;
+    const int64_t D_v      = n_embd_head_v;
+    const int64_t H        = n_head_kv;
+    const int64_t H_q      = n_head;
+    const int64_t gqa_ratio = H_q / H;
+
+    GGML_ASSERT(n_sel > 0 && "budget must be greater than obs_window");
+    GGML_ASSERT(n_past > 0 && "sequence must be longer than obs_window");
+
+    // expand nodes for ordering
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, v_cur);
+    ggml_build_forward_expand(gf, k_cur);
+
+    // ── Step 1: Store full KV to cache (standard) ──
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+        const auto & v_idxs = inp->get_v_idxs();
+
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+    }
+
+    // ── Step 2: Full Causal Attention (standard path, inline non-FA) ──
+    ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+
+    ggml_tensor * q = ggml_view_4d(ctx0, q_cur,
+            q_cur->ne[0], q_cur->ne[1], q_cur->ne[2]/n_stream, n_stream,
+            q_cur->nb[1], q_cur->nb[2], q_cur->nb[3]/n_stream, 0);
+
+    q = ggml_permute(ctx0, q, 0, 2, 1, 3); // [D_k, n_tps, H_q, n_stream]
+    k = ggml_permute(ctx0, k, 0, 2, 1, 3); // [D_k, n_kv, H, n_stream]
+    v = ggml_permute(ctx0, v, 0, 2, 1, 3); // v_trans: [n_kv, D_v, H, n_stream]
+
+    ggml_tensor * kq = ggml_mul_mat(ctx0, k, q); // [n_kv, n_tps, H_q, n_stream]
+    ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+
+    const auto & kq_mask = inp->get_kq_mask();
+    kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+    cb(kq, "kq_soft_max", il);
+
+    if (!v_trans_) {
+        v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
+    }
+
+    ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq); // [D_v, n_tps, H_q, n_stream]
+    cb(kqv, "snapkv_kqv", il);
+
+    // ── Step 3: Importance from softmax weights (reuse kq) ──
+    // kq after softmax: [n_kv, n_tps, H_q, n_stream]
+    // slice last obs_w query columns
+    ggml_tensor * kq_obs = ggml_view_4d(ctx0, kq,
+            n_kv, obs_w, H_q, n_stream,
+            kq->nb[1], kq->nb[2], kq->nb[3],
+            (n_tps - obs_w) * kq->nb[1]);
+
+    // slice past rows only (exclude window keys from importance)
+    ggml_tensor * kq_past = ggml_view_4d(ctx0, kq_obs,
+            n_past, obs_w, H_q, n_stream,
+            kq_obs->nb[1], kq_obs->nb[2], kq_obs->nb[3], 0);
+
+    // sum over obs_w → importance per past key position
+    ggml_tensor * kq_past_t = ggml_cont(ctx0, ggml_permute(ctx0, kq_past, 1, 0, 2, 3));
+    ggml_tensor * importance = ggml_sum_rows(ctx0, kq_past_t); // [1, n_past, H_q, n_stream]
+    cb(importance, "snapkv_importance", il);
+
+    // ── Step 4: GQA Reduction ──
+    ggml_tensor * imp_kv;
+    if (gqa_ratio > 1) {
+        imp_kv = ggml_reshape_3d(ctx0, importance, n_past, H_q, n_stream);
+        imp_kv = ggml_reshape_4d(ctx0, imp_kv, n_past, gqa_ratio, H, n_stream);
+        imp_kv = ggml_cont(ctx0, ggml_permute(ctx0, imp_kv, 1, 0, 2, 3));
+        imp_kv = ggml_sum_rows(ctx0, imp_kv); // [1, n_past, H, n_stream]
+    } else {
+        imp_kv = importance;
+    }
+    cb(imp_kv, "snapkv_imp_kv", il);
+
+    // ── Step 5: Selection (past region, top n_sel) ──
+    ggml_tensor * imp_for_sort = ggml_reshape_3d(ctx0, imp_kv, n_past, H, n_stream);
+    ggml_tensor * sorted_idx = ggml_argsort(ctx0, imp_for_sort, GGML_SORT_ORDER_DESC);
+
+    ggml_tensor * selected_past = ggml_view_3d(ctx0, sorted_idx,
+            n_sel, H, n_stream,
+            sorted_idx->nb[1], sorted_idx->nb[2], 0);
+    cb(selected_past, "snapkv_selected_past", il);
+
+    // ── Step 6: Gather selected past KV + window KV ──
+    // K: k is [D_k, n_kv, H, n_stream] (permuted)
+    ggml_tensor * K_past = ggml_view_4d(ctx0, k,
+            D_k, n_past, H, n_stream,
+            k->nb[1], k->nb[2], k->nb[3], 0);
+    ggml_tensor * K_sel_past = ggml_get_rows(ctx0, K_past, selected_past);
+
+    ggml_tensor * K_win = ggml_view_4d(ctx0, k,
+            D_k, obs_w, H, n_stream,
+            k->nb[1], k->nb[2], k->nb[3],
+            n_past * k->nb[1]);
+    K_win = ggml_cast(ctx0, K_win, GGML_TYPE_F32);
+
+    ggml_tensor * K_packed = ggml_concat(ctx0, K_sel_past, K_win, 1);
+    cb(K_packed, "snapkv_K_packed", il);
+
+    // V: gather from v_cur (before cache, standard layout)
+    ggml_tensor * v_4d = ggml_view_4d(ctx0, v_cur,
+            v_cur->ne[0], v_cur->ne[1], v_cur->ne[2]/n_stream, n_stream,
+            v_cur->nb[1], v_cur->nb[2], v_cur->nb[3]/n_stream, 0);
+    v_4d = ggml_permute(ctx0, v_4d, 0, 2, 1, 3); // [D_v, n_tps, H, n_stream]
+
+    ggml_tensor * V_past = ggml_view_4d(ctx0, v_4d,
+            D_v, n_past, H, n_stream,
+            v_4d->nb[1], v_4d->nb[2], v_4d->nb[3], 0);
+    ggml_tensor * V_sel_past = ggml_get_rows(ctx0, V_past, selected_past);
+
+    ggml_tensor * V_win = ggml_view_4d(ctx0, v_4d,
+            D_v, obs_w, H, n_stream,
+            v_4d->nb[1], v_4d->nb[2], v_4d->nb[3],
+            n_past * v_4d->nb[1]);
+
+    ggml_tensor * V_packed = ggml_concat(ctx0, V_sel_past, V_win, 1);
+    cb(V_packed, "snapkv_V_packed", il);
+
+    // ── Finalize attention output (from full causal attention) ──
+    ggml_tensor * cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
+    cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
+
+    if (!cparams.offload_kqv) {
+        ggml_backend_sched_set_tensor_backend(sched, cur, backend_cpu);
+    }
+
+    ggml_build_forward_expand(gf, cur);
+    cb(cur, "kqv_out", il);
+
+    // ── Step 7: Pack K cache ──
+    ggml_tensor * k_cache = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * k_cache_perm = ggml_permute(ctx0, k_cache, 0, 2, 1, 3);
+    ggml_tensor * k_pack_result = ggml_set_rows(ctx0, k_cache_perm, K_packed, inp_pack->k_dst_idx);
+    ggml_build_forward_expand(gf, k_pack_result);
+
+    // ── Step 8: Pack V cache ──
+    if (v_trans_) {
+        const int64_t v_total_sel = n_embd_v_gqa * budget * n_stream;
+
+        ggml_tensor * V_packed_std = ggml_cont(ctx0, ggml_permute(ctx0, V_packed, 0, 2, 1, 3));
+        ggml_tensor * V_packed_1d = ggml_reshape_2d(ctx0,
+                ggml_reshape_2d(ctx0, V_packed_std, n_embd_v_gqa, budget * n_stream),
+                1, v_total_sel);
+
+        ggml_tensor * v_cache = mctx_cur->get_v(ctx0, il);
+        const int64_t v_cache_total = n_embd_v_gqa * kv_size * n_stream;
+        ggml_tensor * v_cache_1d = ggml_view_2d(ctx0, v_cache, 1, v_cache_total,
+                ggml_type_size(v_cache->type), 0);
+
+        ggml_tensor * v_pack_result = ggml_set_rows(ctx0, v_cache_1d, V_packed_1d, inp_pack->v_pack_idxs);
+        ggml_build_forward_expand(gf, v_pack_result);
+    } else {
+        ggml_tensor * v_cache = mctx_cur->get_v(ctx0, il);
+        ggml_tensor * v_cache_perm = ggml_permute(ctx0, v_cache, 0, 2, 1, 3);
+        ggml_tensor * v_pack_result = ggml_set_rows(ctx0, v_cache_perm, V_packed, inp_pack->k_dst_idx);
+        ggml_build_forward_expand(gf, v_pack_result);
+    }
+
+    // ── Step 9: Wo ──
+    if (wo) {
+        cur = build_lora_mm(wo, cur);
+    }
+
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
+
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_attn(
         llm_graph_input_attn_kv_iswa * inp,
         ggml_tensor * wo,

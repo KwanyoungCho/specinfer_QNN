@@ -34,6 +34,10 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
     bool kv_unified;
+    bool snapkv;
+
+    uint32_t snapkv_obs_window;
+    uint32_t snapkv_budget;
 
     enum llama_pooling_type pooling_type;
 

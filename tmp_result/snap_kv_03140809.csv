@@ -1,0 +1,1283 @@
+op name, kernel name, exec duration (ms), global size, local size, output size
+attn_norm-0,kernel_rms_norm_mul,0.123904,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-0,kernel_transpose_32_16,0.073216,4096x32x0,16x1x0,4096x125x1x1
+Qcur-0,kernel_mul_mat_Ab_Bi_8x4,2.254080,16x1024x4,1x32x4,4096x125x1x1
+Qcur-0,kernel_rope_norm_f32,0.065024,2048x125x1,64x1x1,128x32x125x1
+Vcur-0,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-0,kernel_mul_mat_Ab_Bi_8x4,0.621056,16x256x4,1x32x4,1024x125x1x1
+Kcur-0,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-0,kernel_mul_mat_Ab_Bi_8x4,0.669952,16x256x4,1x32x4,1024x125x1x1
+Kcur-0,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l0 (view),kernel_set_rows_f16_i64,0.018176,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l0 (reshaped) (view),kernel_set_rows_f16_i64,0.291072,2000x64x1,1x64x1,1x4194304x1x1
+node_23,mul_mm_f16_f32_kq,0.264960,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-0,kernel_soft_max_4,0.119040,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-0,mul_mm_f16_f32_kqv,0.334080,64x2x128,64x1x2,128x125x32x1
+kqv_out-0,kernel_cpy_f32_f32,0.052992,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-0 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-0,kernel_sum_rows_f32,0.009984,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-0 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-0,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_40,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_42,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l0 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-0,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l0 (view) (permuted) (view),kernel_set_rows_f16_i64,0.009216,8192x8x1,128x1x1,128x256x8x1
+node_52,kernel_get_rows_f32,0.007168,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-0,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-0 (permuted) (cont),kernel_cpy_f32_f32,0.007936,512x64x1,64x1x1,128x8x64x1
+cache_v_l0 (view) (view) (view),kernel_set_rows_f16_i64,0.125952,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-0,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-0,kernel_mul_mat_Ab_Bi_8x4,2.279936,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-0,kernel_add,0.097024,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-0,kernel_rms_norm_mul,0.057088,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-0,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-0,kernel_mul_mat_Ab_Bi_8x4,7.898880,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-0,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-0,kernel_mul_mat_Ab_Bi_8x4,8.224768,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-0,kernel_swiglu,0.343040,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-0,kernel_transpose_32_16,0.249088,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-0,kernel_mul_mat_Ab_Bi_8x4,7.901952,16x1024x4,1x32x4,4096x125x1x1
+l_out-0,kernel_add,0.091904,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-1,kernel_rms_norm_mul,0.054784,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-1,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-1,kernel_mul_mat_Ab_Bi_8x4,2.228992,16x1024x4,1x32x4,4096x125x1x1
+Qcur-1,kernel_rope_norm_f32,0.059136,2048x125x1,64x1x1,128x32x125x1
+Vcur-1,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-1,kernel_mul_mat_Ab_Bi_8x4,0.666112,16x256x4,1x32x4,1024x125x1x1
+Kcur-1,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-1,kernel_mul_mat_Ab_Bi_8x4,0.615936,16x256x4,1x32x4,1024x125x1x1
+Kcur-1,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l1 (view),kernel_set_rows_f16_i64,0.017920,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l1 (reshaped) (view),kernel_set_rows_f16_i64,0.259072,2000x64x1,1x64x1,1x4194304x1x1
+node_93,mul_mm_f16_f32_kq,0.264960,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-1,kernel_soft_max_4,0.108032,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-1,mul_mm_f16_f32_kqv,0.323840,64x2x128,64x1x2,128x125x32x1
+kqv_out-1,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-1 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.033024,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-1,kernel_sum_rows_f32,0.009984,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-1 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-1,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_110,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_112,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l1 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-1,kernel_concat_f32_contiguous,0.005888,128x64x8,0x0x0,128x64x8x1
+cache_k_l1 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_122,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-1,kernel_concat_f32_non_contiguous,0.115968,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-1 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l1 (view) (view) (view),kernel_set_rows_f16_i64,0.122880,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-1,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-1,kernel_mul_mat_Ab_Bi_8x4,2.230016,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-1,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-1,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-1,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-1,kernel_mul_mat_Ab_Bi_8x4,7.805952,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-1,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-1,kernel_mul_mat_Ab_Bi_8x4,7.832064,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-1,kernel_swiglu,0.377856,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-1,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-1,kernel_mul_mat_Ab_Bi_8x4,7.960064,16x1024x4,1x32x4,4096x125x1x1
+l_out-1,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-2,kernel_rms_norm_mul,0.054784,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-2,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-2,kernel_mul_mat_Ab_Bi_8x4,2.219776,16x1024x4,1x32x4,4096x125x1x1
+Qcur-2,kernel_rope_norm_f32,0.058112,2048x125x1,64x1x1,128x32x125x1
+Vcur-2,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-2,kernel_mul_mat_Ab_Bi_8x4,0.608000,16x256x4,1x32x4,1024x125x1x1
+Kcur-2,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-2,kernel_mul_mat_Ab_Bi_8x4,0.608000,16x256x4,1x32x4,1024x125x1x1
+Kcur-2,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l2 (view),kernel_set_rows_f16_i64,0.016128,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l2 (reshaped) (view),kernel_set_rows_f16_i64,0.243968,2000x64x1,1x64x1,1x4194304x1x1
+node_163,mul_mm_f16_f32_kq,0.262912,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-2,kernel_soft_max_4,0.105984,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-2,mul_mm_f16_f32_kqv,0.338176,64x2x128,64x1x2,128x125x32x1
+kqv_out-2,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-2 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-2,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-2 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-2,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_180,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_182,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l2 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-2,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l2 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_192,kernel_get_rows_f32,0.007168,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-2,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-2 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l2 (view) (view) (view),kernel_set_rows_f16_i64,0.122880,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-2,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-2,kernel_mul_mat_Ab_Bi_8x4,2.227968,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-2,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-2,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-2,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-2,kernel_mul_mat_Ab_Bi_8x4,7.801088,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-2,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-2,kernel_mul_mat_Ab_Bi_8x4,7.730944,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-2,kernel_swiglu,0.325120,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-2,kernel_transpose_32_16,0.248832,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-2,kernel_mul_mat_Ab_Bi_8x4,10.119168,16x1024x4,1x32x4,4096x125x1x1
+l_out-2,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-3,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-3,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-3,kernel_mul_mat_Ab_Bi_8x4,2.233088,16x1024x4,1x32x4,4096x125x1x1
+Qcur-3,kernel_rope_norm_f32,0.059904,2048x125x1,64x1x1,128x32x125x1
+Vcur-3,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-3,kernel_mul_mat_Ab_Bi_8x4,0.615168,16x256x4,1x32x4,1024x125x1x1
+Kcur-3,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-3,kernel_mul_mat_Ab_Bi_8x4,0.605952,16x256x4,1x32x4,1024x125x1x1
+Kcur-3,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l3 (view),kernel_set_rows_f16_i64,0.017152,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l3 (reshaped) (view),kernel_set_rows_f16_i64,0.243968,2000x64x1,1x64x1,1x4194304x1x1
+node_233,mul_mm_f16_f32_kq,0.265984,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-3,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-3,mul_mm_f16_f32_kqv,0.313856,64x2x128,64x1x2,128x125x32x1
+kqv_out-3,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-3 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.033024,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-3,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-3 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-3,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_250,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_252,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l3 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-3,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l3 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_262,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-3,kernel_concat_f32_non_contiguous,0.115968,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-3 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l3 (view) (view) (view),kernel_set_rows_f16_i64,0.122880,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-3,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-3,kernel_mul_mat_Ab_Bi_8x4,2.217984,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-3,kernel_add,0.082176,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-3,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-3,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-3,kernel_mul_mat_Ab_Bi_8x4,7.769088,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-3,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-3,kernel_mul_mat_Ab_Bi_8x4,7.714048,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-3,kernel_swiglu,0.334080,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-3,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-3,kernel_mul_mat_Ab_Bi_8x4,7.920128,16x1024x4,1x32x4,4096x125x1x1
+l_out-3,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-4,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-4,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-4,kernel_mul_mat_Ab_Bi_8x4,2.220032,16x1024x4,1x32x4,4096x125x1x1
+Qcur-4,kernel_rope_norm_f32,0.058112,2048x125x1,64x1x1,128x32x125x1
+Vcur-4,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-4,kernel_mul_mat_Ab_Bi_8x4,0.605952,16x256x4,1x32x4,1024x125x1x1
+Kcur-4,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-4,kernel_mul_mat_Ab_Bi_8x4,0.605952,16x256x4,1x32x4,1024x125x1x1
+Kcur-4,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l4 (view),kernel_set_rows_f16_i64,0.017920,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l4 (reshaped) (view),kernel_set_rows_f16_i64,0.241920,2000x64x1,1x64x1,1x4194304x1x1
+node_303,mul_mm_f16_f32_kq,0.265984,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-4,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-4,mul_mm_f16_f32_kqv,0.331008,64x2x128,64x1x2,128x125x32x1
+kqv_out-4,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-4 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-4,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-4 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-4,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_320,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_322,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l4 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.002816,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-4,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l4 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_332,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-4,kernel_concat_f32_non_contiguous,0.115968,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-4 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l4 (view) (view) (view),kernel_set_rows_f16_i64,0.120832,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-4,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-4,kernel_mul_mat_Ab_Bi_8x4,2.214144,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-4,kernel_add,0.080896,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-4,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-4,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-4,kernel_mul_mat_Ab_Bi_8x4,7.773952,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-4,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-4,kernel_mul_mat_Ab_Bi_8x4,7.851008,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-4,kernel_swiglu,0.324096,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-4,kernel_transpose_32_16,0.247808,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-4,kernel_mul_mat_Ab_Bi_8x4,7.857152,16x1024x4,1x32x4,4096x125x1x1
+l_out-4,kernel_add,0.086784,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-5,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-5,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-5,kernel_mul_mat_Ab_Bi_8x4,2.223104,16x1024x4,1x32x4,4096x125x1x1
+Qcur-5,kernel_rope_norm_f32,0.057856,2048x125x1,64x1x1,128x32x125x1
+Vcur-5,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-5,kernel_mul_mat_Ab_Bi_8x4,0.611072,16x256x4,1x32x4,1024x125x1x1
+Kcur-5,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-5,kernel_mul_mat_Ab_Bi_8x4,0.616960,16x256x4,1x32x4,1024x125x1x1
+Kcur-5,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l5 (view),kernel_set_rows_f16_i64,0.015872,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l5 (reshaped) (view),kernel_set_rows_f16_i64,0.241920,2000x64x1,1x64x1,1x4194304x1x1
+node_373,mul_mm_f16_f32_kq,0.263168,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-5,kernel_soft_max_4,0.103936,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-5,mul_mm_f16_f32_kqv,0.311040,64x2x128,64x1x2,128x125x32x1
+kqv_out-5,kernel_cpy_f32_f32,0.039936,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-5 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.033024,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-5,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-5 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-5,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_390,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_392,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l5 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-5,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l5 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008192,8192x8x1,128x1x1,128x256x8x1
+node_402,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-5,kernel_concat_f32_non_contiguous,0.115968,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-5 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l5 (view) (view) (view),kernel_set_rows_f16_i64,0.121088,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-5,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-5,kernel_mul_mat_Ab_Bi_8x4,2.232064,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-5,kernel_add,0.081920,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-5,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-5,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-5,kernel_mul_mat_Ab_Bi_8x4,7.755008,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-5,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-5,kernel_mul_mat_Ab_Bi_8x4,7.801088,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-5,kernel_swiglu,0.323840,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-5,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-5,kernel_mul_mat_Ab_Bi_8x4,7.835904,16x1024x4,1x32x4,4096x125x1x1
+l_out-5,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-6,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-6,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-6,kernel_mul_mat_Ab_Bi_8x4,2.219008,16x1024x4,1x32x4,4096x125x1x1
+Qcur-6,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-6,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-6,kernel_mul_mat_Ab_Bi_8x4,0.602880,16x256x4,1x32x4,1024x125x1x1
+Kcur-6,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-6,kernel_mul_mat_Ab_Bi_8x4,0.606976,16x256x4,1x32x4,1024x125x1x1
+Kcur-6,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l6 (view),kernel_set_rows_f16_i64,0.015872,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l6 (reshaped) (view),kernel_set_rows_f16_i64,0.253952,2000x64x1,1x64x1,1x4194304x1x1
+node_443,mul_mm_f16_f32_kq,0.264960,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-6,kernel_soft_max_4,0.104192,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-6,mul_mm_f16_f32_kqv,0.339200,64x2x128,64x1x2,128x125x32x1
+kqv_out-6,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-6 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-6,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-6 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-6,kernel_sum_rows_f32,0.001792,109x8x1,64x1x1,1x109x8x1
+node_460,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_462,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l6 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-6,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l6 (view) (permuted) (view),kernel_set_rows_f16_i64,0.009216,8192x8x1,128x1x1,128x256x8x1
+node_472,kernel_get_rows_f32,0.007168,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-6,kernel_concat_f32_non_contiguous,0.115968,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-6 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l6 (view) (view) (view),kernel_set_rows_f16_i64,0.123904,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-6,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+attn_out-6,kernel_mul_mat_Ab_Bi_8x4,2.245120,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-6,kernel_add,0.081920,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-6,kernel_rms_norm_mul,0.057088,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-6,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-6,kernel_mul_mat_Ab_Bi_8x4,7.770880,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-6,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-6,kernel_mul_mat_Ab_Bi_8x4,7.742208,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-6,kernel_swiglu,0.321792,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-6,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-6,kernel_mul_mat_Ab_Bi_8x4,7.783936,16x1024x4,1x32x4,4096x125x1x1
+l_out-6,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-7,kernel_rms_norm_mul,0.057088,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-7,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-7,kernel_mul_mat_Ab_Bi_8x4,2.225920,16x1024x4,1x32x4,4096x125x1x1
+Qcur-7,kernel_rope_norm_f32,0.058112,2048x125x1,64x1x1,128x32x125x1
+Vcur-7,kernel_transpose_32_16,0.072960,4096x32x0,16x1x0,1024x125x1x1
+Vcur-7,kernel_mul_mat_Ab_Bi_8x4,0.614912,16x256x4,1x32x4,1024x125x1x1
+Kcur-7,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-7,kernel_mul_mat_Ab_Bi_8x4,0.658176,16x256x4,1x32x4,1024x125x1x1
+Kcur-7,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l7 (view),kernel_set_rows_f16_i64,0.015872,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l7 (reshaped) (view),kernel_set_rows_f16_i64,0.248064,2000x64x1,1x64x1,1x4194304x1x1
+node_513,mul_mm_f16_f32_kq,0.261888,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-7,kernel_soft_max_4,0.104192,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-7,mul_mm_f16_f32_kqv,0.351232,64x2x128,64x1x2,128x125x32x1
+kqv_out-7,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-7 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032768,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-7,kernel_sum_rows_f32,0.009216,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-7 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-7,kernel_sum_rows_f32,0.001792,109x8x1,64x1x1,1x109x8x1
+node_530,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_532,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l7 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-7,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l7 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_542,kernel_get_rows_f32,0.007168,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-7,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-7 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l7 (view) (view) (view),kernel_set_rows_f16_i64,0.121856,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-7,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+attn_out-7,kernel_mul_mat_Ab_Bi_8x4,2.234880,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-7,kernel_add,0.082944,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-7,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-7,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-7,kernel_mul_mat_Ab_Bi_8x4,7.773952,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-7,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-7,kernel_mul_mat_Ab_Bi_8x4,7.732992,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-7,kernel_swiglu,0.323072,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-7,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-7,kernel_mul_mat_Ab_Bi_8x4,7.846912,16x1024x4,1x32x4,4096x125x1x1
+l_out-7,kernel_add,0.083968,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-8,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-8,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-8,kernel_mul_mat_Ab_Bi_8x4,2.230016,16x1024x4,1x32x4,4096x125x1x1
+Qcur-8,kernel_rope_norm_f32,0.056832,2048x125x1,64x1x1,128x32x125x1
+Vcur-8,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-8,kernel_mul_mat_Ab_Bi_8x4,0.613120,16x256x4,1x32x4,1024x125x1x1
+Kcur-8,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-8,kernel_mul_mat_Ab_Bi_8x4,0.656896,16x256x4,1x32x4,1024x125x1x1
+Kcur-8,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l8 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l8 (reshaped) (view),kernel_set_rows_f16_i64,0.247040,2000x64x1,1x64x1,1x4194304x1x1
+node_583,mul_mm_f16_f32_kq,0.264960,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-8,kernel_soft_max_4,0.102912,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-8,mul_mm_f16_f32_kqv,0.297984,64x2x128,64x1x2,128x125x32x1
+kqv_out-8,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-8 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-8,kernel_sum_rows_f32,0.009984,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-8 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-8,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_600,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_602,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l8 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-8,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l8 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_612,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-8,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-8 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l8 (view) (view) (view),kernel_set_rows_f16_i64,0.119808,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-8,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-8,kernel_mul_mat_Ab_Bi_8x4,2.234112,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-8,kernel_add,0.080896,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-8,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-8,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-8,kernel_mul_mat_Ab_Bi_8x4,7.742976,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-8,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-8,kernel_mul_mat_Ab_Bi_8x4,7.770112,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-8,kernel_swiglu,0.323072,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-8,kernel_transpose_32_16,0.247808,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-8,kernel_mul_mat_Ab_Bi_8x4,7.836160,16x1024x4,1x32x4,4096x125x1x1
+l_out-8,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-9,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-9,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-9,kernel_mul_mat_Ab_Bi_8x4,2.242048,16x1024x4,1x32x4,4096x125x1x1
+Qcur-9,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-9,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-9,kernel_mul_mat_Ab_Bi_8x4,0.653056,16x256x4,1x32x4,1024x125x1x1
+Kcur-9,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-9,kernel_mul_mat_Ab_Bi_8x4,0.655104,16x256x4,1x32x4,1024x125x1x1
+Kcur-9,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l9 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l9 (reshaped) (view),kernel_set_rows_f16_i64,0.250112,2000x64x1,1x64x1,1x4194304x1x1
+node_653,mul_mm_f16_f32_kq,0.263936,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-9,kernel_soft_max_4,0.103936,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-9,mul_mm_f16_f32_kqv,0.347904,64x2x128,64x1x2,128x125x32x1
+kqv_out-9,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-9 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-9,kernel_sum_rows_f32,0.009216,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-9 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-9,kernel_sum_rows_f32,0.001792,109x8x1,64x1x1,1x109x8x1
+node_670,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_672,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l9 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-9,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l9 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_682,kernel_get_rows_f32,0.006144,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-9,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-9 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l9 (view) (view) (view),kernel_set_rows_f16_i64,0.120832,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-9,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+attn_out-9,kernel_mul_mat_Ab_Bi_8x4,2.238976,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-9,kernel_add,0.081920,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-9,kernel_rms_norm_mul,0.056832,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-9,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-9,kernel_mul_mat_Ab_Bi_8x4,7.771904,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-9,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-9,kernel_mul_mat_Ab_Bi_8x4,7.781120,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-9,kernel_swiglu,0.321792,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-9,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-9,kernel_mul_mat_Ab_Bi_8x4,7.802880,16x1024x4,1x32x4,4096x125x1x1
+l_out-9,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-10,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-10,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-10,kernel_mul_mat_Ab_Bi_8x4,2.241024,16x1024x4,1x32x4,4096x125x1x1
+Qcur-10,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-10,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-10,kernel_mul_mat_Ab_Bi_8x4,0.636928,16x256x4,1x32x4,1024x125x1x1
+Kcur-10,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-10,kernel_mul_mat_Ab_Bi_8x4,0.617984,16x256x4,1x32x4,1024x125x1x1
+Kcur-10,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l10 (view),kernel_set_rows_f16_i64,0.017152,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l10 (reshaped) (view),kernel_set_rows_f16_i64,0.248064,2000x64x1,1x64x1,1x4194304x1x1
+node_723,mul_mm_f16_f32_kq,0.264960,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-10,kernel_soft_max_4,0.104192,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-10,mul_mm_f16_f32_kqv,0.315136,64x2x128,64x1x2,128x125x32x1
+kqv_out-10,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-10 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-10,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-10 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-10,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_740,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_742,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l10 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.002816,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-10,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l10 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_752,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-10,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-10 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l10 (view) (view) (view),kernel_set_rows_f16_i64,0.120064,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-10,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-10,kernel_mul_mat_Ab_Bi_8x4,2.236160,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-10,kernel_add,0.082176,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-10,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-10,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-10,kernel_mul_mat_Ab_Bi_8x4,7.724800,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-10,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-10,kernel_mul_mat_Ab_Bi_8x4,7.767808,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-10,kernel_swiglu,0.322048,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-10,kernel_transpose_32_16,0.249088,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-10,kernel_mul_mat_Ab_Bi_8x4,7.794944,16x1024x4,1x32x4,4096x125x1x1
+l_out-10,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-11,kernel_rms_norm_mul,0.055808,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-11,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-11,kernel_mul_mat_Ab_Bi_8x4,2.238976,16x1024x4,1x32x4,4096x125x1x1
+Qcur-11,kernel_rope_norm_f32,0.056832,2048x125x1,64x1x1,128x32x125x1
+Vcur-11,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-11,kernel_mul_mat_Ab_Bi_8x4,0.612096,16x256x4,1x32x4,1024x125x1x1
+Kcur-11,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-11,kernel_mul_mat_Ab_Bi_8x4,0.657152,16x256x4,1x32x4,1024x125x1x1
+Kcur-11,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l11 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l11 (reshaped) (view),kernel_set_rows_f16_i64,0.250112,2000x64x1,1x64x1,1x4194304x1x1
+node_793,mul_mm_f16_f32_kq,0.265984,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-11,kernel_soft_max_4,0.103936,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-11,mul_mm_f16_f32_kqv,0.336896,64x2x128,64x1x2,128x125x32x1
+kqv_out-11,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-11 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-11,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-11 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.009216,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-11,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_810,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_812,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l11 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-11,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l11 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_822,kernel_get_rows_f32,0.007168,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-11,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-11 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l11 (view) (view) (view),kernel_set_rows_f16_i64,0.122880,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-11,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-11,kernel_mul_mat_Ab_Bi_8x4,2.231040,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-11,kernel_add,0.081920,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-11,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-11,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-11,kernel_mul_mat_Ab_Bi_8x4,7.734016,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-11,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-11,kernel_mul_mat_Ab_Bi_8x4,7.756032,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-11,kernel_swiglu,0.322048,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-11,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-11,kernel_mul_mat_Ab_Bi_8x4,7.819776,16x1024x4,1x32x4,4096x125x1x1
+l_out-11,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-12,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-12,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-12,kernel_mul_mat_Ab_Bi_8x4,2.247168,16x1024x4,1x32x4,4096x125x1x1
+Qcur-12,kernel_rope_norm_f32,0.056832,2048x125x1,64x1x1,128x32x125x1
+Vcur-12,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Vcur-12,kernel_mul_mat_Ab_Bi_8x4,0.608768,16x256x4,1x32x4,1024x125x1x1
+Kcur-12,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-12,kernel_mul_mat_Ab_Bi_8x4,0.608000,16x256x4,1x32x4,1024x125x1x1
+Kcur-12,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l12 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l12 (reshaped) (view),kernel_set_rows_f16_i64,0.249088,2000x64x1,1x64x1,1x4194304x1x1
+node_863,mul_mm_f16_f32_kq,0.264960,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-12,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-12,mul_mm_f16_f32_kqv,0.324096,64x2x128,64x1x2,128x125x32x1
+kqv_out-12,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-12 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032768,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-12,kernel_sum_rows_f32,0.009984,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-12 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-12,kernel_sum_rows_f32,0.001792,109x8x1,64x1x1,1x109x8x1
+node_880,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_882,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l12 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-12,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l12 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008192,8192x8x1,128x1x1,128x256x8x1
+node_892,kernel_get_rows_f32,0.007168,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-12,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-12 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l12 (view) (view) (view),kernel_set_rows_f16_i64,0.119040,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-12,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-12,kernel_mul_mat_Ab_Bi_8x4,2.228992,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-12,kernel_add,0.083968,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-12,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-12,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-12,kernel_mul_mat_Ab_Bi_8x4,7.716864,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-12,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-12,kernel_mul_mat_Ab_Bi_8x4,7.745024,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-12,kernel_swiglu,0.323072,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-12,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-12,kernel_mul_mat_Ab_Bi_8x4,7.791872,16x1024x4,1x32x4,4096x125x1x1
+l_out-12,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-13,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-13,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-13,kernel_mul_mat_Ab_Bi_8x4,2.238976,16x1024x4,1x32x4,4096x125x1x1
+Qcur-13,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-13,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-13,kernel_mul_mat_Ab_Bi_8x4,0.654080,16x256x4,1x32x4,1024x125x1x1
+Kcur-13,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-13,kernel_mul_mat_Ab_Bi_8x4,0.619008,16x256x4,1x32x4,1024x125x1x1
+Kcur-13,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l13 (view),kernel_set_rows_f16_i64,0.017920,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l13 (reshaped) (view),kernel_set_rows_f16_i64,0.250112,2000x64x1,1x64x1,1x4194304x1x1
+node_933,mul_mm_f16_f32_kq,0.264960,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-13,kernel_soft_max_4,0.103936,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-13,mul_mm_f16_f32_kqv,0.321024,64x2x128,64x1x2,128x125x32x1
+kqv_out-13,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-13 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-13,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-13 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-13,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_950,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_952,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l13 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.002816,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-13,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l13 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_962,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-13,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-13 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l13 (view) (view) (view),kernel_set_rows_f16_i64,0.122112,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-13,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-13,kernel_mul_mat_Ab_Bi_8x4,2.232064,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-13,kernel_add,0.082944,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-13,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-13,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-13,kernel_mul_mat_Ab_Bi_8x4,7.739904,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-13,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-13,kernel_mul_mat_Ab_Bi_8x4,7.784960,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-13,kernel_swiglu,0.323840,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-13,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-13,kernel_mul_mat_Ab_Bi_8x4,7.851008,16x1024x4,1x32x4,4096x125x1x1
+l_out-13,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-14,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-14,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-14,kernel_mul_mat_Ab_Bi_8x4,2.234112,16x1024x4,1x32x4,4096x125x1x1
+Qcur-14,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-14,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-14,kernel_mul_mat_Ab_Bi_8x4,0.605952,16x256x4,1x32x4,1024x125x1x1
+Kcur-14,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-14,kernel_mul_mat_Ab_Bi_8x4,0.604928,16x256x4,1x32x4,1024x125x1x1
+Kcur-14,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l14 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l14 (reshaped) (view),kernel_set_rows_f16_i64,0.250880,2000x64x1,1x64x1,1x4194304x1x1
+node_1003,mul_mm_f16_f32_kq,0.264192,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-14,kernel_soft_max_4,0.104192,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-14,mul_mm_f16_f32_kqv,0.345856,64x2x128,64x1x2,128x125x32x1
+kqv_out-14,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-14 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.033024,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-14,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-14 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-14,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1020,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1022,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l14 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-14,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l14 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1032,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-14,kernel_concat_f32_non_contiguous,0.116224,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-14 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l14 (view) (view) (view),kernel_set_rows_f16_i64,0.121856,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-14,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-14,kernel_mul_mat_Ab_Bi_8x4,2.234112,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-14,kernel_add,0.081920,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-14,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-14,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-14,kernel_mul_mat_Ab_Bi_8x4,7.719936,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-14,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-14,kernel_mul_mat_Ab_Bi_8x4,7.731968,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-14,kernel_swiglu,0.322816,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-14,kernel_transpose_32_16,0.249088,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-14,kernel_mul_mat_Ab_Bi_8x4,7.860992,16x1024x4,1x32x4,4096x125x1x1
+l_out-14,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-15,kernel_rms_norm_mul,0.055808,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-15,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-15,kernel_mul_mat_Ab_Bi_8x4,2.244864,16x1024x4,1x32x4,4096x125x1x1
+Qcur-15,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-15,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-15,kernel_mul_mat_Ab_Bi_8x4,0.611072,16x256x4,1x32x4,1024x125x1x1
+Kcur-15,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-15,kernel_mul_mat_Ab_Bi_8x4,0.662784,16x256x4,1x32x4,1024x125x1x1
+Kcur-15,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l15 (view),kernel_set_rows_f16_i64,0.015872,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l15 (reshaped) (view),kernel_set_rows_f16_i64,0.250112,2000x64x1,1x64x1,1x4194304x1x1
+node_1073,mul_mm_f16_f32_kq,0.263936,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-15,kernel_soft_max_4,0.103936,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-15,mul_mm_f16_f32_kqv,0.329984,64x2x128,64x1x2,128x125x32x1
+kqv_out-15,kernel_cpy_f32_f32,0.040960,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-15 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.033024,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-15,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-15 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-15,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1090,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1092,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l15 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-15,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l15 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_1102,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-15,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-15 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l15 (view) (view) (view),kernel_set_rows_f16_i64,0.122880,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-15,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-15,kernel_mul_mat_Ab_Bi_8x4,2.236928,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-15,kernel_add,0.082176,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-15,kernel_rms_norm_mul,0.052992,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-15,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-15,kernel_mul_mat_Ab_Bi_8x4,7.800064,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-15,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-15,kernel_mul_mat_Ab_Bi_8x4,7.756032,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-15,kernel_swiglu,0.333824,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-15,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-15,kernel_mul_mat_Ab_Bi_8x4,7.906048,16x1024x4,1x32x4,4096x125x1x1
+l_out-15,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-16,kernel_rms_norm_mul,0.057088,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-16,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-16,kernel_mul_mat_Ab_Bi_8x4,2.244096,16x1024x4,1x32x4,4096x125x1x1
+Qcur-16,kernel_rope_norm_f32,0.057856,2048x125x1,64x1x1,128x32x125x1
+Vcur-16,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Vcur-16,kernel_mul_mat_Ab_Bi_8x4,0.617984,16x256x4,1x32x4,1024x125x1x1
+Kcur-16,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-16,kernel_mul_mat_Ab_Bi_8x4,0.606976,16x256x4,1x32x4,1024x125x1x1
+Kcur-16,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l16 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l16 (reshaped) (view),kernel_set_rows_f16_i64,0.249088,2000x64x1,1x64x1,1x4194304x1x1
+node_1143,mul_mm_f16_f32_kq,0.262912,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-16,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-16,mul_mm_f16_f32_kqv,0.335104,64x2x128,64x1x2,128x125x32x1
+kqv_out-16,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-16 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-16,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-16 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-16,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1160,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_1162,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l16 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.002816,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-16,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l16 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1172,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-16,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-16 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l16 (view) (view) (view),kernel_set_rows_f16_i64,0.122112,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-16,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-16,kernel_mul_mat_Ab_Bi_8x4,2.253056,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-16,kernel_add,0.081920,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-16,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-16,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-16,kernel_mul_mat_Ab_Bi_8x4,7.792896,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-16,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-16,kernel_mul_mat_Ab_Bi_8x4,7.800064,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-16,kernel_swiglu,0.326912,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-16,kernel_transpose_32_16,0.249088,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-16,kernel_mul_mat_Ab_Bi_8x4,7.949056,16x1024x4,1x32x4,4096x125x1x1
+l_out-16,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-17,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-17,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-17,kernel_mul_mat_Ab_Bi_8x4,2.240000,16x1024x4,1x32x4,4096x125x1x1
+Qcur-17,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-17,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-17,kernel_mul_mat_Ab_Bi_8x4,0.624896,16x256x4,1x32x4,1024x125x1x1
+Kcur-17,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-17,kernel_mul_mat_Ab_Bi_8x4,0.609792,16x256x4,1x32x4,1024x125x1x1
+Kcur-17,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l17 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l17 (reshaped) (view),kernel_set_rows_f16_i64,0.247040,2000x64x1,1x64x1,1x4194304x1x1
+node_1213,mul_mm_f16_f32_kq,0.264960,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-17,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-17,mul_mm_f16_f32_kqv,0.317952,64x2x128,64x1x2,128x125x32x1
+kqv_out-17,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-17 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-17,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-17 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-17,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1230,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_1232,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l17 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.002816,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-17,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l17 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1242,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-17,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-17 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l17 (view) (view) (view),kernel_set_rows_f16_i64,0.122112,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-17,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-17,kernel_mul_mat_Ab_Bi_8x4,2.234880,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-17,kernel_add,0.082176,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-17,kernel_rms_norm_mul,0.056832,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-17,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-17,kernel_mul_mat_Ab_Bi_8x4,7.777024,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-17,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-17,kernel_mul_mat_Ab_Bi_8x4,7.795200,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-17,kernel_swiglu,0.324864,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-17,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-17,kernel_mul_mat_Ab_Bi_8x4,8.038912,16x1024x4,1x32x4,4096x125x1x1
+l_out-17,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-18,kernel_rms_norm_mul,0.052992,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-18,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-18,kernel_mul_mat_Ab_Bi_8x4,2.242048,16x1024x4,1x32x4,4096x125x1x1
+Qcur-18,kernel_rope_norm_f32,0.055808,2048x125x1,64x1x1,128x32x125x1
+Vcur-18,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-18,kernel_mul_mat_Ab_Bi_8x4,0.627968,16x256x4,1x32x4,1024x125x1x1
+Kcur-18,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-18,kernel_mul_mat_Ab_Bi_8x4,0.668928,16x256x4,1x32x4,1024x125x1x1
+Kcur-18,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l18 (view),kernel_set_rows_f16_i64,0.017152,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l18 (reshaped) (view),kernel_set_rows_f16_i64,0.246016,2000x64x1,1x64x1,1x4194304x1x1
+node_1283,mul_mm_f16_f32_kq,0.269056,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-18,kernel_soft_max_4,0.109056,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-18,mul_mm_f16_f32_kqv,0.314880,64x2x128,64x1x2,128x125x32x1
+kqv_out-18,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-18 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-18,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-18 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-18,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1300,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1302,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l18 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-18,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l18 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1312,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-18,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-18 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l18 (view) (view) (view),kernel_set_rows_f16_i64,0.124928,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-18,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-18,kernel_mul_mat_Ab_Bi_8x4,2.249984,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-18,kernel_add,0.083968,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-18,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-18,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-18,kernel_mul_mat_Ab_Bi_8x4,7.798016,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-18,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-18,kernel_mul_mat_Ab_Bi_8x4,7.755008,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-18,kernel_swiglu,0.328960,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-18,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-18,kernel_mul_mat_Ab_Bi_8x4,7.982848,16x1024x4,1x32x4,4096x125x1x1
+l_out-18,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-19,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-19,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-19,kernel_mul_mat_Ab_Bi_8x4,2.241024,16x1024x4,1x32x4,4096x125x1x1
+Qcur-19,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-19,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-19,kernel_mul_mat_Ab_Bi_8x4,0.613120,16x256x4,1x32x4,1024x125x1x1
+Kcur-19,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-19,kernel_mul_mat_Ab_Bi_8x4,0.610048,16x256x4,1x32x4,1024x125x1x1
+Kcur-19,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l19 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l19 (reshaped) (view),kernel_set_rows_f16_i64,0.247040,2000x64x1,1x64x1,1x4194304x1x1
+node_1353,mul_mm_f16_f32_kq,0.263936,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-19,kernel_soft_max_4,0.104192,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-19,mul_mm_f16_f32_kqv,0.333056,64x2x128,64x1x2,128x125x32x1
+kqv_out-19,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-19 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-19,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-19 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-19,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1370,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1372,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l19 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-19,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l19 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1382,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-19,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-19 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l19 (view) (view) (view),kernel_set_rows_f16_i64,0.121088,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-19,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-19,kernel_mul_mat_Ab_Bi_8x4,2.258944,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-19,kernel_add,0.081152,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-19,kernel_rms_norm_mul,0.054784,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-19,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-19,kernel_mul_mat_Ab_Bi_8x4,7.819008,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-19,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-19,kernel_mul_mat_Ab_Bi_8x4,7.798784,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-19,kernel_swiglu,0.334080,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-19,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-19,kernel_mul_mat_Ab_Bi_8x4,7.944960,16x1024x4,1x32x4,4096x125x1x1
+l_out-19,kernel_add,0.088832,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-20,kernel_rms_norm_mul,0.057088,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-20,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-20,kernel_mul_mat_Ab_Bi_8x4,2.258944,16x1024x4,1x32x4,4096x125x1x1
+Qcur-20,kernel_rope_norm_f32,0.058112,2048x125x1,64x1x1,128x32x125x1
+Vcur-20,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-20,kernel_mul_mat_Ab_Bi_8x4,0.610048,16x256x4,1x32x4,1024x125x1x1
+Kcur-20,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-20,kernel_mul_mat_Ab_Bi_8x4,0.633088,16x256x4,1x32x4,1024x125x1x1
+Kcur-20,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l20 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l20 (reshaped) (view),kernel_set_rows_f16_i64,0.250112,2000x64x1,1x64x1,1x4194304x1x1
+node_1423,mul_mm_f16_f32_kq,0.263936,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-20,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-20,mul_mm_f16_f32_kqv,0.303104,64x2x128,64x1x2,128x125x32x1
+kqv_out-20,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-20 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-20,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-20 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-20,kernel_sum_rows_f32,0.001792,109x8x1,64x1x1,1x109x8x1
+node_1440,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1442,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l20 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-20,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l20 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008192,8192x8x1,128x1x1,128x256x8x1
+node_1452,kernel_get_rows_f32,0.007168,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-20,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-20 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l20 (view) (view) (view),kernel_set_rows_f16_i64,0.121856,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-20,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+attn_out-20,kernel_mul_mat_Ab_Bi_8x4,2.251776,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-20,kernel_add,0.083200,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-20,kernel_rms_norm_mul,0.054784,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-20,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-20,kernel_mul_mat_Ab_Bi_8x4,7.734016,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-20,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-20,kernel_mul_mat_Ab_Bi_8x4,7.744000,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-20,kernel_swiglu,0.324864,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-20,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-20,kernel_mul_mat_Ab_Bi_8x4,7.902976,16x1024x4,1x32x4,4096x125x1x1
+l_out-20,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-21,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-21,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-21,kernel_mul_mat_Ab_Bi_8x4,2.264064,16x1024x4,1x32x4,4096x125x1x1
+Qcur-21,kernel_rope_norm_f32,0.058112,2048x125x1,64x1x1,128x32x125x1
+Vcur-21,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-21,kernel_mul_mat_Ab_Bi_8x4,0.653824,16x256x4,1x32x4,1024x125x1x1
+Kcur-21,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-21,kernel_mul_mat_Ab_Bi_8x4,0.601856,16x256x4,1x32x4,1024x125x1x1
+Kcur-21,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l21 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l21 (reshaped) (view),kernel_set_rows_f16_i64,0.250880,2000x64x1,1x64x1,1x4194304x1x1
+node_1493,mul_mm_f16_f32_kq,0.265984,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-21,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-21,mul_mm_f16_f32_kqv,0.332032,64x2x128,64x1x2,128x125x32x1
+kqv_out-21,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-21 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.033024,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-21,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-21 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-21,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1510,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1512,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l21 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.004096,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-21,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l21 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1522,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-21,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-21 (permuted) (cont),kernel_cpy_f32_f32,0.008192,512x64x1,64x1x1,128x8x64x1
+cache_v_l21 (view) (view) (view),kernel_set_rows_f16_i64,0.122112,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-21,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-21,kernel_mul_mat_Ab_Bi_8x4,2.269952,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-21,kernel_add,0.082176,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-21,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-21,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-21,kernel_mul_mat_Ab_Bi_8x4,7.774208,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-21,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-21,kernel_mul_mat_Ab_Bi_8x4,7.781888,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-21,kernel_swiglu,0.326912,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-21,kernel_transpose_32_16,0.249088,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-21,kernel_mul_mat_Ab_Bi_8x4,7.932928,16x1024x4,1x32x4,4096x125x1x1
+l_out-21,kernel_add,0.084992,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-22,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-22,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-22,kernel_mul_mat_Ab_Bi_8x4,2.258944,16x1024x4,1x32x4,4096x125x1x1
+Qcur-22,kernel_rope_norm_f32,0.058112,2048x125x1,64x1x1,128x32x125x1
+Vcur-22,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-22,kernel_mul_mat_Ab_Bi_8x4,0.621824,16x256x4,1x32x4,1024x125x1x1
+Kcur-22,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-22,kernel_mul_mat_Ab_Bi_8x4,0.610816,16x256x4,1x32x4,1024x125x1x1
+Kcur-22,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l22 (view),kernel_set_rows_f16_i64,0.018176,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l22 (reshaped) (view),kernel_set_rows_f16_i64,0.250880,2000x64x1,1x64x1,1x4194304x1x1
+node_1563,mul_mm_f16_f32_kq,0.262912,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-22,kernel_soft_max_4,0.107008,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-22,mul_mm_f16_f32_kqv,0.320000,64x2x128,64x1x2,128x125x32x1
+kqv_out-22,kernel_cpy_f32_f32,0.045056,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-22 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-22,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-22 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-22,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1580,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_1582,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l22 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-22,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l22 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1592,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-22,kernel_concat_f32_non_contiguous,0.115968,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-22 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l22 (view) (view) (view),kernel_set_rows_f16_i64,0.126976,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-22,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-22,kernel_mul_mat_Ab_Bi_8x4,2.259968,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-22,kernel_add,0.083968,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-22,kernel_rms_norm_mul,0.057088,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-22,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-22,kernel_mul_mat_Ab_Bi_8x4,7.734016,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-22,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-22,kernel_mul_mat_Ab_Bi_8x4,7.778816,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-22,kernel_swiglu,0.329984,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-22,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-22,kernel_mul_mat_Ab_Bi_8x4,7.961088,16x1024x4,1x32x4,4096x125x1x1
+l_out-22,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-23,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-23,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-23,kernel_mul_mat_Ab_Bi_8x4,2.245120,16x1024x4,1x32x4,4096x125x1x1
+Qcur-23,kernel_rope_norm_f32,0.057856,2048x125x1,64x1x1,128x32x125x1
+Vcur-23,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Vcur-23,kernel_mul_mat_Ab_Bi_8x4,0.662784,16x256x4,1x32x4,1024x125x1x1
+Kcur-23,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-23,kernel_mul_mat_Ab_Bi_8x4,0.619776,16x256x4,1x32x4,1024x125x1x1
+Kcur-23,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l23 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l23 (reshaped) (view),kernel_set_rows_f16_i64,0.249088,2000x64x1,1x64x1,1x4194304x1x1
+node_1633,mul_mm_f16_f32_kq,0.265984,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-23,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-23,mul_mm_f16_f32_kqv,0.315904,64x2x128,64x1x2,128x125x32x1
+kqv_out-23,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-23 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-23,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-23 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-23,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1650,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_1652,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l23 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.002816,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-23,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l23 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1662,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-23,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-23 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l23 (view) (view) (view),kernel_set_rows_f16_i64,0.120064,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-23,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-23,kernel_mul_mat_Ab_Bi_8x4,2.253056,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-23,kernel_add,0.082944,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-23,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-23,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-23,kernel_mul_mat_Ab_Bi_8x4,7.760896,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-23,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-23,kernel_mul_mat_Ab_Bi_8x4,7.819008,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-23,kernel_swiglu,0.326144,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-23,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-23,kernel_mul_mat_Ab_Bi_8x4,7.940096,16x1024x4,1x32x4,4096x125x1x1
+l_out-23,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-24,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-24,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-24,kernel_mul_mat_Ab_Bi_8x4,2.254848,16x1024x4,1x32x4,4096x125x1x1
+Qcur-24,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-24,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-24,kernel_mul_mat_Ab_Bi_8x4,0.608000,16x256x4,1x32x4,1024x125x1x1
+Kcur-24,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-24,kernel_mul_mat_Ab_Bi_8x4,0.642048,16x256x4,1x32x4,1024x125x1x1
+Kcur-24,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l24 (view),kernel_set_rows_f16_i64,0.017152,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l24 (reshaped) (view),kernel_set_rows_f16_i64,0.247808,2000x64x1,1x64x1,1x4194304x1x1
+node_1703,mul_mm_f16_f32_kq,0.264192,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-24,kernel_soft_max_4,0.105984,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-24,mul_mm_f16_f32_kqv,0.308992,64x2x128,64x1x2,128x125x32x1
+kqv_out-24,kernel_cpy_f32_f32,0.042240,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-24 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-24,kernel_sum_rows_f32,0.009216,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-24 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.009216,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-24,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1720,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1722,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l24 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-24,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l24 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1732,kernel_get_rows_f32,0.007168,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-24,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-24 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l24 (view) (view) (view),kernel_set_rows_f16_i64,0.120064,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-24,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-24,kernel_mul_mat_Ab_Bi_8x4,2.253824,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-24,kernel_add,0.081152,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-24,kernel_rms_norm_mul,0.054784,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-24,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-24,kernel_mul_mat_Ab_Bi_8x4,7.732992,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-24,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-24,kernel_mul_mat_Ab_Bi_8x4,7.747840,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-24,kernel_swiglu,0.324096,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-24,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-24,kernel_mul_mat_Ab_Bi_8x4,7.937024,16x1024x4,1x32x4,4096x125x1x1
+l_out-24,kernel_add,0.088064,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-25,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-25,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-25,kernel_mul_mat_Ab_Bi_8x4,2.243840,16x1024x4,1x32x4,4096x125x1x1
+Qcur-25,kernel_rope_norm_f32,0.058112,2048x125x1,64x1x1,128x32x125x1
+Vcur-25,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-25,kernel_mul_mat_Ab_Bi_8x4,0.610048,16x256x4,1x32x4,1024x125x1x1
+Kcur-25,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-25,kernel_mul_mat_Ab_Bi_8x4,0.615936,16x256x4,1x32x4,1024x125x1x1
+Kcur-25,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l25 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l25 (reshaped) (view),kernel_set_rows_f16_i64,0.240896,2000x64x1,1x64x1,1x4194304x1x1
+node_1773,mul_mm_f16_f32_kq,0.264960,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-25,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-25,mul_mm_f16_f32_kqv,0.349952,64x2x128,64x1x2,128x125x32x1
+kqv_out-25,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-25 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-25,kernel_sum_rows_f32,0.009216,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-25 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.009216,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-25,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1790,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1792,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l25 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-25,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l25 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1802,kernel_get_rows_f32,0.007168,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-25,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-25 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l25 (view) (view) (view),kernel_set_rows_f16_i64,0.120832,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-25,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+attn_out-25,kernel_mul_mat_Ab_Bi_8x4,2.243072,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-25,kernel_add,0.081920,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-25,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-25,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-25,kernel_mul_mat_Ab_Bi_8x4,7.811072,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-25,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-25,kernel_mul_mat_Ab_Bi_8x4,7.762944,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-25,kernel_swiglu,0.328192,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-25,kernel_transpose_32_16,0.247808,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-25,kernel_mul_mat_Ab_Bi_8x4,7.931136,16x1024x4,1x32x4,4096x125x1x1
+l_out-25,kernel_add,0.086784,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-26,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-26,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-26,kernel_mul_mat_Ab_Bi_8x4,2.254080,16x1024x4,1x32x4,4096x125x1x1
+Qcur-26,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-26,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Vcur-26,kernel_mul_mat_Ab_Bi_8x4,0.624896,16x256x4,1x32x4,1024x125x1x1
+Kcur-26,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-26,kernel_mul_mat_Ab_Bi_8x4,0.626944,16x256x4,1x32x4,1024x125x1x1
+Kcur-26,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l26 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l26 (reshaped) (view),kernel_set_rows_f16_i64,0.242944,2000x64x1,1x64x1,1x4194304x1x1
+node_1843,mul_mm_f16_f32_kq,0.263168,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-26,kernel_soft_max_4,0.105216,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-26,mul_mm_f16_f32_kqv,0.311808,64x2x128,64x1x2,128x125x32x1
+kqv_out-26,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-26 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.033024,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-26,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-26 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-26,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1860,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1862,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l26 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-26,kernel_concat_f32_contiguous,0.004864,128x64x8,0x0x0,128x64x8x1
+cache_k_l26 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_1872,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-26,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-26 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l26 (view) (view) (view),kernel_set_rows_f16_i64,0.119040,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-26,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-26,kernel_mul_mat_Ab_Bi_8x4,2.252032,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-26,kernel_add,0.082944,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-26,kernel_rms_norm_mul,0.056064,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-26,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-26,kernel_mul_mat_Ab_Bi_8x4,7.803136,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-26,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-26,kernel_mul_mat_Ab_Bi_8x4,7.761920,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-26,kernel_swiglu,0.325120,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-26,kernel_transpose_32_16,0.247808,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-26,kernel_mul_mat_Ab_Bi_8x4,7.928064,16x1024x4,1x32x4,4096x125x1x1
+l_out-26,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-27,kernel_rms_norm_mul,0.057856,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-27,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-27,kernel_mul_mat_Ab_Bi_8x4,2.268928,16x1024x4,1x32x4,4096x125x1x1
+Qcur-27,kernel_rope_norm_f32,0.058880,2048x125x1,64x1x1,128x32x125x1
+Vcur-27,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-27,kernel_mul_mat_Ab_Bi_8x4,0.634112,16x256x4,1x32x4,1024x125x1x1
+Kcur-27,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-27,kernel_mul_mat_Ab_Bi_8x4,0.610048,16x256x4,1x32x4,1024x125x1x1
+Kcur-27,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l27 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l27 (reshaped) (view),kernel_set_rows_f16_i64,0.242176,2000x64x1,1x64x1,1x4194304x1x1
+node_1913,mul_mm_f16_f32_kq,0.261888,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-27,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-27,mul_mm_f16_f32_kqv,0.316928,64x2x128,64x1x2,128x125x32x1
+kqv_out-27,kernel_cpy_f32_f32,0.043008,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-27 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-27,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-27 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-27,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_1930,kernel_argsort_f32_i32,0.015104,128x8x1,128x1x1,109x8x1x1
+node_1932,kernel_get_rows_f16,0.005888,3072x8x1,64x1x1,128x48x8x1
+cache_k_l27 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-27,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l27 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_1942,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-27,kernel_concat_f32_non_contiguous,0.115968,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-27 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l27 (view) (view) (view),kernel_set_rows_f16_i64,0.118784,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-27,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+attn_out-27,kernel_mul_mat_Ab_Bi_8x4,2.243840,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-27,kernel_add,0.082176,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-27,kernel_rms_norm_mul,0.056832,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-27,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-27,kernel_mul_mat_Ab_Bi_8x4,7.752192,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-27,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-27,kernel_mul_mat_Ab_Bi_8x4,7.781888,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-27,kernel_swiglu,0.324096,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-27,kernel_transpose_32_16,0.247808,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-27,kernel_mul_mat_Ab_Bi_8x4,7.953152,16x1024x4,1x32x4,4096x125x1x1
+l_out-27,kernel_add,0.085760,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-28,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-28,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,4096x125x1x1
+Qcur-28,kernel_mul_mat_Ab_Bi_8x4,2.246144,16x1024x4,1x32x4,4096x125x1x1
+Qcur-28,kernel_rope_norm_f32,0.056832,2048x125x1,64x1x1,128x32x125x1
+Vcur-28,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Vcur-28,kernel_mul_mat_Ab_Bi_8x4,0.620800,16x256x4,1x32x4,1024x125x1x1
+Kcur-28,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-28,kernel_mul_mat_Ab_Bi_8x4,0.608768,16x256x4,1x32x4,1024x125x1x1
+Kcur-28,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l28 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l28 (reshaped) (view),kernel_set_rows_f16_i64,0.248064,2000x64x1,1x64x1,1x4194304x1x1
+node_1983,mul_mm_f16_f32_kq,0.263936,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-28,kernel_soft_max_4,0.105984,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-28,mul_mm_f16_f32_kqv,0.338944,64x2x128,64x1x2,128x125x32x1
+kqv_out-28,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-28 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-28,kernel_sum_rows_f32,0.009984,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-28 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-28,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_2000,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_2002,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l28 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.003072,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-28,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l28 (view) (permuted) (view),kernel_set_rows_f16_i64,0.007936,8192x8x1,128x1x1,128x256x8x1
+node_2012,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-28,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-28 (permuted) (cont),kernel_cpy_f32_f32,0.007168,512x64x1,64x1x1,128x8x64x1
+cache_v_l28 (view) (view) (view),kernel_set_rows_f16_i64,0.120064,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-28,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-28,kernel_mul_mat_Ab_Bi_8x4,2.244096,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-28,kernel_add,0.082944,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-28,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-28,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-28,kernel_mul_mat_Ab_Bi_8x4,7.747072,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-28,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-28,kernel_mul_mat_Ab_Bi_8x4,7.744000,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-28,kernel_swiglu,0.326912,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-28,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-28,kernel_mul_mat_Ab_Bi_8x4,7.927040,16x1024x4,1x32x4,4096x125x1x1
+l_out-28,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-29,kernel_rms_norm_mul,0.055040,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-29,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-29,kernel_mul_mat_Ab_Bi_8x4,2.251008,16x1024x4,1x32x4,4096x125x1x1
+Qcur-29,kernel_rope_norm_f32,0.058112,2048x125x1,64x1x1,128x32x125x1
+Vcur-29,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-29,kernel_mul_mat_Ab_Bi_8x4,0.621056,16x256x4,1x32x4,1024x125x1x1
+Kcur-29,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-29,kernel_mul_mat_Ab_Bi_8x4,0.663040,16x256x4,1x32x4,1024x125x1x1
+Kcur-29,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l29 (view),kernel_set_rows_f16_i64,0.016128,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l29 (reshaped) (view),kernel_set_rows_f16_i64,0.256000,2000x64x1,1x64x1,1x4194304x1x1
+node_2053,mul_mm_f16_f32_kq,0.264192,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-29,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-29,mul_mm_f16_f32_kqv,0.307968,64x2x128,64x1x2,128x125x32x1
+kqv_out-29,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-29 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-29,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-29 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-29,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_2070,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_2072,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l29 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.002816,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-29,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l29 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_2082,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-29,kernel_concat_f32_non_contiguous,0.118016,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-29 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l29 (view) (view) (view),kernel_set_rows_f16_i64,0.126976,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-29,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-29,kernel_mul_mat_Ab_Bi_8x4,2.247168,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-29,kernel_add,0.081920,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-29,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-29,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-29,kernel_mul_mat_Ab_Bi_8x4,7.753984,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-29,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-29,kernel_mul_mat_Ab_Bi_8x4,7.781888,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-29,kernel_swiglu,0.327168,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-29,kernel_transpose_32_16,0.248832,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-29,kernel_mul_mat_Ab_Bi_8x4,7.948032,16x1024x4,1x32x4,4096x125x1x1
+l_out-29,kernel_add,0.086016,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-30,kernel_rms_norm_mul,0.054016,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-30,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-30,kernel_mul_mat_Ab_Bi_8x4,2.243072,16x1024x4,1x32x4,4096x125x1x1
+Qcur-30,kernel_rope_norm_f32,0.057856,2048x125x1,64x1x1,128x32x125x1
+Vcur-30,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-30,kernel_mul_mat_Ab_Bi_8x4,0.659968,16x256x4,1x32x4,1024x125x1x1
+Kcur-30,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,1024x125x1x1
+Kcur-30,kernel_mul_mat_Ab_Bi_8x4,0.620800,16x256x4,1x32x4,1024x125x1x1
+Kcur-30,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l30 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l30 (reshaped) (view),kernel_set_rows_f16_i64,0.243968,2000x64x1,1x64x1,1x4194304x1x1
+node_2123,mul_mm_f16_f32_kq,0.263936,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-30,kernel_soft_max_4,0.103936,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-30,mul_mm_f16_f32_kqv,0.314112,64x2x128,64x1x2,128x125x32x1
+kqv_out-30,kernel_cpy_f32_f32,0.041984,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-30 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-30,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-30 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-30,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_2140,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_2142,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l30 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.004096,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-30,kernel_concat_f32_contiguous,0.005120,128x64x8,0x0x0,128x64x8x1
+cache_k_l30 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_2152,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-30,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-30 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l30 (view) (view) (view),kernel_set_rows_f16_i64,0.122112,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-30,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-30,kernel_mul_mat_Ab_Bi_8x4,2.254848,16x1024x4,1x32x4,4096x125x1x1
+ffn_inp-30,kernel_add,0.082176,8000x1x1,64x1x1,4096x125x1x1
+ffn_norm-30,kernel_rms_norm_mul,0.053760,128000x1x1,1024x1x1,4096x125x1x1
+ffn_gate-30,kernel_transpose_32_16,0.072192,4096x32x0,16x1x0,14336x125x1x1
+ffn_gate-30,kernel_mul_mat_Ab_Bi_8x4,7.709952,16x3584x4,1x32x4,14336x125x1x1
+ffn_up-30,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,14336x125x1x1
+ffn_up-30,kernel_mul_mat_Ab_Bi_8x4,7.753984,16x3584x4,1x32x4,14336x125x1x1
+ffn_swiglu-30,kernel_swiglu,0.324864,64000x1x1,512x1x1,14336x125x1x1
+ffn_out-30,kernel_transpose_32_16,0.248064,14336x32x0,16x1x0,4096x125x1x1
+ffn_out-30,kernel_mul_mat_Ab_Bi_8x4,7.930112,16x1024x4,1x32x4,4096x125x1x1
+l_out-30,kernel_add,0.085248,8000x1x1,64x1x1,4096x125x1x1
+attn_norm-31,kernel_rms_norm_mul,0.057088,128000x1x1,1024x1x1,4096x125x1x1
+Qcur-31,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+Qcur-31,kernel_mul_mat_Ab_Bi_8x4,2.257920,16x1024x4,1x32x4,4096x125x1x1
+Qcur-31,kernel_rope_norm_f32,0.057088,2048x125x1,64x1x1,128x32x125x1
+Vcur-31,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Vcur-31,kernel_mul_mat_Ab_Bi_8x4,0.620032,16x256x4,1x32x4,1024x125x1x1
+Kcur-31,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,1024x125x1x1
+Kcur-31,kernel_mul_mat_Ab_Bi_8x4,0.616960,16x256x4,1x32x4,1024x125x1x1
+Kcur-31,kernel_rope_norm_f32,0.012032,512x125x1,64x1x1,128x8x125x1
+cache_k_l31 (view),kernel_set_rows_f16_i64,0.016896,128000x1x1,1024x1x1,1024x4096x1x1
+cache_v_l31 (reshaped) (view),kernel_set_rows_f16_i64,0.240896,2000x64x1,1x64x1,1x4194304x1x1
+node_2193,mul_mm_f16_f32_kq,0.263936,64x4x128,64x1x2,256x125x32x1
+kq_soft_max-31,kernel_soft_max_4,0.104960,8000x32x1,64x1x1,256x125x32x1
+snapkv_kqv-31,mul_mm_f16_f32_kqv,0.315136,64x2x128,64x1x2,128x125x32x1
+kqv_out-31,kernel_cpy_f32_f32,0.040960,2048x125x1,64x1x1,4096x125x1x1
+kq_soft_max-31 (view) (view) (permuted) (cont),kernel_cpy_f32_f32,0.032000,1744x32x1,16x1x1,16x109x32x1
+snapkv_importance-31,kernel_sum_rows_f32,0.008960,109x32x1,64x1x1,1x109x32x1
+snapkv_importance-31 (reshaped) (reshaped) (permuted) (cont),kernel_cpy_f32_f32,0.008960,436x8x1,4x1x1,4x109x8x1
+snapkv_imp_kv-31,kernel_sum_rows_f32,0.002048,109x8x1,64x1x1,1x109x8x1
+node_2210,kernel_argsort_f32_i32,0.014848,128x8x1,128x1x1,109x8x1x1
+node_2212,kernel_get_rows_f16,0.006144,3072x8x1,64x1x1,128x48x8x1
+cache_k_l31 (view) (permuted) (view) (copy),kernel_cpy_f16_f32,0.002816,1024x8x1,64x1x1,128x16x8x1
+snapkv_K_packed-31,kernel_concat_f32_contiguous,0.004096,128x64x8,0x0x0,128x64x8x1
+cache_k_l31 (view) (permuted) (view),kernel_set_rows_f16_i64,0.008960,8192x8x1,128x1x1,128x256x8x1
+node_2222,kernel_get_rows_f32,0.006912,3072x8x1,64x1x1,128x48x8x1
+snapkv_V_packed-31,kernel_concat_f32_non_contiguous,0.116992,64x8x1,0x0x0,128x64x8x1
+snapkv_V_packed-31 (permuted) (cont),kernel_cpy_f32_f32,0.006912,512x64x1,64x1x1,128x8x64x1
+cache_v_l31 (view) (view) (view),kernel_set_rows_f16_i64,0.121088,1024x64x1,1x64x1,1x4194304x1x1
+attn_out-31,kernel_transpose_32_16,0.071936,4096x32x0,16x1x0,4096x125x1x1
+attn_out-31,kernel_mul_mat_Ab_Bi_8x4,2.245888,16x1024x4,1x32x4,4096x125x1x1
+node_2233,kernel_get_rows_f32,0.017152,64x1x1,64x1x1,4096x1x1x1
+node_2234,kernel_get_rows_f32,0.016896,64x1x1,64x1x1,4096x1x1x1
+ffn_inp-31,kernel_add_row,0.002048,1024x0x0,64x0x0,4096x1x1x1
+ffn_norm-31,kernel_rms_norm_mul,0.006144,1024x1x1,1024x1x1,4096x1x1x1
+ffn_gate-31,kernel_gemv_noshuffle,0.545792,7168x4x1,64x4x1,14336x1x1x1
+ffn_up-31,kernel_gemv_noshuffle,0.560128,7168x4x1,64x4x1,14336x1x1x1
+ffn_swiglu-31,kernel_swiglu,0.012032,512x1x1,512x1x1,14336x1x1x1
+ffn_out-31,kernel_gemv_noshuffle,0.534784,2048x4x1,64x4x1,4096x1x1x1
+l_out-31,kernel_add_row,0.002048,1024x0x0,64x0x0,4096x1x1x1
+result_norm,kernel_rms_norm_mul,0.005888,1024x1x1,1024x1x1,4096x1x1x1
+result_output,kernel_transpose_32_16,0.006144,4096x2x0,16x1x0,128256x1x1x1
+result_output,kernel_mul_mat_Ab_Bi_8x4,5.666048,1x32064x4,1x32x4,128256x1x1x1

@@ -1,0 +1,82 @@
+Loading and parsing CSV...
+Loaded 1282 operations
+
+Categorizing operations...
+Found 33 operation categories
+
+Computing statistics...
+
+================================================================================
+SnapKV Prefill Overhead Analysis (125 tokens, 32 layers)
+================================================================================
+
+━━━ Standard Operations (exist in naive) ━━━
+Operation                           Mean (ms)    Total (ms)   Count   
+--------------------------------------------------------------------------------
+Attn Norm                                0.058        1.844       32
+Attn Out                                 1.157       74.074       64
+Cache K Write                            0.017        0.542       32
+Cache V Write                            0.249        7.972       32
+Ffn Gate                                 3.866      243.577       63
+Ffn Inp                                  0.080        2.575       32
+Ffn Norm                                 0.054        1.717       32
+Ffn Out                                  4.053      255.326       63
+Ffn Swiglu                               0.318       10.181       32
+Ffn Up                                   3.875      244.122       63
+Kcur                                     0.237       22.726       96
+Kq                                       0.264        8.463       32
+Kq Softmax                               0.105        3.373       32
+Kqv Out                                  0.043        1.365       32
+L Out                                    0.083        2.666       32
+Qcur                                     0.791       75.912       96
+Result Norm                              0.006        0.006        1
+Result Output                            2.836        5.672        2
+Vcur                                     0.348       22.276       64
+--------------------------------------------------------------------------------
+Standard Total                                      984.389
+
+━━━ SnapKV-Specific Operations (compression overhead) ━━━
+Operation                           Mean (ms)    Total (ms)   Count   
+--------------------------------------------------------------------------------
+  [Importance Scoring Stage]
+    Full Kqv                             0.325       10.397       32
+    Kq Copy                              0.032        1.033       32
+    Importance Sum                       0.009        0.293       32
+    Importance Reshape                   0.009        0.287       32
+    Imp Gqa Reduce                       0.002        0.064       32
+    Argsort                              0.015        0.480       32
+    Subtotal                                         12.554
+
+  [K Packing Stage]
+    K Get Rows                           0.006        0.192       32
+    K Win Copy                           0.003        0.098       32
+    K Concat                             0.005        0.159       32
+    K Pack Write                         0.008        0.268       32
+    Subtotal                                          0.718
+
+  [V Packing Stage]
+    V Get Rows                           0.008        0.257       34
+    V Concat                             0.117        3.747       32
+    V Permute                            0.007        0.227       32
+    V Pack Write                         0.122        3.902       32
+    Subtotal                                          8.133
+
+--------------------------------------------------------------------------------
+SnapKV Overhead Total                                21.405
+
+================================================================================
+Summary
+================================================================================
+Standard operations:          984.389 ms ( 97.9%)
+SnapKV overhead:               21.405 ms (  2.1%)
+  - Importance scoring:        12.554 ms ( 58.7% of overhead)
+  - K packing:                  0.718 ms (  3.4% of overhead)
+  - V packing:                  8.133 ms ( 38.0% of overhead)
+───────────────────────────────────
+Total prefill time:          1005.794 ms
+
+Per-layer SnapKV overhead breakdown (average):
+  Importance scoring:     0.392 ms/layer
+  K packing:              0.022 ms/layer
+  V packing:              0.254 ms/layer
+  Total overhead:         0.669 ms/layer

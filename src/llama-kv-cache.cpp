@@ -962,6 +962,11 @@ uint32_t llama_kv_cache::get_n_stream() const {
     return n_stream;
 }
 
+// for SnapKV
+bool llama_kv_cache::get_v_trans() const {
+    return v_trans;
+}
+
 bool llama_kv_cache::get_has_shift() const {
     bool result = false;
 
@@ -2005,6 +2010,16 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
 
 uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
+}
+
+// for SnapKV
+uint32_t llama_kv_cache_context::get_kv_size() const {
+    return kv->get_size();
+}
+
+// for SnapKV
+bool llama_kv_cache_context::get_v_trans() const {
+    return kv->get_v_trans();
 }
 
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {

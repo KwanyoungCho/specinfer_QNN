@@ -105,6 +105,18 @@ llama_context::llama_context(
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
 
+    cparams.snapkv            = params.snapkv;
+    cparams.snapkv_obs_window = params.snapkv_obs_window;
+    cparams.snapkv_budget     = params.snapkv_budget;
+
+    if (cparams.snapkv) {
+        if (cparams.flash_attn) {
+            LLAMA_LOG_WARN("%s: SnapKV requires non-Flash Attention path - forcing flash_attn off\n", __func__);
+            cparams.flash_attn = false;
+        }
+        LLAMA_LOG_INFO("%s: SnapKV enabled: obs_window=%u, budget=%u\n", __func__, cparams.snapkv_obs_window, cparams.snapkv_budget);
+    }
+
     {
         const char * LLAMA_GRAPH_REUSE_DISABLE = getenv("LLAMA_GRAPH_REUSE_DISABLE");
         graph_reuse_disable = LLAMA_GRAPH_REUSE_DISABLE ? (atoi(LLAMA_GRAPH_REUSE_DISABLE) != 0) : graph_reuse_disable;
@@ -1248,6 +1260,20 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 case GGML_STATUS_FAILED:       return -3;
                 case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
             }
+        }
+
+        // SnapKV: after graph execution, compress KV cache cell metadata
+        if (cparams.snapkv && ubatch.n_tokens > cparams.snapkv_budget) {
+            const llama_pos budget = (llama_pos) cparams.snapkv_budget;
+            for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
+                    const llama_seq_id seq_id = ubatch.seq_id[i][s];
+                    memory->seq_rm(seq_id, budget, -1);
+                    break;
+                }
+            }
+            LLAMA_LOG_INFO("%s: SnapKV compressed KV cache from %u to %u entries\n",
+                    __func__, ubatch.n_tokens, cparams.snapkv_budget);
         }
 
         // plot the computation graph in dot format (for debugging purposes)
@@ -2731,6 +2757,9 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.snapkv                      =*/ false,
+        /*.snapkv_obs_window           =*/ 32,
+        /*.snapkv_budget               =*/ 256,
     };
 
     return result;

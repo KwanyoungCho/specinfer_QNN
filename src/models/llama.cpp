@@ -16,6 +16,12 @@ llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_para
 
     auto * inp_attn = build_attn_inp_kv();
 
+    // SnapKV: create shared packing-index input once (reused by all layers)
+    llm_graph_input_snapkv_pack * inp_pack = nullptr;
+    if (cparams.snapkv) {
+        inp_pack = build_snapkv_pack_inp(inp_attn->mctx);
+    }
+
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
@@ -80,9 +86,15 @@ llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_para
                 cb(Qcur, "Qcur_normed", il);
                 cb(Kcur, "Kcur_normed", il);
             }
-            cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].bo,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            if (cparams.snapkv && n_tokens > (int64_t) cparams.snapkv_budget) {
+                cur = build_attn_snapkv(inp_attn, inp_pack,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, kq_scale, il);
+            } else {
+                cur = build_attn(inp_attn,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            }
             cb(cur, "attn_out", il);
         }
         if (il == n_layer - 1 && inp_out_ids) {

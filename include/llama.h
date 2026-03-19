@@ -363,6 +363,9 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        bool snapkv;      // enable SnapKV selective KV cache compression during prefill
+        uint32_t snapkv_obs_window; // observation window size for importance calculation (default: 32)
+        uint32_t snapkv_budget;     // number of KV entries to keep per head after compression (default: 256)
     };
 
     // model quantization parameters

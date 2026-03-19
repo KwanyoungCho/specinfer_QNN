@@ -132,6 +132,7 @@ public:
 
     uint32_t get_size()     const;
     uint32_t get_n_stream() const;
+    bool     get_v_trans()  const;
 
     bool get_has_shift() const;
 
@@ -311,6 +312,8 @@ public:
     //
 
     uint32_t get_n_kv() const;
+    uint32_t get_kv_size() const;
+    bool     get_v_trans() const;
 
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;

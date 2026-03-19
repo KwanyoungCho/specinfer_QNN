@@ -306,6 +306,34 @@ public:
     const llama_kv_cache_context * mctx;
 };
 
+class llm_graph_input_snapkv_pack : public llm_graph_input_i {
+public:
+    llm_graph_input_snapkv_pack(
+            uint32_t budget,
+            uint32_t n_embd_v_gqa,
+            uint32_t kv_size,
+            uint32_t n_stream,
+            bool     v_trans) :
+        budget(budget),
+        n_embd_v_gqa(n_embd_v_gqa),
+        kv_size(kv_size),
+        n_stream(n_stream),
+        v_trans(v_trans) {
+    }
+    ~llm_graph_input_snapkv_pack() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * k_dst_idx   = nullptr; // I64 [budget]
+    ggml_tensor * v_pack_idxs = nullptr; // I64 [n_embd_v_gqa * budget * n_stream] (v_trans only)
+
+    uint32_t budget;
+    uint32_t n_embd_v_gqa;
+    uint32_t kv_size;
+    uint32_t n_stream;
+    bool     v_trans;
+};
+
 class llm_graph_input_attn_kv_iswa : public llm_graph_input_i {
 public:
     llm_graph_input_attn_kv_iswa(
@@ -735,6 +763,22 @@ struct llm_graph_context {
             ggml_tensor * kq_b,
             ggml_tensor * sinks, // [n_head_q]
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+                  float   kq_scale,
+                    int   il) const;
+
+    // SnapKV: create shared packing-index input (call once before the layer loop)
+    llm_graph_input_snapkv_pack * build_snapkv_pack_inp(
+            const llama_kv_cache_context * mctx_cur) const;
+
+    // SnapKV: per-layer importance-based KV compression + attention
+    ggml_tensor * build_attn_snapkv(
+            llm_graph_input_attn_kv * inp,
+            llm_graph_input_snapkv_pack * inp_pack,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
                   float   kq_scale,
                     int   il) const;
 
