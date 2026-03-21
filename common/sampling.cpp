@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include "log.h"
+#include "../src/llama-model.h"
 
 #include <algorithm>
 #include <cmath>
@@ -124,9 +125,11 @@ struct common_sampler {
         const auto * logits = llama_get_logits_ith(ctx, idx);
 
         const llama_model * model = llama_get_model(ctx);
-        const llama_vocab * vocab = llama_model_get_vocab(model);
+        // const llama_vocab * vocab = llama_model_get_vocab(model);
 
-        const int n_vocab = llama_vocab_n_tokens(vocab);
+        // const int n_vocab = llama_vocab_n_tokens(vocab);
+
+        const int n_vocab = model->n_vocab_out();
 
         cur.resize(n_vocab);
 

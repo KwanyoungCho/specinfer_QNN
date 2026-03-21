@@ -616,7 +616,8 @@ float * llama_context::get_logits_ith(int32_t i) {
             throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
         }
 
-        return logits + j*model.vocab.n_tokens();
+        // return logits + j*model.vocab.n_tokens();
+        return logits + j*model.n_vocab_out(); // by jongjip
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG

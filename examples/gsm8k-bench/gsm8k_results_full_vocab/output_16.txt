@@ -72,9 +72,9 @@ print_info: EOG token        = 128009 '<|eot_id|>'
 print_info: max token length = 256
 llama_model_load: vocab only - skipping tensors
 llama_context: constructing llama_context
-llama_context: n_ctx is not divisible by n_seq_max - rounding down to 128000
-llama_context: n_seq_max     = 500
-llama_context: n_ctx         = 128000
+llama_context: n_ctx is not divisible by n_seq_max - rounding down to 5120
+llama_context: n_seq_max     = 20
+llama_context: n_ctx         = 5120
 llama_context: n_ctx_seq     = 256
 llama_context: n_batch       = 2048
 llama_context: n_ubatch      = 512
@@ -84,6 +84,59 @@ llama_context: kv_unified    = false
 llama_context: freq_base     = 0.0
 llama_context: freq_scale    = 1
 llama_context: n_ctx_seq (256) > n_ctx_train (0) -- possible training context overflow
+[ModelParams] Loaded from: params.json
+  dim=4096, n_layers=32, n_heads=32, n_kv_heads=8
+  head_dim=128, vocab_size=128256
+[Multi-Context] Auto-detecting shards in: ctx_out_0221
+[Multi-Context] Total shards detected: 8
+QnnDsp <E> Error from rpc transport res[0]:8003
+
+QnnDsp <E> Failed to map buffer of size 465567744
+
+QnnDsp <E> Failed to map weights buffer to device!
+
+QnnDsp <E> Could not map shared weights buffer!
+
+QnnDsp <E> Failed to map shared weights for contextId 5 on deviceId 0, coreId 0, pdId 0, err: 1002
+
+QnnDsp <E> Context create from binary failed for deviceId 0 coreId 0 pdId 0 for context 5, err 1002
+
+QnnDsp <E> Error from rpc transport res[0]:8003
+
+QnnDsp <E> Context 5 failed on pd 0
+
+QnnDsp <E> Error from rpc transport res[0]:8003
+
+QnnDsp <E> Failed to map buffer of size 465567744
+
+QnnDsp <E> Failed to map weights buffer to device!
+
+QnnDsp <E> Could not map shared weights buffer!
+
+QnnDsp <E> Failed to map shared weights for contextId 6 on deviceId 0, coreId 0, pdId 0, err: 1002
+
+QnnDsp <E> Context create from binary failed for deviceId 0 coreId 0 pdId 0 for context 6, err 1002
+
+QnnDsp <E> Error from rpc transport res[0]:8003
+
+QnnDsp <E> Context 6 failed on pd 0
+
+QnnDsp <E> Error from rpc transport res[0]:8003
+
+QnnDsp <E> Failed to map buffer of size 574619648
+
+QnnDsp <E> Failed to map weights buffer to device!
+
+QnnDsp <E> Could not map shared weights buffer!
+
+QnnDsp <E> Failed to map shared weights for contextId 7 on deviceId 0, coreId 0, pdId 0, err: 1002
+
+QnnDsp <E> Context create from binary failed for deviceId 0 coreId 0 pdId 0 for context 7, err 1002
+
+QnnDsp <E> Error from rpc transport res[0]:8003
+
+QnnDsp <E> Context 7 failed on pd 0
+
 [QNN] Target model runner initialized successfully
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
 llama_model_loader: loaded meta data with 28 key-value pairs and 11 tensors from EAGLE-llama3-q4_0.gguf (version GGUF V3 (latest))
@@ -183,7 +236,7 @@ load_tensors:          CPU model buffer size =   281.81 MiB
 load_tensors:       OpenCL model buffer size =   416.83 MiB
 .........
 llama_context: constructing llama_context
-llama_context: n_seq_max     = 500
+llama_context: n_seq_max     = 20
 llama_context: n_ctx         = 4096
 llama_context: n_ctx_seq     = 4096
 llama_context: n_batch       = 2048
@@ -194,9 +247,9 @@ llama_context: kv_unified    = true
 llama_context: freq_base     = 500000.0
 llama_context: freq_scale    = 1
 llama_context: n_ctx_seq (4096) > n_ctx_train (2048) -- possible training context overflow
-llama_context:        CPU  output buffer size =   244.63 MiB
+llama_context:        CPU  output buffer size =     9.79 MiB
 llama_kv_cache:     OpenCL KV buffer size =    16.00 MiB
-llama_kv_cache: size =   16.00 MiB (  4096 cells,   1 layers, 500/1 seqs), K (f16):    8.00 MiB, V (f16):    8.00 MiB
+llama_kv_cache: size =   16.00 MiB (  4096 cells,   1 layers, 20/1 seqs), K (f16):    8.00 MiB, V (f16):    8.00 MiB
 llama_context:     OpenCL compute buffer size =   292.01 MiB
 llama_context:        CPU compute buffer size =    28.01 MiB
 llama_context: graph nodes  = 40
@@ -205,17 +258,12 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: setting dry_penalty_last_n to ctx_size = 4096
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
-[ModelParams] Loaded from: params.json
-  dim=4096, n_layers=32, n_heads=32, n_kv_heads=8
-  head_dim=128, vocab_size=128256
-[Multi-Context] Auto-detecting shards in: ctx_out_0316
-[Multi-Context] Total shards detected: 8
 [Multi-Context] All 8 contexts created
-[KV Cache] Allocated 67.9375 MiB (layer-wise for all shards)
+[KV Cache] Allocated 65.9375 MiB (layer-wise for all shards)
 [Shared Buffers] Allocated:
-  hidden_state: 512 KiB
+  hidden_state: 256 KiB
   rope_cos/sin: 512 KiB
-  attention_mask: 128 KiB
+  attention_mask: 64 KiB
 [Init] All components initialized successfully
 
 
@@ -225,40 +273,40 @@ You are a helpful, respectful and honest assistant. Always answer as helpfully a
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.<|eot_id|><|start_header_id|>user<|end_header_id|>
 
-Indras has 6 letters in her name. Her sister's name has 4 more letters than half of the letters in Indras' name. How many letters are in Indras and her sister's names?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+After transferring to a new school, Amy made 20 more friends than Lily. If Lily made 50 friends, how many friends do Lily and Amy have together?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
-Let's break it down step by step!
+Let's break it down step by step.
 
-Indras has 6 letters in her name.
+Amy made 20 more friends than Lily, and Lily made 5 more friends. This is a clever way of saying that Amy has 20 more than Lily.
 
-Half of the letters in Indras' name would be 6/2 = 3.
+Lily is stated to have makes 50 friends. So, if Amy has 50 friends, and Amy made 20 more than Lily, then Amy made:
 
-Her sister's name has 4 more letters than half of the letters in Indras' name, which means it has 3 + 4 = 7 letters.
+50 + 20 = 70 friends.
 
-So, Indras' name has 6 letters, and her sister's name has 7 letters.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+To find the total number of friends that Lily and Amy have together, we need to add the number of friends. So, 50 + 50 = 100.
+
+Lily and Amy have 100 friends together.<|eot_id|><|eot_id|>assistant
 
 
 ============================================================
-          EAGLE-2-QNN  Performance Summary
+          EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   159 tokens |    478.34 ms |   332.40 t/s
-  Decode            :    97 tokens |  27767.63 ms |     3.49 t/s
-  Decode latency    :              |    286.26 ms/tok
+  Prefill           :   149 tokens |    627.77 ms |   237.35 t/s
+  Decode            :   131 tokens |   6384.44 ms |    20.52 t/s
+  Decode latency    :              |     48.74 ms/tok
 ------------------------------------------------------------
-  n_draft   = 500
-  n_predict = 97
-  n_drafted = 88 (depth), total_draft_tokens = 1298
-  n_accept  = 74
-  Draft length (depth)  : 5.000
-  Draft tokens/step     : 59.000
-  Avg accept length     : 4.364
-  Accept ratio          : 84.091%
+  Draft length          : 4.000
+  Avg accept length     : 3.939
+  Accept ratio          : 73.485%
 ------------------------------------------------------------
-  Avg draft phase       :   795.045 ms
-  Avg verification      :   433.043 ms
-  Avg T_d (1-tok dft)   :    24.043 ms
-  Avg (draft+verify)    :  1228.089 ms
+  Avg draft phase       :    79.909 ms
+  Avg verification      :   108.529 ms
+  Avg T_d (1-tok dft)   :    11.192 ms
+  Avg (draft+verify)    :   188.439 ms
 ------------------------------------------------------------
+  Avg tgt sampling      :     0.141 ms
+  Avg dft sampling      :     0.140 ms
+============================================================
 
 
