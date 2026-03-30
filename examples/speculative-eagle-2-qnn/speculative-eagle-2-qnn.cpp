@@ -43,8 +43,9 @@ static bool cb_get_hidden(struct ggml_tensor * tensor, bool ask, void * user_dat
 
     auto * cb_data = (struct callback_data *) user_data;
     auto n_bytes = ggml_nbytes(tensor);
-    cb_data->data.resize(n_bytes / sizeof(float));
-    ggml_backend_tensor_get(tensor, cb_data->data.data(), 0, n_bytes);
+    size_t prev_size = cb_data->data.size();
+    cb_data->data.resize(prev_size + n_bytes / sizeof(float));
+    ggml_backend_tensor_get(tensor, cb_data->data.data() + prev_size, 0, n_bytes);
 
     return true;
 }
@@ -339,6 +340,7 @@ int main(int argc, char ** argv) {
     std::vector<float> backup_data = final_hs;
 
     // Draft model prefill with EAGLE hidden state sharing
+    cb_data.data.clear();
     llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
 
     LOG("\n");LOG("\n");
@@ -717,6 +719,7 @@ int main(int argc, char ** argv) {
                     common_batch_add  (batch_dft, recompute[i], recompute_point + i, { 0 }, false);
                 }
                 // const auto recompute_decode_start = ggml_time_us();
+                cb_data.data.clear();
                 llama_decode_eagle(ctx_dft, batch_dft, temp4.data());
                 // const auto recompute_decode_end = ggml_time_us();
             }
@@ -725,6 +728,7 @@ int main(int argc, char ** argv) {
             common_batch_add(batch_dft, token_id, n_past_dft, {0}, true);
 
             // const auto recompute_decode_start1 = ggml_time_us();
+            cb_data.data.clear();
             llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
             // const auto recompute_decode_end1 = ggml_time_us();
 
@@ -1019,6 +1023,7 @@ int main(int argc, char ** argv) {
 
             // evaluate the drafted tokens on the draft model
             const auto dft_model_decode_start = ggml_time_us();
+            cb_data.data.clear();
             llama_decode_eagle(ctx_dft, batch_dft, temp.data());
             ctx_dft->synchronize();
             const auto dft_model_decode_end = ggml_time_us();
