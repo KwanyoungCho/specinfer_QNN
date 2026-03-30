@@ -134,3 +134,7 @@ poetry.toml
 # IDE
 /*.code-workspace
 /.windsurf/
+CLAUDE.md
+
+/tmp_result/
+

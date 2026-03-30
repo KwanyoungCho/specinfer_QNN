@@ -616,7 +616,8 @@ int main(int argc, char ** argv) {
                     ++i_dft;
                     if (params.use_color) {
                         // Color token according to its origin sequence
-                        LOG("\u001b[%dm%s\u001b[37m", (36 - s_keep % 6), token_str.c_str());
+                        // LOG("\u001b[%dm%s\u001b[37m", (36 - s_keep % 6), token_str.c_str());
+                        LOG("\u001b[%dm%s\u001b[37m", (36), token_str.c_str());
                     } else {
                         LOG("%s", token_str.c_str());
                     }
