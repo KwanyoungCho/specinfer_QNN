@@ -437,6 +437,7 @@ int main(int argc, char ** argv) {
         llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
         std::vector<float> backup_data(cb_data.data.begin(), cb_data.data.end());
 
+        cb_data.data.clear();
         llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, (int)inp.size() - 1), sliced_data.data());
 
         const auto t_enc_end = ggml_time_us();
@@ -645,6 +646,7 @@ int main(int argc, char ** argv) {
                     for (size_t i = 0; i + 1 < recompute.size(); i++) {
                         common_batch_add(batch_dft, recompute[i], recompute_point + (int)i, { 0 }, false);
                     }
+                    cb_data.data.clear();
                     if (llama_decode_eagle(ctx_dft, batch_dft, temp4.data()) != 0) {
                         LOG_WRN("draft model KV cache exhausted (recompute), falling back\n");
                         dft_exhausted = true;
@@ -654,6 +656,7 @@ int main(int argc, char ** argv) {
                 if (!dft_exhausted) {
                     common_batch_clear(batch_dft);
                     common_batch_add(batch_dft, token_id, n_past_dft, {0}, true);
+                    cb_data.data.clear();
                     if (llama_decode_eagle(ctx_dft, batch_dft, temp3.data()) != 0) {
                         LOG_WRN("draft model KV cache exhausted (single token), falling back\n");
                         dft_exhausted = true;
@@ -811,6 +814,7 @@ int main(int argc, char ** argv) {
                 if (batch_tgt.n_tokens > n_draft_max) break;
 
                 const auto dft_t0 = ggml_time_us();
+                cb_data.data.clear();
                 if (llama_decode_eagle(ctx_dft, batch_dft, temp.data()) != 0) {
                     LOG_WRN("draft model KV cache exhausted (tree drafting), stopping drafting\n");
                     break;
