@@ -57,8 +57,9 @@ static bool cb_get_hidden(struct ggml_tensor * tensor, bool ask, void * user_dat
 
     auto * cb_data = (struct callback_data *) user_data;
     auto n_bytes = ggml_nbytes(tensor);
-    cb_data->data.resize(n_bytes / sizeof(float));
-    ggml_backend_tensor_get(tensor, cb_data->data.data(), 0, n_bytes);
+    size_t prev_size = cb_data->data.size();
+    cb_data->data.resize(prev_size + n_bytes / sizeof(float));
+    ggml_backend_tensor_get(tensor, cb_data->data.data() + prev_size, 0, n_bytes);
     return true;
 }
 
@@ -427,10 +428,12 @@ int main(int argc, char ** argv) {
             common_batch_add(temp_batch_tgt, inp[i], temp_n_past++, { 0 }, true);
         }
 
+        cb_data.data.clear();
         llama_decode(ctx_tgt, temp_batch_tgt);
         ctx_tgt->synchronize();
         std::vector<float> sliced_data(cb_data.data.begin(), cb_data.data.end());
 
+        cb_data.data.clear();
         llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
         std::vector<float> backup_data(cb_data.data.begin(), cb_data.data.end());
 
@@ -613,6 +616,8 @@ int main(int argc, char ** argv) {
             // ---- Drafting ----
             const auto drafting_start = ggml_time_us();
 
+            bool dft_exhausted = false;
+
             // Recompute logic
             {
                 llama_memory_seq_keep(mem_dft, s_keep);
@@ -640,16 +645,25 @@ int main(int argc, char ** argv) {
                     for (size_t i = 0; i + 1 < recompute.size(); i++) {
                         common_batch_add(batch_dft, recompute[i], recompute_point + (int)i, { 0 }, false);
                     }
-                    llama_decode_eagle(ctx_dft, batch_dft, temp4.data());
+                    if (llama_decode_eagle(ctx_dft, batch_dft, temp4.data()) != 0) {
+                        LOG_WRN("draft model KV cache exhausted (recompute), falling back\n");
+                        dft_exhausted = true;
+                    }
                 }
 
-                common_batch_clear(batch_dft);
-                common_batch_add(batch_dft, token_id, n_past_dft, {0}, true);
-                llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
-                ++n_past_dft;
+                if (!dft_exhausted) {
+                    common_batch_clear(batch_dft);
+                    common_batch_add(batch_dft, token_id, n_past_dft, {0}, true);
+                    if (llama_decode_eagle(ctx_dft, batch_dft, temp3.data()) != 0) {
+                        LOG_WRN("draft model KV cache exhausted (single token), falling back\n");
+                        dft_exhausted = true;
+                    } else {
+                        ++n_past_dft;
+                    }
+                }
             }
 
-            if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
+            if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos || dft_exhausted) {
                 break;
             }
 
@@ -797,7 +811,10 @@ int main(int argc, char ** argv) {
                 if (batch_tgt.n_tokens > n_draft_max) break;
 
                 const auto dft_t0 = ggml_time_us();
-                llama_decode_eagle(ctx_dft, batch_dft, temp.data());
+                if (llama_decode_eagle(ctx_dft, batch_dft, temp.data()) != 0) {
+                    LOG_WRN("draft model KV cache exhausted (tree drafting), stopping drafting\n");
+                    break;
+                }
                 ctx_dft->synchronize();
                 const auto dft_t1 = ggml_time_us();
                 if (batch_dft.n_tokens == 1) T_d.push_back((dft_t1 - dft_t0) / 1000.0f);
@@ -818,6 +835,7 @@ int main(int argc, char ** argv) {
                 for (int s = 1; s < n_seq_dft; ++s) {
                     llama_memory_seq_cp(mem_tgt, 0, s, -1, -1);
                 }
+                cb_data.data.clear();
                 llama_decode(ctx_tgt, batch_tgt);
                 ctx_tgt->synchronize();
                 backup_data = cb_data.data;

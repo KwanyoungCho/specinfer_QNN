@@ -1527,6 +1527,7 @@ int llama_context::decode_eagle(llama_batch & batch_inp, void * data) {
     };
 
     int64_t n_outputs_prev = 0;
+    int64_t n_tokens_prev  = 0;
 
     do {
         const auto & ubatch = mctx->get_ubatch();
@@ -1547,8 +1548,10 @@ int llama_context::decode_eagle(llama_batch & batch_inp, void * data) {
             n_outputs = n_outputs_new;
         }
 
+        void * ubatch_data = data ? (float *)data + n_tokens_prev * n_embd : nullptr;
+
         ggml_status status;
-        const auto * res = process_ubatch_eagle(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status, data);
+        const auto * res = process_ubatch_eagle(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status, ubatch_data);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -1664,6 +1667,7 @@ int llama_context::decode_eagle(llama_batch & batch_inp, void * data) {
         }
 
         n_outputs_prev += n_outputs;
+        n_tokens_prev  += ubatch.n_tokens;
     } while (mctx->next());
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith

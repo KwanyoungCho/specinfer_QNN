@@ -49,8 +49,9 @@ static bool cb_get_hidden(struct ggml_tensor * tensor, bool ask, void * user_dat
     LOG_DBG("[%d, %d, %d, %d]\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     auto * cb_data = (struct callback_data *) user_data;
     auto n_bytes = ggml_nbytes(tensor);
-    cb_data->data.resize(n_bytes / sizeof(float)); //float 타입으로 변경 -ym-
-    ggml_backend_tensor_get(tensor, cb_data->data.data(), 0, n_bytes);
+    size_t prev_size = cb_data->data.size();
+    cb_data->data.resize(prev_size + n_bytes / sizeof(float));
+    ggml_backend_tensor_get(tensor, cb_data->data.data() + prev_size, 0, n_bytes);
 
     return true;
 }
@@ -280,6 +281,37 @@ int main(int argc, char ** argv) {
     // // copy output parameters from target to draft
     // ggml_backend_tensor_copy(llama_get_model(ctx_tgt)->output, llama_get_model(ctx_dft)->output);
 
+    // Apply chat template if --chat-template is specified (e.g., --chat-template llama3)
+    if (!params.chat_template.empty()) {
+        std::string sys_prompt = params.system_prompt;
+        if (sys_prompt.empty()) {
+            sys_prompt = "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. "
+                         "Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. "
+                         "Please ensure that your responses are socially unbiased and positive in nature.\n\n"
+                         "If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. "
+                         "If you don't know the answer to a question, please don't share false information.";
+        }
+
+        std::vector<llama_chat_message> chat_msgs;
+        chat_msgs.push_back({"system", sys_prompt.c_str()});
+        chat_msgs.push_back({"user",   params.prompt.c_str()});
+
+        int32_t res = llama_chat_apply_template(
+            params.chat_template.c_str(), chat_msgs.data(), chat_msgs.size(), true, nullptr, 0);
+
+        if (res < 0) {
+            LOG_ERR("%s: failed to apply chat template '%s'\n", __func__, params.chat_template.c_str());
+            return 1;
+        }
+
+        std::vector<char> buf(res + 1);
+        llama_chat_apply_template(
+            params.chat_template.c_str(), chat_msgs.data(), chat_msgs.size(), true, buf.data(), buf.size());
+
+        params.prompt = std::string(buf.data(), res);
+        LOG_INF("%s: applied chat template '%s' to prompt\n", __func__, params.chat_template.c_str());
+    }
+
     // Tokenize the prompt
     std::vector<llama_token> inp;
     inp = common_tokenize(ctx_tgt, params.prompt, true, true);
@@ -312,17 +344,25 @@ int main(int argc, char ** argv) {
 
     // eval the prompt with both models
     const auto t_prefill_start = ggml_time_us();
+    cb_data.data.clear();
     llama_decode(ctx_tgt, temp_batch_tgt);
     const auto t_prefill_end = ggml_time_us();
     ctx_tgt->synchronize();
     std::vector<float> sliced_data = std::vector<float>(cb_data.data.begin(), cb_data.data.end()); // callback data에서 마지막 데이터를 제외한 나머지 백업 -ym-
 
     LOG("\nbatch_tgt.n_tokens: %d, prefill latency: %.3f seconds\n", temp_batch_tgt.n_tokens, (t_prefill_end - t_prefill_start) / 1e6f);
+    LOG("sliced_data size: %zu floats (expected %d)\n", sliced_data.size(), (n_input - 1) * 4096);
 
+    LOG("decoding last token of prompt (target)...\n");
+    cb_data.data.clear();
     llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
     std::vector<float> backup_data = std::vector<float>(cb_data.data.begin(), cb_data.data.end()); // callback data에서 마지막 데이터만 백업 -ym-
 
-    llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
+    LOG("prefilling draft model with %d tokens (draft n_ctx=%d)...\n", n_input - 1, llama_n_ctx(ctx_dft));
+    if (llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data()) != 0) {
+        LOG_ERR("%s: failed to prefill draft model (n_tokens=%d, n_ctx=%d)\n", __func__, n_input - 1, llama_n_ctx(ctx_dft));
+        return 1;
+    }
 
     // float* p_data = sliced_data.data();
     // size_t total_size = sliced_data.size();
@@ -1093,6 +1133,7 @@ int main(int argc, char ** argv) {
 
             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
             const auto t_dec_start = ggml_time_us(); //target model decode 시작 시간 기록 -ym-
+            cb_data.data.clear();
             llama_decode(ctx_tgt, batch_tgt);
             ctx_tgt->synchronize();
             const auto t_dec_end = ggml_time_us(); //target model decode 종료 시간 기록 -ym-
