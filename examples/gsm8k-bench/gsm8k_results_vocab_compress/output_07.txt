@@ -72,9 +72,9 @@ print_info: EOG token        = 128009 '<|eot_id|>'
 print_info: max token length = 256
 llama_model_load: vocab only - skipping tensors
 llama_context: constructing llama_context
-llama_context: n_ctx is not divisible by n_seq_max - rounding down to 128000
-llama_context: n_seq_max     = 500
-llama_context: n_ctx         = 128000
+llama_context: n_ctx is not divisible by n_seq_max - rounding down to 5120
+llama_context: n_seq_max     = 20
+llama_context: n_ctx         = 5120
 llama_context: n_ctx_seq     = 256
 llama_context: n_batch       = 2048
 llama_context: n_ubatch      = 512
@@ -86,41 +86,48 @@ llama_context: freq_scale    = 1
 llama_context: n_ctx_seq (256) > n_ctx_train (0) -- possible training context overflow
 [QNN] Target model runner initialized successfully
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
-llama_model_loader: loaded meta data with 28 key-value pairs and 11 tensors from EAGLE-llama3-q4_0.gguf (version GGUF V3 (latest))
+llama_model_loader: loaded meta data with 34 key-value pairs and 11 tensors from EAGLE-llama-test-q4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
 llama_model_loader: - kv   0:                       general.architecture str              = eagle
-llama_model_loader: - kv   1:                               general.type str              = model
-llama_model_loader: - kv   2:                               general.name str              = EAGLE LLaMA3 Instruct 8B
-llama_model_loader: - kv   3:                           general.finetune str              = Instruct-8b
-llama_model_loader: - kv   4:                           general.basename str              = EAGLE-LLaMA3
-llama_model_loader: - kv   5:                         general.size_label str              = 1.3B
-llama_model_loader: - kv   6:                            general.license str              = apache-2.0
-llama_model_loader: - kv   7:                          eagle.block_count u32              = 1
-llama_model_loader: - kv   8:                       eagle.context_length u32              = 2048
-llama_model_loader: - kv   9:                     eagle.embedding_length u32              = 4096
-llama_model_loader: - kv  10:                  eagle.feed_forward_length u32              = 14336
-llama_model_loader: - kv  11:                 eagle.attention.head_count u32              = 32
-llama_model_loader: - kv  12:              eagle.attention.head_count_kv u32              = 8
-llama_model_loader: - kv  13:                       eagle.rope.freq_base f32              = 500000.000000
-llama_model_loader: - kv  14:     eagle.attention.layer_norm_rms_epsilon f32              = 0.000010
-llama_model_loader: - kv  15:                           eagle.vocab_size u32              = 128256
-llama_model_loader: - kv  16:                 eagle.rope.dimension_count u32              = 128
-llama_model_loader: - kv  17:                       tokenizer.ggml.model str              = gpt2
-llama_model_loader: - kv  18:                         tokenizer.ggml.pre str              = llama-bpe
-llama_model_loader: - kv  19:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
-llama_model_loader: - kv  20:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-llama_model_loader: - kv  21:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
-llama_model_loader: - kv  22:                tokenizer.ggml.bos_token_id u32              = 128000
-llama_model_loader: - kv  23:                tokenizer.ggml.eos_token_id u32              = 128009
-llama_model_loader: - kv  24:            tokenizer.ggml.padding_token_id u32              = 0
-llama_model_loader: - kv  25:                    tokenizer.chat_template str              = {% set loop_messages = messages %}{% ...
-llama_model_loader: - kv  26:               general.quantization_version u32              = 2
-llama_model_loader: - kv  27:                          general.file_type u32              = 2
+llama_model_loader: - kv   1:                    eagle.output_vocab_size u32              = 32768
+llama_model_loader: - kv   2:                            eagle.vocab_map arr[i32,32768]   = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11...
+llama_model_loader: - kv   3:                               general.type str              = model
+llama_model_loader: - kv   4:                               general.name str              = EAGLE LLaMA3 Instruct 8B
+llama_model_loader: - kv   5:                           general.finetune str              = Instruct-8b
+llama_model_loader: - kv   6:                           general.basename str              = EAGLE-LLaMA3
+llama_model_loader: - kv   7:                         general.size_label str              = 911M
+llama_model_loader: - kv   8:                            general.license str              = apache-2.0
+llama_model_loader: - kv   9:                          eagle.block_count u32              = 1
+llama_model_loader: - kv  10:                       eagle.context_length u32              = 2048
+llama_model_loader: - kv  11:                     eagle.embedding_length u32              = 4096
+llama_model_loader: - kv  12:                  eagle.feed_forward_length u32              = 14336
+llama_model_loader: - kv  13:                 eagle.attention.head_count u32              = 32
+llama_model_loader: - kv  14:              eagle.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  15:                       eagle.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  16:     eagle.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  17:                 eagle.attention.key_length u32              = 128
+llama_model_loader: - kv  18:               eagle.attention.value_length u32              = 128
+llama_model_loader: - kv  19:                           eagle.vocab_size u32              = 128256
+llama_model_loader: - kv  20:                 eagle.rope.dimension_count u32              = 128
+llama_model_loader: - kv  21:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  22:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  23:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  24:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  25:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  26:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  27:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  28:            tokenizer.ggml.padding_token_id u32              = 0
+llama_model_loader: - kv  29:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  30:               tokenizer.ggml.add_sep_token bool             = false
+llama_model_loader: - kv  31:                    tokenizer.chat_template str              = {% set loop_messages = messages %}{% ...
+llama_model_loader: - kv  32:               general.quantization_version u32              = 2
+llama_model_loader: - kv  33:                          general.file_type u32              = 2
 llama_model_loader: - type  f32:    1 tensors
 llama_model_loader: - type q4_0:   10 tensors
 print_info: file format = GGUF V3 (latest)
 print_info: file type   = Q4_0
-print_info: file size   = 698.64 MiB (4.50 BPW) 
+print_info: file size   = 488.83 MiB (4.50 BPW) 
+load_hparams: EAGLE vocab_map loaded with 32768 entries
 load: printing all EOG tokens:
 load:   - 128001 ('<|end_of_text|>')
 load:   - 128009 ('<|eot_id|>')
@@ -162,7 +169,7 @@ print_info: freq_scale_train = 1
 print_info: n_ctx_orig_yarn  = 2048
 print_info: rope_finetuned   = unknown
 print_info: model type       = ?B
-print_info: model params     = 1.30 B
+print_info: model params     = 911.22 M
 print_info: general.name     = EAGLE LLaMA3 Instruct 8B
 print_info: vocab type       = BPE
 print_info: n_vocab          = 128256
@@ -176,14 +183,15 @@ print_info: EOG token        = 128001 '<|end_of_text|>'
 print_info: EOG token        = 128009 '<|eot_id|>'
 print_info: max token length = 256
 load_tensors: loading model tensors, this can take a while... (mmap = false)
+load_tensors: EAGLE using trimmed output vocab: 32768 (full: 128256)
 load_tensors: offloading 1 repeating layers to GPU
 load_tensors: offloading output layer to GPU
 load_tensors: offloaded 2/2 layers to GPU
 load_tensors:          CPU model buffer size =   281.81 MiB
-load_tensors:       OpenCL model buffer size =   416.83 MiB
+load_tensors:       OpenCL model buffer size =   207.02 MiB
 .........
 llama_context: constructing llama_context
-llama_context: n_seq_max     = 500
+llama_context: n_seq_max     = 20
 llama_context: n_ctx         = 4096
 llama_context: n_ctx_seq     = 4096
 llama_context: n_batch       = 2048
@@ -194,9 +202,9 @@ llama_context: kv_unified    = true
 llama_context: freq_base     = 500000.0
 llama_context: freq_scale    = 1
 llama_context: n_ctx_seq (4096) > n_ctx_train (2048) -- possible training context overflow
-llama_context:        CPU  output buffer size =   244.63 MiB
+llama_context:        CPU  output buffer size =     2.50 MiB
 llama_kv_cache:     OpenCL KV buffer size =    16.00 MiB
-llama_kv_cache: size =   16.00 MiB (  4096 cells,   1 layers, 500/1 seqs), K (f16):    8.00 MiB, V (f16):    8.00 MiB
+llama_kv_cache: size =   16.00 MiB (  4096 cells,   1 layers, 20/1 seqs), K (f16):    8.00 MiB, V (f16):    8.00 MiB
 llama_context:     OpenCL compute buffer size =   292.01 MiB
 llama_context:        CPU compute buffer size =    28.01 MiB
 llama_context: graph nodes  = 40
@@ -205,17 +213,18 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: setting dry_penalty_last_n to ctx_size = 4096
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+[EAGLE] Vocab trimming active: 32768 entries in vocab_map (output_vocab_size=32768)
 [ModelParams] Loaded from: params.json
   dim=4096, n_layers=32, n_heads=32, n_kv_heads=8
   head_dim=128, vocab_size=128256
-[Multi-Context] Auto-detecting shards in: ctx_out_0316
+[Multi-Context] Auto-detecting shards in: ctx_out_0221
 [Multi-Context] Total shards detected: 8
 [Multi-Context] All 8 contexts created
-[KV Cache] Allocated 67.9375 MiB (layer-wise for all shards)
+[KV Cache] Allocated 65.9375 MiB (layer-wise for all shards)
 [Shared Buffers] Allocated:
-  hidden_state: 512 KiB
+  hidden_state: 256 KiB
   rope_cos/sin: 512 KiB
-  attention_mask: 128 KiB
+  attention_mask: 64 KiB
 [Init] All components initialized successfully
 
 
@@ -225,40 +234,42 @@ You are a helpful, respectful and honest assistant. Always answer as helpfully a
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.<|eot_id|><|start_header_id|>user<|end_header_id|>
 
-Tyrion changes his face mask two times every time he goes out. If he goes out three times a day, how many face masks does he use every 2 days?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+Gunther, the gorilla, had 48 bananas hidden under a fern branch.  When Gunther wasn't looking, Arnold, the chimpanzee, stole half of the bananas from the pile.  The next day, Gunther added another 25 bananas to his pile, but later that evening, Arnold stole another 12 of the bananas.  On the third day, Gunther added another 6 bananas to his pile and began counting bananas.  How many bananas did Gunther find were in the pile?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
-Let's break it down step by step!
+What an intriguing problem!
 
-Tyrion changes his face mask twice every time he goes out. Since he goes out three times a day, he changes his face mask twice in one "outing".
+Let's break out step by step:
 
-In two days, he will go out 3 times a day * 2 days = 6 times. Since he changes his face mask twice every outing, he will change it a total of 6 times (twice per outing, 6 outings).
+1) Initial pile: Gunther has 48 bananas.
+2) Arnold steals half (48/2 =) 24 bananas.
+So, Gunther has 48 - 24 = 24 bananas left.
+3-4) Gunther added 25 more bananas (24 + 25= 49) and Arnold stole half of the new total (49/2 =) 24. 
+Now Gunther now has 49 -) 25 =) 24 = (49 bananas.
+5) On the third day, Gunther added 6 more bananas. 
+49 + ) 6 = 24 + 49 = ) 55 = 55 bananas.
 
-However, we need to calculate the number of face masks he uses. He changes his face mask twice every outing, so in two days, he will use 6 outings * 2 face masks = 12 face masks.
+So, when Gunther began counting, he had 55 bananas in his pile.<|eot_id|><|start_header_id|>
 
-Therefore, Tyrion uses 12 face masks every 2 days.<|eot_id|><|start_header_id|>assistant
+
 ============================================================
-
-
-          EAGLE-2-QNN  Performance Summary
+          EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   152 tokens |    471.91 ms |   322.10 t/s
-  Decode            :   157 tokens |  75093.38 ms |     2.09 t/s
-  Decode latency    :              |    478.30 ms/tok
+  Prefill           :   220 tokens |    835.30 ms |   263.38 t/s
+  Decode            :   169 tokens |   8391.96 ms |    20.14 t/s
+  Decode latency    :              |     49.66 ms/tok
 ------------------------------------------------------------
-  n_draft   = 500
-  n_predict = 157
-  n_drafted = 196 (depth), total_draft_tokens = 2891
-  n_accept  = 107
-  Draft length (depth)  : 5.000
-  Draft tokens/step     : 59.000
-  Avg accept length     : 3.184
-  Accept ratio          : 54.592%
+  Draft length          : 4.000
+  Avg accept length     : 3.170
+  Accept ratio          : 54.245%
 ------------------------------------------------------------
-  Avg draft phase       :  1007.306 ms
-  Avg verification      :   511.320 ms
-  Avg T_d (1-tok dft)   :    38.817 ms
-  Avg (draft+verify)    :  1518.626 ms
+  Avg draft phase       :    45.962 ms
+  Avg verification      :   109.000 ms
+  Avg T_d (1-tok dft)   :     5.536 ms
+  Avg (draft+verify)    :   154.962 ms
 ------------------------------------------------------------
+  Avg tgt sampling      :     0.196 ms
+  Avg dft sampling      :     0.040 ms
+============================================================
 
 

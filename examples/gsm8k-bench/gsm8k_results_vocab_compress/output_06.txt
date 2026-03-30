@@ -72,9 +72,9 @@ print_info: EOG token        = 128009 '<|eot_id|>'
 print_info: max token length = 256
 llama_model_load: vocab only - skipping tensors
 llama_context: constructing llama_context
-llama_context: n_ctx is not divisible by n_seq_max - rounding down to 128000
-llama_context: n_seq_max     = 500
-llama_context: n_ctx         = 128000
+llama_context: n_ctx is not divisible by n_seq_max - rounding down to 5120
+llama_context: n_seq_max     = 20
+llama_context: n_ctx         = 5120
 llama_context: n_ctx_seq     = 256
 llama_context: n_batch       = 2048
 llama_context: n_ubatch      = 512
@@ -86,41 +86,48 @@ llama_context: freq_scale    = 1
 llama_context: n_ctx_seq (256) > n_ctx_train (0) -- possible training context overflow
 [QNN] Target model runner initialized successfully
 llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
-llama_model_loader: loaded meta data with 28 key-value pairs and 11 tensors from EAGLE-llama3-q4_0.gguf (version GGUF V3 (latest))
+llama_model_loader: loaded meta data with 34 key-value pairs and 11 tensors from EAGLE-llama-test-q4.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
 llama_model_loader: - kv   0:                       general.architecture str              = eagle
-llama_model_loader: - kv   1:                               general.type str              = model
-llama_model_loader: - kv   2:                               general.name str              = EAGLE LLaMA3 Instruct 8B
-llama_model_loader: - kv   3:                           general.finetune str              = Instruct-8b
-llama_model_loader: - kv   4:                           general.basename str              = EAGLE-LLaMA3
-llama_model_loader: - kv   5:                         general.size_label str              = 1.3B
-llama_model_loader: - kv   6:                            general.license str              = apache-2.0
-llama_model_loader: - kv   7:                          eagle.block_count u32              = 1
-llama_model_loader: - kv   8:                       eagle.context_length u32              = 2048
-llama_model_loader: - kv   9:                     eagle.embedding_length u32              = 4096
-llama_model_loader: - kv  10:                  eagle.feed_forward_length u32              = 14336
-llama_model_loader: - kv  11:                 eagle.attention.head_count u32              = 32
-llama_model_loader: - kv  12:              eagle.attention.head_count_kv u32              = 8
-llama_model_loader: - kv  13:                       eagle.rope.freq_base f32              = 500000.000000
-llama_model_loader: - kv  14:     eagle.attention.layer_norm_rms_epsilon f32              = 0.000010
-llama_model_loader: - kv  15:                           eagle.vocab_size u32              = 128256
-llama_model_loader: - kv  16:                 eagle.rope.dimension_count u32              = 128
-llama_model_loader: - kv  17:                       tokenizer.ggml.model str              = gpt2
-llama_model_loader: - kv  18:                         tokenizer.ggml.pre str              = llama-bpe
-llama_model_loader: - kv  19:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
-llama_model_loader: - kv  20:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-llama_model_loader: - kv  21:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
-llama_model_loader: - kv  22:                tokenizer.ggml.bos_token_id u32              = 128000
-llama_model_loader: - kv  23:                tokenizer.ggml.eos_token_id u32              = 128009
-llama_model_loader: - kv  24:            tokenizer.ggml.padding_token_id u32              = 0
-llama_model_loader: - kv  25:                    tokenizer.chat_template str              = {% set loop_messages = messages %}{% ...
-llama_model_loader: - kv  26:               general.quantization_version u32              = 2
-llama_model_loader: - kv  27:                          general.file_type u32              = 2
+llama_model_loader: - kv   1:                    eagle.output_vocab_size u32              = 32768
+llama_model_loader: - kv   2:                            eagle.vocab_map arr[i32,32768]   = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11...
+llama_model_loader: - kv   3:                               general.type str              = model
+llama_model_loader: - kv   4:                               general.name str              = EAGLE LLaMA3 Instruct 8B
+llama_model_loader: - kv   5:                           general.finetune str              = Instruct-8b
+llama_model_loader: - kv   6:                           general.basename str              = EAGLE-LLaMA3
+llama_model_loader: - kv   7:                         general.size_label str              = 911M
+llama_model_loader: - kv   8:                            general.license str              = apache-2.0
+llama_model_loader: - kv   9:                          eagle.block_count u32              = 1
+llama_model_loader: - kv  10:                       eagle.context_length u32              = 2048
+llama_model_loader: - kv  11:                     eagle.embedding_length u32              = 4096
+llama_model_loader: - kv  12:                  eagle.feed_forward_length u32              = 14336
+llama_model_loader: - kv  13:                 eagle.attention.head_count u32              = 32
+llama_model_loader: - kv  14:              eagle.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  15:                       eagle.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  16:     eagle.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  17:                 eagle.attention.key_length u32              = 128
+llama_model_loader: - kv  18:               eagle.attention.value_length u32              = 128
+llama_model_loader: - kv  19:                           eagle.vocab_size u32              = 128256
+llama_model_loader: - kv  20:                 eagle.rope.dimension_count u32              = 128
+llama_model_loader: - kv  21:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  22:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  23:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  24:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  25:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  26:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  27:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  28:            tokenizer.ggml.padding_token_id u32              = 0
+llama_model_loader: - kv  29:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  30:               tokenizer.ggml.add_sep_token bool             = false
+llama_model_loader: - kv  31:                    tokenizer.chat_template str              = {% set loop_messages = messages %}{% ...
+llama_model_loader: - kv  32:               general.quantization_version u32              = 2
+llama_model_loader: - kv  33:                          general.file_type u32              = 2
 llama_model_loader: - type  f32:    1 tensors
 llama_model_loader: - type q4_0:   10 tensors
 print_info: file format = GGUF V3 (latest)
 print_info: file type   = Q4_0
-print_info: file size   = 698.64 MiB (4.50 BPW) 
+print_info: file size   = 488.83 MiB (4.50 BPW) 
+load_hparams: EAGLE vocab_map loaded with 32768 entries
 load: printing all EOG tokens:
 load:   - 128001 ('<|end_of_text|>')
 load:   - 128009 ('<|eot_id|>')
@@ -162,7 +169,7 @@ print_info: freq_scale_train = 1
 print_info: n_ctx_orig_yarn  = 2048
 print_info: rope_finetuned   = unknown
 print_info: model type       = ?B
-print_info: model params     = 1.30 B
+print_info: model params     = 911.22 M
 print_info: general.name     = EAGLE LLaMA3 Instruct 8B
 print_info: vocab type       = BPE
 print_info: n_vocab          = 128256
@@ -176,14 +183,15 @@ print_info: EOG token        = 128001 '<|end_of_text|>'
 print_info: EOG token        = 128009 '<|eot_id|>'
 print_info: max token length = 256
 load_tensors: loading model tensors, this can take a while... (mmap = false)
+load_tensors: EAGLE using trimmed output vocab: 32768 (full: 128256)
 load_tensors: offloading 1 repeating layers to GPU
 load_tensors: offloading output layer to GPU
 load_tensors: offloaded 2/2 layers to GPU
 load_tensors:          CPU model buffer size =   281.81 MiB
-load_tensors:       OpenCL model buffer size =   416.83 MiB
+load_tensors:       OpenCL model buffer size =   207.02 MiB
 .........
 llama_context: constructing llama_context
-llama_context: n_seq_max     = 500
+llama_context: n_seq_max     = 20
 llama_context: n_ctx         = 4096
 llama_context: n_ctx_seq     = 4096
 llama_context: n_batch       = 2048
@@ -194,9 +202,9 @@ llama_context: kv_unified    = true
 llama_context: freq_base     = 500000.0
 llama_context: freq_scale    = 1
 llama_context: n_ctx_seq (4096) > n_ctx_train (2048) -- possible training context overflow
-llama_context:        CPU  output buffer size =   244.63 MiB
+llama_context:        CPU  output buffer size =     2.50 MiB
 llama_kv_cache:     OpenCL KV buffer size =    16.00 MiB
-llama_kv_cache: size =   16.00 MiB (  4096 cells,   1 layers, 500/1 seqs), K (f16):    8.00 MiB, V (f16):    8.00 MiB
+llama_kv_cache: size =   16.00 MiB (  4096 cells,   1 layers, 20/1 seqs), K (f16):    8.00 MiB, V (f16):    8.00 MiB
 llama_context:     OpenCL compute buffer size =   292.01 MiB
 llama_context:        CPU compute buffer size =    28.01 MiB
 llama_context: graph nodes  = 40
@@ -205,17 +213,18 @@ common_init_from_params: added <|end_of_text|> logit bias = -inf
 common_init_from_params: added <|eot_id|> logit bias = -inf
 common_init_from_params: setting dry_penalty_last_n to ctx_size = 4096
 common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+[EAGLE] Vocab trimming active: 32768 entries in vocab_map (output_vocab_size=32768)
 [ModelParams] Loaded from: params.json
   dim=4096, n_layers=32, n_heads=32, n_kv_heads=8
   head_dim=128, vocab_size=128256
-[Multi-Context] Auto-detecting shards in: ctx_out_0316
+[Multi-Context] Auto-detecting shards in: ctx_out_0221
 [Multi-Context] Total shards detected: 8
 [Multi-Context] All 8 contexts created
-[KV Cache] Allocated 67.9375 MiB (layer-wise for all shards)
+[KV Cache] Allocated 65.9375 MiB (layer-wise for all shards)
 [Shared Buffers] Allocated:
-  hidden_state: 512 KiB
+  hidden_state: 256 KiB
   rope_cos/sin: 512 KiB
-  attention_mask: 128 KiB
+  attention_mask: 64 KiB
 [Init] All components initialized successfully
 
 
@@ -225,43 +234,54 @@ You are a helpful, respectful and honest assistant. Always answer as helpfully a
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.<|eot_id|><|start_header_id|>user<|end_header_id|>
 
-Jill and her friends watch 4 movies every Saturday and half the number of movies on Sunday than on Saturday. If they watch movies every weekend, how many movies can they watch in 4 weeks?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+Kim sleepwalks, to monitor her sleeping hours, she installs a camera in her room. Kim usually goes to sleep at 10 p.m. and wakes up at 6 a.m. She is a sleepwalker. One day, after reviewing the cameras, she finds that she woke up that day and was sleepwalking from 2:15 to 2:38 am.  Also, that day she woke up 5 minutes earlier than usual to go to the bathroom. How many minutes did she sleep on her bed that day?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
-Let's break it down step by step!
+What an interesting question! Let's break it down step by step.
 
-On Saturday, Jill and her friends watch 4 movies.
+Kim usually goes to sleep at 9 p.m. (10:00) and wakes up at 6 a.m. (2:00) on a normal day. However, this particular day, she woke up 5 minutes earlier than usual, which means she woke up at 5:45 a.m. (5 minutes earlier than her usual 6:00 a.m. wake-up time).
 
-On Sunday, they watch half the number of movies, which is 4/2 = 2 movies.
+Since Kim is a sleepwalker, we know she she got up at 2:15 am (2:15 a.m. - 6:55 a.m. = 5 minutes earlier than usual) to use the bathroom. However, she also sleep for some time before she woke up to go to the bathroom. That's where she sleepwalking part comes in.
 
-In 4 weeks, they'll watch movies every weekend, so let's calculate the total number of movies they'll watch:
+The camera footage shows that she sleeping episode started at 2:15 a.m. and ended at 2:38 a.m. That's 38 minutes of sleepwalking. Since she woke up at 2:45 a.m. to use the bathroom (5 minutes after her sleepwalking episode). We can subtract her sleepwalking time from her wake-up time. 
 
-Saturday (4 weeks) = 4 weeks x 4 movies/week = 16 movies
-Sunday (4 weeks) = 4 weeks x 2 movies/week = 8 movies
+Let's calculate her total sleep time:
 
-In total, they'll watch 16 + 8 = 24 movies in 4 weeks.<|eot_id|><|start_header_id|>
+6:00 a.m. (wake-up time - 10:45 p.m. (sleep) = 8 hours
+
+Adding the 5-minute head start for the bathroom trip (10:00 a.m. (wake up) - 2: earlier = 5:55 a.m.
+
+Subtracting her sleepwalking episode:
+
+6:00 a.m. (wake-up) - 10:55 a.m.:
+
+6:00 p.m. - 10:45 a.m. = 1 hour 55 minutes
+
+Now, subtracting her sleepwalking episode from the 8-hour sleep:
+
+8:00 hours - 0 (38 minutes sleepwalking) + 5 min (30 minutes earlier than usual) = 7:50 hours
+
+So, Kim slept for approximately 8 hours and 50 minutes.<|eot_id|>
 
 
 ============================================================
-          EAGLE-2-QNN  Performance Summary
+          EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   157 tokens |    490.43 ms |   320.13 t/s
-  Decode            :   130 tokens |  59847.87 ms |     2.17 t/s
-  Decode latency    :              |    460.37 ms/tok
+  Prefill           :   225 tokens |    934.69 ms |   240.72 t/s
+  Decode            :   425 tokens |  19778.56 ms |    21.49 t/s
+  Decode latency    :              |     46.54 ms/tok
 ------------------------------------------------------------
-  n_draft   = 500
-  n_predict = 130
-  n_drafted = 136 (depth), total_draft_tokens = 2006
-  n_accept  = 95
-  Draft length (depth)  : 5.000
-  Draft tokens/step     : 59.000
-  Avg accept length     : 3.794
-  Accept ratio          : 69.853%
+  Draft length          : 4.000
+  Avg accept length     : 3.475
+  Accept ratio          : 61.885%
 ------------------------------------------------------------
-  Avg draft phase       :  1160.882 ms
-  Avg verification      :   576.257 ms
-  Avg T_d (1-tok dft)   :    43.219 ms
-  Avg (draft+verify)    :  1737.139 ms
+  Avg draft phase       :    48.566 ms
+  Avg verification      :   111.504 ms
+  Avg T_d (1-tok dft)   :     5.566 ms
+  Avg (draft+verify)    :   160.070 ms
 ------------------------------------------------------------
+  Avg tgt sampling      :     0.170 ms
+  Avg dft sampling      :     0.042 ms
+============================================================
 
 
