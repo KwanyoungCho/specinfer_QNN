@@ -72,9 +72,9 @@ print_info: EOG token        = 128009 '<|eot_id|>'
 print_info: max token length = 256
 llama_model_load: vocab only - skipping tensors
 llama_context: constructing llama_context
-llama_context: n_ctx is not divisible by n_seq_max - rounding down to 128000
-llama_context: n_seq_max     = 500
-llama_context: n_ctx         = 128000
+llama_context: n_ctx is not divisible by n_seq_max - rounding down to 5120
+llama_context: n_seq_max     = 20
+llama_context: n_ctx         = 5120
 llama_context: n_ctx_seq     = 256
 llama_context: n_batch       = 2048
 llama_context: n_ubatch      = 512
@@ -183,7 +183,7 @@ load_tensors:          CPU model buffer size =   281.81 MiB
 load_tensors:       OpenCL model buffer size =   416.83 MiB
 .........
 llama_context: constructing llama_context
-llama_context: n_seq_max     = 500
+llama_context: n_seq_max     = 20
 llama_context: n_ctx         = 4096
 llama_context: n_ctx_seq     = 4096
 llama_context: n_batch       = 2048
@@ -194,9 +194,9 @@ llama_context: kv_unified    = true
 llama_context: freq_base     = 500000.0
 llama_context: freq_scale    = 1
 llama_context: n_ctx_seq (4096) > n_ctx_train (2048) -- possible training context overflow
-llama_context:        CPU  output buffer size =   244.63 MiB
+llama_context:        CPU  output buffer size =     9.79 MiB
 llama_kv_cache:     OpenCL KV buffer size =    16.00 MiB
-llama_kv_cache: size =   16.00 MiB (  4096 cells,   1 layers, 500/1 seqs), K (f16):    8.00 MiB, V (f16):    8.00 MiB
+llama_kv_cache: size =   16.00 MiB (  4096 cells,   1 layers, 20/1 seqs), K (f16):    8.00 MiB, V (f16):    8.00 MiB
 llama_context:     OpenCL compute buffer size =   292.01 MiB
 llama_context:        CPU compute buffer size =    28.01 MiB
 llama_context: graph nodes  = 40
@@ -208,14 +208,14 @@ common_init_from_params: warming up the model with an empty run - please wait ..
 [ModelParams] Loaded from: params.json
   dim=4096, n_layers=32, n_heads=32, n_kv_heads=8
   head_dim=128, vocab_size=128256
-[Multi-Context] Auto-detecting shards in: ctx_out_0316
+[Multi-Context] Auto-detecting shards in: ctx_out_0221
 [Multi-Context] Total shards detected: 8
 [Multi-Context] All 8 contexts created
-[KV Cache] Allocated 67.9375 MiB (layer-wise for all shards)
+[KV Cache] Allocated 65.9375 MiB (layer-wise for all shards)
 [Shared Buffers] Allocated:
-  hidden_state: 512 KiB
+  hidden_state: 256 KiB
   rope_cos/sin: 512 KiB
-  attention_mask: 128 KiB
+  attention_mask: 64 KiB
 [Init] All components initialized successfully
 
 
@@ -225,40 +225,60 @@ You are a helpful, respectful and honest assistant. Always answer as helpfully a
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.<|eot_id|><|start_header_id|>user<|end_header_id|>
 
-Indras has 6 letters in her name. Her sister's name has 4 more letters than half of the letters in Indras' name. How many letters are in Indras and her sister's names?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+Kim sleepwalks, to monitor her sleeping hours, she installs a camera in her room. Kim usually goes to sleep at 10 p.m. and wakes up at 6 a.m. She is a sleepwalker. One day, after reviewing the cameras, she finds that she woke up that day and was sleepwalking from 2:15 to 2:38 am.  Also, that day she woke up 5 minutes earlier than usual to go to the bathroom. How many minutes did she sleep on her bed that day?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
-Let's break it down step by step!
+What an interesting question! Let's break it down step by step.
 
-Indras has 6 letters in her name.
+Kim usually sleeps-up at 6 a.m., but that particular day, she woke up 5 minutes earlier than usual. So, she woke up at:
 
-Half of the letters in Indras' name would be 6/2 = 3.
+6:55 a.m.
 
-Her sister's name has 4 more letters than half of the letters in Indras' name, which means it has 3 + 4 = 7 letters.
+The camera footage shows that she was sleepwalking from 2:15 a.m to 6-38 am) to 4:15 a.
 
-So, Indras' name has 6 letters, and her sister's name has 7 letters.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+To find the woke up 5 minutes earlier than usual, we subtract 5 minutes from her usual waking time:
+
+6:00 (usual waking time) - 5 (minutes earlier than usual) = 5:55
+
+Since she woke up at 5:55 am, she must have spent some time sleeping. Let's find the time she slept by subtracting her wake-up time from:
+
+2:55:
+
+6:00 (usual waking time) - 5:50 (actual wake-up time) = ?
+
+This means she slept for:
+
+:
+
+6:00 - 5:55 = 6:45 a.m. to
+
+10:00 - 2.00 = 2 hours
+
+However, the question asks us to sleep time on her bed. Since she was sleepwalking from 2:15 to 2:15 a, she spent 4 hours and 38 minutes sleepwalking.The time she between her usual hours is 2 hours (6:45-6:00 a.m.). Adding these times, she spent:
+
+4 hours 38 minutes (sleepwalking) + 2 hours (waking time) in total, which is 6 hours 38 minutes + 2 = 6 hours 38 minutes.
+
+So, Kim slept for approximately 2 hours and 38 minutes on that particular day.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 
 ============================================================
-          EAGLE-2-QNN  Performance Summary
+          EAGLE-QNN  Performance Summary
 ============================================================
-  Prefill           :   159 tokens |    478.34 ms |   332.40 t/s
-  Decode            :    97 tokens |  27767.63 ms |     3.49 t/s
-  Decode latency    :              |    286.26 ms/tok
+  Prefill           :   225 tokens |   1044.30 ms |   215.46 t/s
+  Decode            :   359 tokens |  25472.67 ms |    14.09 t/s
+  Decode latency    :              |     70.95 ms/tok
 ------------------------------------------------------------
-  n_draft   = 500
-  n_predict = 97
-  n_drafted = 88 (depth), total_draft_tokens = 1298
-  n_accept  = 74
-  Draft length (depth)  : 5.000
-  Draft tokens/step     : 59.000
-  Avg accept length     : 4.364
-  Accept ratio          : 84.091%
+  Draft length          : 4.000
+  Avg accept length     : 3.346
+  Accept ratio          : 58.645%
 ------------------------------------------------------------
-  Avg draft phase       :   795.045 ms
-  Avg verification      :   433.043 ms
-  Avg T_d (1-tok dft)   :    24.043 ms
-  Avg (draft+verify)    :  1228.089 ms
+  Avg draft phase       :   113.178 ms
+  Avg verification      :   122.306 ms
+  Avg T_d (1-tok dft)   :    15.178 ms
+  Avg (draft+verify)    :   235.483 ms
 ------------------------------------------------------------
+  Avg tgt sampling      :     0.229 ms
+  Avg dft sampling      :     0.274 ms
+============================================================
 
 

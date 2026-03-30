@@ -7192,7 +7192,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             WI_M = 64;
             WI_K = 2;
         }
-        if(M >= 32000 && N <= 4){
+        else if(M >= 32000 && N <= 4){
             WI_M = 32;
             WI_K = 4;
         }

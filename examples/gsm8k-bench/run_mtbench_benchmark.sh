@@ -14,7 +14,7 @@ if [ "$DATASET" != "mtbench" ] && [ "$DATASET" != "gsm8k" ]; then
 fi
 
 # Configuration
-BINARY="./llama-speculative-eagle-qnn"
+BINARY="./llama-speculative-eagle-2-qnn"
 PROMPT_DIR="${DATASET}_prompts"
 OUTPUT_DIR="${DATASET}_results"
 NUM_SAMPLES=20
@@ -44,20 +44,21 @@ COMMON_ARGS=(
     --qnn
     -n 512
     --multi-context
-    --ctx-dir ctx_out_hs
+    --ctx-dir ctx_out_0316
     --backend-so libQnnHtp.so
     --system-so libQnnSystem.so
-    --tokenizer ../../gguf/tokenizer.gguf
-    --params ctx_out/params.json
+    --tokenizer tokenizer.gguf
+    --params params.json
     --log-level 1
-    -md ../../gguf/EAGLE-llama3-q4_0.gguf
+    -md EAGLE-llama3-q4_0.gguf
     -ngld 20
+    --temp 0.0
     --min-p 0.0
-    --top-k 4
+    --top-k 10
     --top-p 1.0
-    --draft-max 25
+    --draft-max 500
     --draft-min 1
-    -np 20
+    -np 500
     -kvu
     -s 1234
     --no-mmap
