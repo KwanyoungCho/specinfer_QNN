@@ -29,6 +29,7 @@
 #include <fstream>
 #include <sstream>
 #include <numeric>
+#include <unordered_map>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
@@ -100,6 +101,16 @@ struct bench_result {
     double avg_td;
     bool   success;
     std::string output_text;
+};
+
+// ============================================================
+// Token frequency tracking for vocab compression analysis
+// ============================================================
+
+struct token_freq_stats {
+    std::unordered_map<llama_token, int64_t> draft_freq;
+    std::unordered_map<llama_token, int64_t> draft_accepted;
+    std::unordered_map<llama_token, int64_t> bonus_freq;
 };
 
 // ============================================================
@@ -201,6 +212,169 @@ static std::vector<bench_prompt> load_prompts(const std::string & path) {
     return prompts;
 }
 
+// ============================================================
+// ShareGPT JSON loader — extracts all "from":"human" turns
+// ============================================================
+
+static void sg_skip_ws(const std::string & s, size_t & pos) {
+    while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\n' || s[pos] == '\r' || s[pos] == '\t')) pos++;
+}
+
+static std::string sg_parse_string(const std::string & s, size_t & pos) {
+    if (pos >= s.size() || s[pos] != '"') return "";
+    pos++;
+    std::string result;
+    while (pos < s.size()) {
+        if (s[pos] == '\\' && pos + 1 < s.size()) {
+            char c = s[pos + 1];
+            switch (c) {
+                case '"':  result += '"';  break;
+                case '\\': result += '\\'; break;
+                case '/':  result += '/';  break;
+                case 'n':  result += '\n'; break;
+                case 't':  result += '\t'; break;
+                case 'r':  result += '\r'; break;
+                case 'b':  result += '\b'; break;
+                case 'f':  result += '\f'; break;
+                default:   result += '\\'; result += c; break;
+            }
+            pos += 2;
+        } else if (s[pos] == '"') {
+            pos++;
+            return result;
+        } else {
+            result += s[pos];
+            pos++;
+        }
+    }
+    return result;
+}
+
+static void sg_skip_value(const std::string & s, size_t & pos) {
+    sg_skip_ws(s, pos);
+    if (pos >= s.size()) return;
+    if (s[pos] == '"') {
+        sg_parse_string(s, pos);
+    } else if (s[pos] == '{' || s[pos] == '[') {
+        char open = s[pos], close = (open == '{') ? '}' : ']';
+        int depth = 1; pos++;
+        bool in_str = false;
+        while (pos < s.size() && depth > 0) {
+            if (in_str) {
+                if (s[pos] == '\\') { pos += 2; continue; }
+                if (s[pos] == '"') in_str = false;
+            } else {
+                if (s[pos] == '"') in_str = true;
+                else if (s[pos] == open) depth++;
+                else if (s[pos] == close) depth--;
+            }
+            pos++;
+        }
+    } else {
+        while (pos < s.size() && s[pos] != ',' && s[pos] != ']' && s[pos] != '}') pos++;
+    }
+}
+
+static std::vector<bench_prompt> load_sharegpt_prompts(const std::string & path) {
+    std::vector<bench_prompt> prompts;
+
+    fprintf(stderr, "[ShareGPT] Loading %s ...\n", path.c_str());
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs.is_open()) {
+        fprintf(stderr, "Error: cannot open file: %s\n", path.c_str());
+        return prompts;
+    }
+    std::string s((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ifs.close();
+    fprintf(stderr, "[ShareGPT] File loaded (%.1f MB), parsing...\n", s.size() / (1024.0 * 1024.0));
+
+    size_t pos = 0;
+    sg_skip_ws(s, pos);
+    if (pos >= s.size() || s[pos] != '[') {
+        fprintf(stderr, "Error: expected JSON array\n");
+        return prompts;
+    }
+    pos++;
+
+    int prompt_id = 0;
+    int conv_count = 0;
+
+    while (pos < s.size()) {
+        sg_skip_ws(s, pos);
+        if (pos >= s.size() || s[pos] == ']') break;
+        if (s[pos] == ',') { pos++; continue; }
+        if (s[pos] != '{') break;
+        pos++;
+
+        std::string conv_id;
+        conv_count++;
+
+        while (pos < s.size()) {
+            sg_skip_ws(s, pos);
+            if (s[pos] == '}') { pos++; break; }
+            if (s[pos] == ',') { pos++; continue; }
+
+            std::string key = sg_parse_string(s, pos);
+            sg_skip_ws(s, pos);
+            if (pos < s.size() && s[pos] == ':') pos++;
+            sg_skip_ws(s, pos);
+
+            if (key == "id") {
+                conv_id = sg_parse_string(s, pos);
+            } else if (key == "conversations") {
+                if (pos >= s.size() || s[pos] != '[') { sg_skip_value(s, pos); continue; }
+                pos++;
+
+                while (pos < s.size()) {
+                    sg_skip_ws(s, pos);
+                    if (s[pos] == ']') { pos++; break; }
+                    if (s[pos] == ',') { pos++; continue; }
+                    if (s[pos] != '{') break;
+                    pos++;
+
+                    std::string from_val, value_val;
+
+                    while (pos < s.size()) {
+                        sg_skip_ws(s, pos);
+                        if (s[pos] == '}') { pos++; break; }
+                        if (s[pos] == ',') { pos++; continue; }
+
+                        std::string ckey = sg_parse_string(s, pos);
+                        sg_skip_ws(s, pos);
+                        if (pos < s.size() && s[pos] == ':') pos++;
+                        sg_skip_ws(s, pos);
+
+                        if (ckey == "from") {
+                            from_val = sg_parse_string(s, pos);
+                        } else if (ckey == "value") {
+                            value_val = sg_parse_string(s, pos);
+                        } else {
+                            sg_skip_value(s, pos);
+                        }
+                    }
+
+                    if (from_val == "human" && !value_val.empty()) {
+                        bench_prompt p;
+                        p.question_id = ++prompt_id;
+                        p.category = conv_id;
+                        p.text = std::move(value_val);
+                        prompts.push_back(std::move(p));
+                    }
+                }
+            } else {
+                sg_skip_value(s, pos);
+            }
+        }
+
+        if (conv_count % 10000 == 0) {
+            fprintf(stderr, "[ShareGPT] Parsed %d conversations, %d human turns so far...\n", conv_count, prompt_id);
+        }
+    }
+
+    fprintf(stderr, "[ShareGPT] Done: %d conversations, %d human turns extracted\n", conv_count, prompt_id);
+    return prompts;
+}
+
 static std::string format_llama3_prompt(const std::string & user_msg) {
     return
         "<|start_header_id|>system<|end_header_id|>\n\n"
@@ -239,6 +413,7 @@ int main(int argc, char ** argv) {
     // ------ Extract custom args before common_params_parse ------
     std::string bench_file;
     std::string chat_template = "llama3";  // default
+    std::string dataset_type  = "auto";    // auto, specbench, sharegpt
     std::vector<char *> filtered_argv;
     for (int i = 0; i < argc; ++i) {
         if (std::string(argv[i]) == "--bench-file" && i + 1 < argc) {
@@ -247,6 +422,8 @@ int main(int argc, char ** argv) {
             chat_template = argv[++i];
         } else if (std::string(argv[i]) == "--no-chat-template") {
             chat_template = "none";
+        } else if (std::string(argv[i]) == "--dataset-type" && i + 1 < argc) {
+            dataset_type = argv[++i];
         } else {
             filtered_argv.push_back(argv[i]);
         }
@@ -258,6 +435,12 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  --bench-file FILE        JSONL file with prompts (Spec-Bench format) or plain text\n");
         fprintf(stderr, "  --chat-template TMPL     Chat template: llama3 (default), vicuna, none\n");
         fprintf(stderr, "  --no-chat-template       Same as --chat-template none\n");
+        fprintf(stderr, "  --dataset-type TYPE      Dataset format: auto (default), specbench, sharegpt\n");
+        return 1;
+    }
+
+    if (dataset_type != "auto" && dataset_type != "specbench" && dataset_type != "sharegpt") {
+        fprintf(stderr, "Error: unknown dataset type '%s'. Use: auto, specbench, sharegpt\n", dataset_type.c_str());
         return 1;
     }
 
@@ -289,12 +472,30 @@ int main(int argc, char ** argv) {
     }
 
     // ------ Load prompts ------
-    auto prompts = load_prompts(bench_file);
+    if (dataset_type == "auto") {
+        size_t dot = bench_file.rfind('.');
+        std::string ext = (dot != std::string::npos) ? bench_file.substr(dot) : "";
+        if (ext == ".json") {
+            dataset_type = "sharegpt";
+        } else {
+            dataset_type = "specbench";
+        }
+        fprintf(stderr, "[Spec-Bench] Auto-detected dataset type: %s\n", dataset_type.c_str());
+    }
+
+    std::vector<bench_prompt> prompts;
+    if (dataset_type == "sharegpt") {
+        prompts = load_sharegpt_prompts(bench_file);
+    } else {
+        prompts = load_prompts(bench_file);
+    }
+
     if (prompts.empty()) {
         fprintf(stderr, "Error: no prompts loaded from %s\n", bench_file.c_str());
         return 1;
     }
-    fprintf(stderr, "[Spec-Bench] Loaded %zu prompts from %s (template: %s)\n", prompts.size(), bench_file.c_str(), chat_template.c_str());
+    fprintf(stderr, "[Spec-Bench] Loaded %zu prompts from %s (type: %s, template: %s)\n",
+            prompts.size(), bench_file.c_str(), dataset_type.c_str(), chat_template.c_str());
 
     const int n_seq_dft = params.n_parallel;
 
@@ -386,6 +587,7 @@ int main(int argc, char ** argv) {
     // Prompt loop
     // ====================================================================
     std::vector<bench_result> results;
+    token_freq_stats token_stats;
 
     for (size_t prompt_idx = 0; prompt_idx < prompts.size(); ++prompt_idx) {
         const auto & bp = prompts[prompt_idx];
@@ -595,8 +797,10 @@ int main(int argc, char ** argv) {
 
                     if (accept) {
                         ++n_accept; ++n_past_tgt; ++n_past_dft; ++i_dft;
+                        token_stats.draft_accepted[token_id]++;
                         continue;
                     } else {
+                        token_stats.bonus_freq[token_id]++;
                         break;
                     }
                 }
@@ -784,6 +988,7 @@ int main(int argc, char ** argv) {
                     for (int is = 0; is < (int)sa.size(); ++is) {
                         const llama_token id = cur_p->data[is].id;
                         const int ss = sa[is];
+                        token_stats.draft_freq[id]++;
                         common_sampler_accept(drafts[ss].smpl, id, true);
                         drafts[ss].tokens.push_back(id);
                         drafts[ss].dists.push_back({cur_p->data, cur_p->data + cur_p->size});
@@ -972,6 +1177,76 @@ int main(int argc, char ** argv) {
                     << ",\"output\":\"" << escaped << "\"}\n";
             }
             fprintf(stderr, "Outputs saved to: %s\n", jsonl_path.c_str());
+        }
+    }
+
+    // ====================================================================
+    // Token frequency stats for vocab compression
+    // ====================================================================
+    {
+        std::unordered_map<llama_token, int64_t> all_tokens;
+        for (const auto & [tid, cnt] : token_stats.draft_freq)    all_tokens[tid] += 0;
+        for (const auto & [tid, cnt] : token_stats.draft_accepted) all_tokens[tid] += 0;
+        for (const auto & [tid, cnt] : token_stats.bonus_freq)    all_tokens[tid] += 0;
+
+        int64_t total_draft = 0, total_accepted = 0, total_bonus = 0;
+        for (const auto & [tid, cnt] : token_stats.draft_freq)    total_draft    += cnt;
+        for (const auto & [tid, cnt] : token_stats.draft_accepted) total_accepted += cnt;
+        for (const auto & [tid, cnt] : token_stats.bonus_freq)    total_bonus    += cnt;
+
+        fprintf(stderr, "\n============================================================\n");
+        fprintf(stderr, "  Token Frequency Stats (for vocab compression)\n");
+        fprintf(stderr, "============================================================\n");
+        fprintf(stderr, "  Unique tokens drafted  : %zu\n", token_stats.draft_freq.size());
+        fprintf(stderr, "  Unique tokens accepted : %zu\n", token_stats.draft_accepted.size());
+        fprintf(stderr, "  Unique bonus tokens    : %zu\n", token_stats.bonus_freq.size());
+        fprintf(stderr, "  Total draft count      : %lld\n", (long long)total_draft);
+        fprintf(stderr, "  Total accepted count   : %lld\n", (long long)total_accepted);
+        fprintf(stderr, "  Total bonus count      : %lld\n", (long long)total_bonus);
+        if (total_draft > 0) {
+            fprintf(stderr, "  Overall accept rate    : %.2f%%\n", 100.0 * total_accepted / total_draft);
+        }
+        fprintf(stderr, "============================================================\n");
+
+        std::string freq_path = bench_file + "_token_freq.csv";
+        std::ofstream freq_csv(freq_path);
+        if (freq_csv.is_open()) {
+            freq_csv << "token_id,token_text,draft_count,accepted_count,rejected_count,bonus_count,accept_rate\n";
+
+            struct token_row {
+                llama_token id;
+                int64_t draft, accepted, bonus;
+            };
+            std::vector<token_row> rows;
+            for (const auto & [tid, _] : all_tokens) {
+                token_row r;
+                r.id       = tid;
+                r.draft    = token_stats.draft_freq.count(tid)    ? token_stats.draft_freq.at(tid)    : 0;
+                r.accepted = token_stats.draft_accepted.count(tid) ? token_stats.draft_accepted.at(tid) : 0;
+                r.bonus    = token_stats.bonus_freq.count(tid)    ? token_stats.bonus_freq.at(tid)    : 0;
+                rows.push_back(r);
+            }
+            std::sort(rows.begin(), rows.end(), [](const token_row & a, const token_row & b) {
+                return (a.draft + a.bonus) > (b.draft + b.bonus);
+            });
+
+            for (const auto & r : rows) {
+                std::string tok_text = common_token_to_piece(ctx_tgt, r.id);
+                std::string escaped;
+                for (char c : tok_text) {
+                    if (c == '"')  escaped += "\"\"";
+                    else if (c == '\n') escaped += "\\n";
+                    else if (c == '\r') escaped += "\\r";
+                    else if (c == '\t') escaped += "\\t";
+                    else escaped += c;
+                }
+                int64_t rejected = r.draft > r.accepted ? r.draft - r.accepted : 0;
+                double accept_rate = r.draft > 0 ? 100.0 * r.accepted / r.draft : 0.0;
+                freq_csv << r.id << ",\"" << escaped << "\"," << r.draft << ","
+                         << r.accepted << "," << rejected << "," << r.bonus << ","
+                         << accept_rate << "\n";
+            }
+            fprintf(stderr, "\nToken frequency stats saved to: %s\n", freq_path.c_str());
         }
     }
 

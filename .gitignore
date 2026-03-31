@@ -42,6 +42,7 @@
 
 # Build Artifacts
 
+/data/
 /tags
 /.build/
 /build*
@@ -134,3 +135,4 @@ poetry.toml
 # IDE
 /*.code-workspace
 /.windsurf/
+data/ShareGPT_V4.3_unfiltered_cleaned_split.json
