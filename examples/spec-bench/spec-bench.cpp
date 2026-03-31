@@ -414,6 +414,8 @@ int main(int argc, char ** argv) {
     std::string bench_file;
     std::string chat_template = "llama3";  // default
     std::string dataset_type  = "auto";    // auto, specbench, sharegpt
+    int bench_start = 0;
+    int bench_count = -1;
     std::vector<char *> filtered_argv;
     for (int i = 0; i < argc; ++i) {
         if (std::string(argv[i]) == "--bench-file" && i + 1 < argc) {
@@ -424,6 +426,10 @@ int main(int argc, char ** argv) {
             chat_template = "none";
         } else if (std::string(argv[i]) == "--dataset-type" && i + 1 < argc) {
             dataset_type = argv[++i];
+        } else if (std::string(argv[i]) == "--bench-start" && i + 1 < argc) {
+            bench_start = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--bench-count" && i + 1 < argc) {
+            bench_count = std::atoi(argv[++i]);
         } else {
             filtered_argv.push_back(argv[i]);
         }
@@ -535,6 +541,9 @@ int main(int argc, char ** argv) {
     }
     params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
 
+    // draft model context must be at least as large as target model context
+    params.n_ctx = llama_n_ctx(ctx_tgt);
+
     common_init_result llama_init_dft = common_init_from_params(params);
     model_dft = llama_init_dft.model.get();
     ctx_dft   = llama_init_dft.context.get();
@@ -589,7 +598,10 @@ int main(int argc, char ** argv) {
     std::vector<bench_result> results;
     token_freq_stats token_stats;
 
-    for (size_t prompt_idx = 0; prompt_idx < prompts.size(); ++prompt_idx) {
+    const size_t idx_start = std::max(0, bench_start);
+    const size_t idx_end   = bench_count < 0 ? prompts.size() : std::min(prompts.size(), (size_t)(bench_start + bench_count));
+
+    for (size_t prompt_idx = idx_start; prompt_idx < idx_end; ++prompt_idx) {
         const auto & bp = prompts[prompt_idx];
 
         std::string prompt_text = apply_template(chat_template, bp.text);
@@ -621,17 +633,41 @@ int main(int argc, char ** argv) {
         // ------ Sampler ------
         struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
 
-        // ------ Prefill ------
+        // ------ Prefill (chunked to respect n_batch limit) ------
         const auto t_enc_start = ggml_time_us();
 
-        llama_batch temp_batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
+        const int n_batch_tgt = (int)llama_n_batch(ctx_tgt);
+        const int n_batch_dft = (int)llama_n_batch(ctx_dft);
+        const int n_embd_tgt  = llama_model_n_embd(model_tgt);
+        const int n_prefill   = (int)inp.size() - 1;
+
+
+        // Target model prefill: inp[0..n-2] in chunks of n_batch_tgt
+        llama_batch temp_batch_tgt = llama_batch_init(n_batch_tgt, 0, 1);
+        cb_data.data.clear();
         int temp_n_past = 0;
-        for (size_t i = 0; i + 1 < inp.size(); i++) {
-            common_batch_add(temp_batch_tgt, inp[i], temp_n_past++, { 0 }, true);
+
+        bool tgt_prefill_ok = true;
+        for (int chunk_start = 0; chunk_start < n_prefill; chunk_start += n_batch_tgt) {
+            const int chunk_size = std::min(n_batch_tgt, n_prefill - chunk_start);
+            common_batch_clear(temp_batch_tgt);
+            for (int j = 0; j < chunk_size; j++) {
+                common_batch_add(temp_batch_tgt, inp[chunk_start + j], temp_n_past++, { 0 }, true);
+            }
+            if (llama_decode(ctx_tgt, temp_batch_tgt) != 0) {
+                fprintf(stderr, "  SKIP: target model prefill failed at chunk start=%d\n", chunk_start);
+                tgt_prefill_ok = false;
+                break;
+            }
         }
 
-        cb_data.data.clear();
-        llama_decode(ctx_tgt, temp_batch_tgt);
+        if (!tgt_prefill_ok) {
+            llama_batch_free(temp_batch_tgt);
+            common_sampler_free(smpl);
+            results.push_back(res);
+            continue;
+        }
+
         ctx_tgt->synchronize();
         std::vector<float> sliced_data(cb_data.data.begin(), cb_data.data.end());
 
@@ -639,8 +675,27 @@ int main(int argc, char ** argv) {
         llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
         std::vector<float> backup_data(cb_data.data.begin(), cb_data.data.end());
 
+        // Draft model prefill: inp[1..n-1] in chunks of n_batch_dft
         cb_data.data.clear();
-        llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, (int)inp.size() - 1), sliced_data.data());
+        bool dft_prefill_ok = true;
+        const int n_eagle_tokens = (int)inp.size() - 1;
+        for (int chunk_start = 0; chunk_start < n_eagle_tokens; chunk_start += n_batch_dft) {
+            const int chunk_size = std::min(n_batch_dft, n_eagle_tokens - chunk_start);
+            if (llama_decode_eagle(ctx_dft,
+                    llama_batch_get_one(inp.data() + 1 + chunk_start, chunk_size),
+                    sliced_data.data() + (size_t)chunk_start * n_embd_tgt) != 0) {
+                fprintf(stderr, "  SKIP: draft model prefill failed at token %d/%d\n", chunk_start, n_eagle_tokens);
+                dft_prefill_ok = false;
+                break;
+            }
+        }
+
+        if (!dft_prefill_ok) {
+            llama_batch_free(temp_batch_tgt);
+            common_sampler_free(smpl);
+            results.push_back(res);
+            continue;
+        }
 
         const auto t_enc_end = ggml_time_us();
         llama_batch_free(temp_batch_tgt);
