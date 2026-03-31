@@ -523,6 +523,15 @@ llama_memory_t llama_context::get_memory() const {
     return memory.get();
 }
 
+void llama_context::set_memory(std::unique_ptr<llama_memory_i> mem) {
+    memory = std::move(mem);
+}
+
+void llama_context::set_eval_callback(ggml_backend_sched_eval_callback cb, void * user_data) {
+    cparams.cb_eval           = cb;
+    cparams.cb_eval_user_data = user_data;
+}
+
 bool llama_context::memory_update(bool optimize) {
     if (!memory) {
         return false;

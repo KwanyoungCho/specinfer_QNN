@@ -1,4 +1,5 @@
 #include "llama-kv-cache.h"
+#include "llama-kv-cache-offloaded.h"
 
 #include "llama-impl.h"
 #include "llama-io.h"
@@ -157,11 +158,6 @@ llama_kv_cache::llama_kv_cache(
 
             if (il_reuse < 0) {
                 LLAMA_LOG_DEBUG("%s: - layer %3d: no reuse\n", __func__, il);
-                continue;
-            }
-
-            if (filter && !filter(il)) {
-                LLAMA_LOG_DEBUG("%s: - layer %3d: filtered\n", __func__, il);
                 continue;
             }
 
@@ -1994,6 +1990,12 @@ bool llama_kv_cache_context::apply() {
 
     kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
     n_kv = kv->get_n_kv(sinfos[i_cur]);
+
+    // Propagate delta info to offloader (if KV cache is offloaded)
+    auto * offloaded = dynamic_cast<llama_kv_cache_offloaded *>(kv);
+    if (offloaded) {
+        offloaded->set_delta_info(sinfos[i_cur].head(), (uint32_t)sinfos[i_cur].size());
+    }
 
     return true;
 }

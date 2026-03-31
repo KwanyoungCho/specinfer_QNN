@@ -54,6 +54,13 @@ struct llama_context {
 
     llama_memory_t get_memory() const;
 
+    // Replace the memory module with a custom one (e.g. KV SSD offloader).
+    // The context takes ownership. Must be called before any decode.
+    void set_memory(std::unique_ptr<llama_memory_i> mem);
+
+    // Override the eval callback (applied on every subsequent graph compute).
+    void set_eval_callback(ggml_backend_sched_eval_callback cb, void * user_data);
+
     // return true if the memory was updated
     bool memory_update(bool optimize);
 

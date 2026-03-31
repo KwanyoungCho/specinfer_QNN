@@ -183,6 +183,15 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+protected:
+    // minimal accessors for subclass (e.g. llama_kv_cache_offloaded)
+    ggml_tensor * get_layer_k(int32_t ikv) const { return layers[ikv].k; }
+    ggml_tensor * get_layer_v(int32_t ikv) const { return layers[ikv].v; }
+    uint32_t      get_n_pool_layers() const { return (uint32_t) layers.size(); }
+    const llama_hparams & get_hparams() const { return hparams; }
+    const llama_model   & get_model()   const { return model; }
+    bool                  get_v_trans_flag() const { return v_trans; }
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;
