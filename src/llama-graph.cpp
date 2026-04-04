@@ -13,6 +13,37 @@
 #include <cmath>
 #include <cstring>
 
+namespace {
+
+bool llama_gpu_supports_non_flash_quantized_v_cache(ggml_type type_v) {
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_OPENCL)
+    return type_v == GGML_TYPE_Q4_0;
+#else
+    GGML_UNUSED(type_v);
+    return false;
+#endif
+}
+
+ggml_tensor * ggml_mul_mat_allow_transposed_src0(
+        ggml_context * ctx,
+        ggml_tensor  * a,
+        ggml_tensor  * b) {
+    GGML_ASSERT(a->ne[0]            == b->ne[0]);
+    GGML_ASSERT(b->ne[2] % a->ne[2] == 0);
+    GGML_ASSERT(b->ne[3] % a->ne[3] == 0);
+
+    const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
+    ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op     = GGML_OP_MUL_MAT;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
+}
+
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     if (ubatch->token) {
         const int64_t n_tokens = ubatch->n_tokens;
@@ -1462,12 +1493,24 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cb(kq, "kq_soft_max", il);
 
         if (!v_trans) {
-            // note: avoid this branch
-            v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
-            cb(v, "v_cont", il);
+            if (llama_gpu_supports_non_flash_quantized_v_cache(v->type) && cparams.offload_kqv) {
+                v = ggml_transpose(ctx0, v);
+                cb(v, "v_trans_view", il);
+            } else if (llama_gpu_supports_non_flash_quantized_v_cache(v->type)) {
+                v = ggml_cast(ctx0, v, GGML_TYPE_F32);
+                cb(v, "v_dequant", il);
+                v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
+                cb(v, "v_cont", il);
+            } else {
+                // note: avoid this branch
+                v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
+                cb(v, "v_cont", il);
+            }
         }
 
-        ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
+        ggml_tensor * kqv = ggml_is_transposed(v)
+            ? ggml_mul_mat_allow_transposed_src0(ctx0, v, kq)
+            : ggml_mul_mat(ctx0, v, kq);
         cb(kqv, "kqv", il);
 
         // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
@@ -1769,10 +1812,19 @@ ggml_tensor * llm_graph_context::build_attn_snapkv(
     cb(kq, "kq_soft_max", il);
 
     if (!v_trans_) {
-        v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
+        if (llama_gpu_supports_non_flash_quantized_v_cache(v->type) && cparams.offload_kqv) {
+            v = ggml_transpose(ctx0, v);
+        } else if (llama_gpu_supports_non_flash_quantized_v_cache(v->type)) {
+            v = ggml_cast(ctx0, v, GGML_TYPE_F32);
+            v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
+        } else {
+            v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
+        }
     }
 
-    ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq); // [D_v, n_tps, H_q, n_stream]
+    ggml_tensor * kqv = ggml_is_transposed(v)
+        ? ggml_mul_mat_allow_transposed_src0(ctx0, v, kq)
+        : ggml_mul_mat(ctx0, v, kq); // [D_v, n_tps, H_q, n_stream]
     cb(kqv, "snapkv_kqv", il);
 
     // ── Step 3: Importance from softmax weights (reuse kq) ──

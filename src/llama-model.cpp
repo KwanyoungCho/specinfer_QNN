@@ -26,6 +26,23 @@
 #include <sstream>
 #include <stdexcept>
 
+namespace {
+
+bool llama_gpu_supports_non_flash_quantized_v_cache(ggml_type type_v) {
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_OPENCL)
+    return type_v == GGML_TYPE_Q4_0;
+#else
+    GGML_UNUSED(type_v);
+    return false;
+#endif
+}
+
+bool llama_kv_cache_v_is_transposed(const llama_cparams & cparams, ggml_type type_v) {
+    return !cparams.flash_attn && !llama_gpu_supports_non_flash_quantized_v_cache(type_v);
+}
+
+}
+
 const char * llm_type_name(llm_type type) {
     switch (type) {
         case LLM_TYPE_14M:           return "14M";
@@ -6978,6 +6995,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_seq_max,
                             nullptr);
                 } else if (llm_arch_is_hybrid(arch)) {
+                    const bool attn_v_trans = llama_kv_cache_v_is_transposed(cparams, params.type_v);
 
                     // The main difference between hybrid architectures is the
                     // layer filters, so pick the right one here
@@ -6999,7 +7017,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         /* model             */ *this,
                         /* attn_type_k       */ params.type_k,
                         /* attn_type_v       */ params.type_v,
-                        /* attn_v_trans      */ !cparams.flash_attn,
+                        /* attn_v_trans      */ attn_v_trans,
                         /* attn_kv_size      */ cparams.n_ctx,
                         /* attn_n_pad        */ 1,
                         /* attn_n_swa        */ hparams.n_swa,
@@ -7013,6 +7031,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         /* filter_attn       */ std::move(filter_attn),
                         /* filter_recr       */ std::move(filter_recr));
                 } else {
+                    const bool attn_v_trans = llama_kv_cache_v_is_transposed(cparams, params.type_v);
                     llama_memory_i::layer_reuse_cb reuse = nullptr;
 
                     if (arch == LLM_ARCH_GEMMA3N) {
@@ -7032,7 +7051,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 *this,
                                 params.type_k,
                                 params.type_v,
-                                !cparams.flash_attn,
+                                attn_v_trans,
                                 cparams.offload_kqv,
                                 params.swa_full,
                                 cparams.kv_unified,
@@ -7049,7 +7068,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 *this,
                                 params.type_k,
                                 params.type_v,
-                                !cparams.flash_attn,
+                                attn_v_trans,
                                 cparams.offload_kqv,
                                 cparams.kv_unified,
                                 cparams.n_ctx_seq,

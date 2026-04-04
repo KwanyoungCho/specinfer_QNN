@@ -54,7 +54,6 @@ COMMON_ARGS=(
     -ngld 20
     --temp 0.0
     --min-p 0.0
-    --top-k 10
     --top-p 1.0
     --draft-max 500
     --draft-min 1
@@ -64,6 +63,9 @@ COMMON_ARGS=(
     --no-mmap
     -fa off
     --deferred_kv
+    --top-k 10
+    --n-depth 5
+    --rerank-k 59
 )
 
 echo "=========================================="

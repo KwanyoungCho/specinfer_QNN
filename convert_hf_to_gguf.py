@@ -2819,6 +2819,17 @@ class LlamaModel(TextModel):
                     lm_head_trimmed = lm_head.index_select(0, indices)
                     logger.info(f"EAGLE: Trimmed lm_head from {lm_head.shape} to {lm_head_trimmed.shape}")
 
+                    # Pad to multiple of 8 for Adreno OpenCL SOA 8x kernel compatibility (N_DST=8)
+                    n_trimmed = lm_head_trimmed.shape[0]
+                    pad_to = (n_trimmed + 7) // 8 * 8
+                    if pad_to > n_trimmed:
+                        n_pad = pad_to - n_trimmed
+                        logger.info(f"EAGLE: Padding trimmed vocab from {n_trimmed} to {pad_to} (+{n_pad} zero rows) for OpenCL alignment")
+                        zero_pad = torch.zeros(n_pad, lm_head_trimmed.shape[1], dtype=lm_head_trimmed.dtype)
+                        lm_head_trimmed = torch.cat([lm_head_trimmed, zero_pad], dim=0)
+                        # Add dummy entries (token ID 0) to vocab_map for padding rows
+                        vocab_map = vocab_map + [0] * n_pad
+
                     # Store vocab_map and output_vocab_size as GGUF metadata
                     self._eagle_vocab_map = vocab_map
                     self._eagle_output_vocab_size = len(vocab_map)

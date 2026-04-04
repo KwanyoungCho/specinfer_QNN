@@ -1,5 +1,15 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 
+typedef char int8_t;
+typedef uchar uint8_t;
+typedef short int16_t;
+typedef ushort uint16_t;
+typedef int int32_t;
+typedef uint uint32_t;
+
+#define QK4_0 32
+#define Q4_0_BLOCK_SIZE 18
+
 // v = { mp, L, d }
 inline uint fastdiv(uint n, uint4 v) {
     uint msbs;
@@ -10,6 +20,85 @@ inline uint fastmod(uint n, uint4 v) {
     uint q = fastdiv(n, v);
     return n - q * v.s2;
 }
+
+inline void quantize_q4_0_block(
+        global float * src,
+        global uchar * dst_q,
+        global half  * dst_d,
+        ulong          block_index) {
+    float amax = 0.0f;
+    float vmax = 0.0f;
+
+    for (int j = 0; j < QK4_0; ++j) {
+        const float v = src[j];
+        const float av = fabs(v);
+        if (av > amax) {
+            amax = av;
+            vmax = v;
+        }
+    }
+
+    const float d  = vmax / -8.0f;
+    const float id = d != 0.0f ? 1.0f / d : 0.0f;
+
+    dst_d[block_index] = convert_half(d);
+
+    global uchar * q = dst_q + block_index * (QK4_0 / 2);
+    for (int j = 0; j < QK4_0/2; ++j) {
+        const float x0 = src[j]             * id;
+        const float x1 = src[QK4_0/2 + j]   * id;
+
+        const uchar xi0 = min((uchar) 15, convert_uchar_sat_rte(x0 + 8.5f));
+        const uchar xi1 = min((uchar) 15, convert_uchar_sat_rte(x1 + 8.5f));
+
+        q[j] = xi0 | (xi1 << 4);
+    }
+}
+
+#define DEFINE_SET_ROWS_Q4_0_KERNEL(KERNEL_NAME, IDX_T) \
+kernel void KERNEL_NAME( \
+        global char * src0, \
+        ulong         offset0, \
+        global char * src1, \
+        ulong         offset1, \
+        global uchar * dst_q, \
+        global half  * dst_d, \
+        ulong         dst_offset_blocks, \
+        int           ne01, \
+        ulong         nb01, \
+        ulong         nb02, \
+        ulong         nb03, \
+        uint4         ne11, \
+        uint4         ne12, \
+        ulong         nb10, \
+        ulong         nb11, \
+        ulong         nb12, \
+        int           nblk0, \
+        ulong         nb1, \
+        ulong         nb2, \
+        ulong         nb3 \
+) { \
+    src0 = src0 + offset0; \
+    src1 = src1 + offset1; \
+    int i03 = get_group_id(2); \
+    int i02 = get_group_id(1); \
+    int i01 = get_group_id(0) * get_local_size(1) + get_local_id(1); \
+    if (i01 >= ne01) { \
+        return; \
+    } \
+    int i12 = fastmod(i03, ne12); \
+    int i11 = fastmod(i02, ne11); \
+    int i10 = i01; \
+    IDX_T i1 = ((global IDX_T *)(src1 + i10*nb10 + i11*nb11 + i12*nb12))[0]; \
+    ulong dst_row_base = dst_offset_blocks + ((ulong) i1 * nb1 + (ulong) i02 * nb2 + (ulong) i03 * nb3) / (ulong) Q4_0_BLOCK_SIZE; \
+    global float * src_row = (global float *) (src0 + i01*nb01 + i02*nb02 + i03*nb03); \
+    for (int ind = get_local_id(0); ind < nblk0; ind += get_local_size(0)) { \
+        quantize_q4_0_block(src_row + ind*QK4_0, dst_q, dst_d, dst_row_base + (ulong) ind); \
+    } \
+}
+
+DEFINE_SET_ROWS_Q4_0_KERNEL(kernel_set_rows_q4_0_i64, long)
+DEFINE_SET_ROWS_Q4_0_KERNEL(kernel_set_rows_q4_0_i32, int)
 
 kernel void kernel_set_rows_f32_i64(
         global char * src0,

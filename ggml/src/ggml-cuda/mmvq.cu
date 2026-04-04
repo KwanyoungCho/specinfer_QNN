@@ -602,6 +602,190 @@ static void mul_mat_vec_q_switch_type(
     }
 }
 
+template <int cols_per_block>
+static __global__ void mul_mat_vec_v_q4_0_trans(
+        const char  * __restrict__ vx,
+        const float * __restrict__ vy,
+        float       * __restrict__ dst,
+        const int32_t ncols_x,
+        const int32_t nrows_x,
+        const int32_t ncols_dst,
+        const int32_t channel_ratio,
+        const int32_t sample_ratio,
+        const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
+        const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
+        const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
+    const int lane = threadIdx.x;
+    const int warp = threadIdx.y;
+
+    const int col0        = blockIdx.x * cols_per_block;
+    const int channel_dst = blockIdx.y;
+    const int sample_dst  = blockIdx.z;
+    const int channel_x   = channel_ratio > 1 ? channel_dst / channel_ratio : channel_dst;
+    const int sample_x    = sample_ratio  > 1 ? sample_dst  / sample_ratio  : sample_dst;
+
+    const int ncols_tile  = min(cols_per_block, ncols_dst - col0);
+    const int nrow_blocks = (nrows_x + QK4_0 - 1) / QK4_0;
+
+    __shared__ float kq_tile[cols_per_block][WARP_SIZE];
+
+    for (int row_block = warp; row_block < nrow_blocks; row_block += blockDim.y) {
+        const int row = row_block * QK4_0 + lane;
+
+        float acc[cols_per_block] = { 0.0f };
+        const char * vx_row = vx + sample_x*nb03 + channel_x*nb02 + row_block*nb01;
+
+        for (int kv0 = 0; kv0 < ncols_x; kv0 += WARP_SIZE) {
+            if (warp == 0) {
+                const int kv = kv0 + lane;
+                #pragma unroll
+                for (int j = 0; j < cols_per_block; ++j) {
+                    kq_tile[j][lane] = (j < ncols_tile && kv < ncols_x)
+                        ? *(const float *) ((const char *) vy + sample_dst*nb13 + channel_dst*nb12 + (col0 + j)*nb11 + kv*nb10)
+                        : 0.0f;
+                }
+            }
+
+            __syncthreads();
+
+            if (row < nrows_x) {
+                #pragma unroll
+                for (int tk = 0; tk < WARP_SIZE; ++tk) {
+                    const int kv = kv0 + tk;
+                    if (kv >= ncols_x) {
+                        break;
+                    }
+
+                    const block_q4_0 * x = (const block_q4_0 *) (vx_row + kv*nb00);
+                    const uint8_t q_byte = x->qs[lane % (QK4_0/2)];
+                    const int q = (lane < (QK4_0/2) ? (q_byte & 0x0F) : (q_byte >> 4)) - 8;
+                    const float v = __half2float(x->d) * q;
+
+                    #pragma unroll
+                    for (int j = 0; j < cols_per_block; ++j) {
+                        if (j < ncols_tile) {
+                            acc[j] += v * kq_tile[j][tk];
+                        }
+                    }
+                }
+            }
+
+            __syncthreads();
+        }
+
+        if (row < nrows_x) {
+            #pragma unroll
+            for (int j = 0; j < cols_per_block; ++j) {
+                if (j < ncols_tile) {
+                    *(float *) ((char *) dst + sample_dst*nb3 + channel_dst*nb2 + (col0 + j)*nb1 + row*nb0) = acc[j];
+                }
+            }
+        }
+    }
+}
+
+template <int cols_per_block>
+static void mul_mat_vec_v_q4_0_trans_launch(
+        const char * vx, const float * vy, float * dst,
+        const int32_t ncols_x, const int32_t nrows_x, const int32_t ncols_dst,
+        const int32_t nchannels_x, const int32_t nchannels_dst,
+        const int32_t nsamples_x, const int32_t nsamples_dst,
+        const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
+        const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
+        const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3,
+        cudaStream_t stream) {
+    const int32_t nrow_blocks = (nrows_x + QK4_0 - 1) / QK4_0;
+    const int32_t warps = min(8, max(1, nrow_blocks));
+
+    const dim3 block_dims(WARP_SIZE, warps, 1);
+    const dim3 block_nums((ncols_dst + cols_per_block - 1) / cols_per_block, nchannels_dst, nsamples_dst);
+
+    const int32_t channel_ratio = nchannels_dst / nchannels_x;
+    const int32_t sample_ratio  = nsamples_dst  / nsamples_x;
+
+    mul_mat_vec_v_q4_0_trans<cols_per_block><<<block_nums, block_dims, 0, stream>>>(
+        vx, vy, dst, ncols_x, nrows_x, ncols_dst, channel_ratio, sample_ratio,
+        nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2, nb3);
+}
+
+bool ggml_cuda_can_mul_mat_vec_v_q4_0_trans(
+        const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst) {
+    if (src0->type != GGML_TYPE_Q4_0 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (!ggml_is_transposed(src0)) {
+        return false;
+    }
+
+    if (src0->ne[0] != src1->ne[0]) {
+        return false;
+    }
+
+    if (src1->ne[2] % src0->ne[2] != 0 || src1->ne[3] % src0->ne[3] != 0) {
+        return false;
+    }
+
+    if (dst->ne[0] != src0->ne[1] || dst->ne[1] != src1->ne[1] || dst->ne[2] != src1->ne[2] || dst->ne[3] != src1->ne[3]) {
+        return false;
+    }
+
+    if (src0->ne[1] % QK4_0 != 0) {
+        return false;
+    }
+
+    const int64_t ts_src0 = (int64_t) ggml_type_size(src0->type);
+    if (src0->nb[1] != ts_src0) {
+        return false;
+    }
+
+    if (src0->nb[2] != (int64_t) ggml_row_size(src0->type, src0->ne[1])) {
+        return false;
+    }
+
+    if (src0->nb[0] != (int64_t) ggml_row_size(src0->type, src0->ne[1] * src0->ne[2])) {
+        return false;
+    }
+
+    return true;
+}
+
+void ggml_cuda_mul_mat_vec_v_q4_0_trans(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        ggml_tensor * dst) {
+    GGML_TENSOR_BINARY_OP_LOCALS;
+
+    GGML_ASSERT(ggml_cuda_can_mul_mat_vec_v_q4_0_trans(src0, src1, dst));
+    GGML_ASSERT(nb10 == (int64_t) sizeof(float));
+    GGML_ASSERT(nb0  == (int64_t) sizeof(float));
+
+    cudaStream_t stream = ctx.stream();
+
+    const char  * src0_d = (const char  *) src0->data;
+    const float * src1_d = (const float *) src1->data;
+    float       *  dst_d = (float       *)  dst->data;
+
+    if (ne1 <= 1) {
+        mul_mat_vec_v_q4_0_trans_launch<1>(
+            src0_d, src1_d, dst_d, ne00, ne01, ne1, ne02, ne2, ne03, ne3,
+            nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2, nb3, stream);
+    } else if (ne1 <= 2) {
+        mul_mat_vec_v_q4_0_trans_launch<2>(
+            src0_d, src1_d, dst_d, ne00, ne01, ne1, ne02, ne2, ne03, ne3,
+            nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2, nb3, stream);
+    } else if (ne1 <= 4) {
+        mul_mat_vec_v_q4_0_trans_launch<4>(
+            src0_d, src1_d, dst_d, ne00, ne01, ne1, ne02, ne2, ne03, ne3,
+            nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2, nb3, stream);
+    } else {
+        mul_mat_vec_v_q4_0_trans_launch<8>(
+            src0_d, src1_d, dst_d, ne00, ne01, ne1, ne02, ne2, ne03, ne3,
+            nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2, nb3, stream);
+    }
+}
+
 void ggml_cuda_mul_mat_vec_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
         const ggml_cuda_mm_fusion_args_host * fusion) {

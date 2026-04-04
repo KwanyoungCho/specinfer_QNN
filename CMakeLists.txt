@@ -96,6 +96,28 @@ option(LLAMA_HTTPLIB    "llama: if libcurl is disabled, use httplib to download 
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" OFF)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
+# QNN SDK is needed by qnn_core, which is configured before example subdirectories.
+if (NOT DEFINED QNN_SDK_ROOT)
+    set(_qnn_sdk_candidates
+        "$ENV{QNN_SDK_ROOT}"
+        "/home/jongjip/qairt/2.37.0.250724"
+        "/home/chokwans99/QNN_SDK/qairt/2.37.1.250807")
+
+    foreach(_qnn_sdk_candidate IN LISTS _qnn_sdk_candidates)
+        if (_qnn_sdk_candidate AND EXISTS "${_qnn_sdk_candidate}/include/QNN/QnnTensor.h")
+            set(QNN_SDK_ROOT "${_qnn_sdk_candidate}" CACHE PATH "Path to the QNN SDK root")
+            break()
+        endif()
+    endforeach()
+
+    unset(_qnn_sdk_candidate)
+    unset(_qnn_sdk_candidates)
+endif()
+
+if (DEFINED QNN_SDK_ROOT)
+    message(STATUS "Configured QNN_SDK_ROOT=${QNN_SDK_ROOT}")
+endif()
+
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)

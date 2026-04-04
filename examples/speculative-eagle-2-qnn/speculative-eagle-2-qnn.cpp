@@ -422,7 +422,8 @@ int main(int argc, char ** argv) {
 
     int64_t total_tree_pruning_us = 0;
 
-    int64_t total_target_forward_us = 0;
+    // int64_t total_target_forward_us = 0;
+    std::vector<int> target_forward_us;
     int64_t total_target_kv_cache_us = 0;
     int64_t total_verify_logic_us = 0;
     int64_t total_fallback_sampling_us = 0;
@@ -1185,7 +1186,8 @@ int main(int argc, char ** argv) {
                 break;
             }
             const auto t_dec_end = ggml_time_us();
-            total_target_forward_us += (t_dec_end - t_dec_start);
+            // total_target_forward_us += (t_dec_end - t_dec_start);
+            target_forward_us.push_back((t_dec_end - t_dec_start) / 1000.0f);
 
             if (!ctx_tgt->final_hiddens.empty()) {
                 backup_data = ctx_tgt->final_hiddens;  // Hidden states from QNN verification
@@ -1235,6 +1237,7 @@ int main(int argc, char ** argv) {
             ? std::accumulate(T_d.begin(), T_d.end(), 0.0) / T_d.size() : 0;
 
         const double avg_step_ms = avg_draft_lat + avg_verify_lat;
+        int64_t total_target_forward_us = std::accumulate(target_forward_us.begin(), target_forward_us.end(), 0);
 
         LOG_INF("\n");
         LOG_INF("================ Latency Breakdown ==================\n");
@@ -1347,6 +1350,8 @@ int main(int argc, char ** argv) {
         if (f3.is_open()) { for (auto v : verification_latencies) f3 << v << "\n"; }
         std::ofstream f4("dr_d25.txt");
         if (f4.is_open()) { for (auto v : decoding_latencies) f4 << v << "\n"; }
+        std::ofstream f5("var_for.txt");
+        if (f5.is_open()) { for (auto v : target_forward_us) f5 << v << "\n"; }
     }
 
     common_sampler_free(smpl);

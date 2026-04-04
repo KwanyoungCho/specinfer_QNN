@@ -15,12 +15,19 @@
 #include "sampling.h"
 #include "log.h"
 #include "llama.h"
+#ifdef SPEC_BENCH_USE_QNN
+#include "llm_decode_runner.h"
+#endif
 #include "../src/llama-context.h"
 #include "../src/llama-model.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <map>
+#include <memory>
 #include <random>
 #include <set>
 #include <string>
@@ -33,6 +40,14 @@
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
+
+#ifdef SPEC_BENCH_USE_QNN
+#define SPEC_BENCH_BACKEND_LABEL "Spec-Bench-QNN"
+#define SPEC_BENCH_RESULTS_SUFFIX "_qnn_results"
+#else
+#define SPEC_BENCH_BACKEND_LABEL "Spec-Bench"
+#define SPEC_BENCH_RESULTS_SUFFIX "_results"
+#endif
 
 #define n_depth 5
 #define expand_k 2
@@ -83,6 +98,7 @@ struct seq_draft {
 // ============================================================
 
 struct bench_result {
+    int    sample_index;
     int    question_id;
     std::string category;
     int    n_input;
@@ -94,12 +110,14 @@ struct bench_result {
     double prefill_tps;
     double decode_tps;
     double decode_lat;
+    double draft_len;
     double avg_accept_len;
     double accept_ratio;
     double avg_draft_lat;
     double avg_verify_lat;
     double avg_td;
     bool   success;
+    std::string error_message;
     std::string output_text;
 };
 
@@ -404,6 +422,138 @@ static std::string apply_template(const std::string & tmpl, const std::string & 
     return user_msg;
 }
 
+static std::string csv_escape(const std::string & text) {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char c : text) {
+        if (c == '"') {
+            escaped += "\"\"";
+        } else {
+            escaped += c;
+        }
+    }
+    return escaped;
+}
+
+static std::string json_escape(const std::string & text) {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char c : text) {
+        if (c == '"') escaped += "\\\"";
+        else if (c == '\\') escaped += "\\\\";
+        else if (c == '\n') escaped += "\\n";
+        else if (c == '\r') escaped += "\\r";
+        else if (c == '\t') escaped += "\\t";
+        else escaped += c;
+    }
+    return escaped;
+}
+
+static std::string default_results_dir(const std::string & bench_file) {
+    namespace fs = std::filesystem;
+    fs::path p(bench_file);
+    fs::path parent = p.parent_path();
+    std::string stem = p.stem().empty() ? p.filename().string() : p.stem().string();
+    return (parent / (stem + SPEC_BENCH_RESULTS_SUFFIX)).string();
+}
+
+static std::string make_prompt_output_path(const std::string & results_dir, int sample_index) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "output_%05d.txt", sample_index);
+    return (std::filesystem::path(results_dir) / buf).string();
+}
+
+static void append_hidden_state_slice(
+    std::vector<float> & dst,
+    const std::vector<float> & src,
+    int hidden_dim,
+    int index) {
+    if (hidden_dim <= 0 || index < 0) {
+        return;
+    }
+
+    const size_t begin = (size_t) hidden_dim * (size_t) index;
+    const size_t end   = begin + (size_t) hidden_dim;
+    if (end > src.size()) {
+        return;
+    }
+
+    dst.insert(dst.end(), src.begin() + begin, src.begin() + end);
+}
+
+static std::vector<float> take_last_hidden_states(
+    const std::vector<float> & src,
+    int hidden_dim,
+    int n_tokens) {
+    if (hidden_dim <= 0 || n_tokens <= 0) {
+        return {};
+    }
+
+    const size_t n_values = std::min(src.size(), (size_t) hidden_dim * (size_t) n_tokens);
+    if (n_values == 0) {
+        return {};
+    }
+
+    return std::vector<float>(src.end() - n_values, src.end());
+}
+
+static std::vector<float> take_first_hidden_states(
+    const std::vector<float> & src,
+    int hidden_dim,
+    int n_tokens) {
+    if (hidden_dim <= 0 || n_tokens <= 0) {
+        return {};
+    }
+
+    const size_t n_values = std::min(src.size(), (size_t) hidden_dim * (size_t) n_tokens);
+    return std::vector<float>(src.begin(), src.begin() + n_values);
+}
+
+static void write_prompt_result_file(
+    const std::string & path,
+    const bench_result & res,
+    const std::string & raw_prompt) {
+    std::ofstream ofs(path);
+    if (!ofs.is_open()) {
+        fprintf(stderr, "Warning: failed to write prompt result file: %s\n", path.c_str());
+        return;
+    }
+
+    ofs << "============================================================\n";
+    ofs << "  " << SPEC_BENCH_BACKEND_LABEL << " Sample Result\n";
+    ofs << "============================================================\n";
+    ofs << "Sample index       : " << res.sample_index << "\n";
+    ofs << "Question ID        : " << res.question_id << "\n";
+    ofs << "Category           : " << res.category << "\n";
+    ofs << "Status             : " << (res.success ? "success" : "skipped") << "\n";
+    if (!res.error_message.empty()) {
+        ofs << "Skip reason        : " << res.error_message << "\n";
+    }
+    ofs << "------------------------------------------------------------\n";
+    ofs << "Prompt:\n";
+    ofs << raw_prompt << "\n";
+    ofs << "------------------------------------------------------------\n";
+    ofs << "Output:\n";
+    ofs << res.output_text << "\n";
+    ofs << "------------------------------------------------------------\n";
+
+    if (!res.success) {
+        return;
+    }
+
+    ofs << "  Prefill           : " << res.n_input << " tokens | " << res.prefill_ms << " ms | " << res.prefill_tps << " t/s\n";
+    ofs << "  Decode            : " << res.n_predict << " tokens | " << res.decode_ms << " ms | " << res.decode_tps << " t/s\n";
+    ofs << "  Decode latency    :              | " << res.decode_lat << " ms/tok\n";
+    ofs << "------------------------------------------------------------\n";
+    ofs << "  Draft length      : " << res.draft_len << "\n";
+    ofs << "  Avg accept length : " << res.avg_accept_len << "\n";
+    ofs << "  Accept ratio      : " << res.accept_ratio << "%\n";
+    ofs << "------------------------------------------------------------\n";
+    ofs << "  Avg draft phase   : " << res.avg_draft_lat << " ms\n";
+    ofs << "  Avg verification  : " << res.avg_verify_lat << " ms\n";
+    ofs << "  Avg T_d (1-tok dft) : " << res.avg_td << " ms\n";
+}
+
 // ============================================================
 // Main
 // ============================================================
@@ -412,6 +562,7 @@ int main(int argc, char ** argv) {
 
     // ------ Extract custom args before common_params_parse ------
     std::string bench_file;
+    std::string results_dir;
     std::string chat_template = "llama3";  // default
     std::string dataset_type  = "auto";    // auto, specbench, sharegpt
     int bench_start = 0;
@@ -430,6 +581,8 @@ int main(int argc, char ** argv) {
             bench_start = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--bench-count" && i + 1 < argc) {
             bench_count = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--results-dir" && i + 1 < argc) {
+            results_dir = argv[++i];
         } else {
             filtered_argv.push_back(argv[i]);
         }
@@ -442,6 +595,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  --chat-template TMPL     Chat template: llama3 (default), vicuna, none\n");
         fprintf(stderr, "  --no-chat-template       Same as --chat-template none\n");
         fprintf(stderr, "  --dataset-type TYPE      Dataset format: auto (default), specbench, sharegpt\n");
+        fprintf(stderr, "  --results-dir DIR        Directory for per-prompt outputs and aggregate files\n");
         return 1;
     }
 
@@ -500,8 +654,22 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Error: no prompts loaded from %s\n", bench_file.c_str());
         return 1;
     }
+
+    if (results_dir.empty()) {
+        results_dir = default_results_dir(bench_file);
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(results_dir, ec);
+    if (ec) {
+        fprintf(stderr, "Error: failed to create results directory %s: %s\n",
+                results_dir.c_str(), ec.message().c_str());
+        return 1;
+    }
+
     fprintf(stderr, "[Spec-Bench] Loaded %zu prompts from %s (type: %s, template: %s)\n",
             prompts.size(), bench_file.c_str(), dataset_type.c_str(), chat_template.c_str());
+    fprintf(stderr, "[Spec-Bench] Per-prompt results will be saved under %s\n", results_dir.c_str());
 
     const int n_seq_dft = params.n_parallel;
 
@@ -523,6 +691,49 @@ int main(int argc, char ** argv) {
     llama_context * ctx_tgt = NULL;
     llama_context * ctx_dft = NULL;
 
+#ifdef SPEC_BENCH_USE_QNN
+    llama_qnn::LLMDecodeConfig qnn_config;
+    qnn_config.ctx_dir               = params.qnn_ctx_dir;
+    qnn_config.backend_so            = params.qnn_backend_so.empty() ? "libQnnHtp.so" : params.qnn_backend_so;
+    qnn_config.system_so             = params.qnn_system_so.empty() ? "libQnnSystem.so" : params.qnn_system_so;
+    qnn_config.tokenizer_path        = params.qnn_tokenizer_path;
+    qnn_config.params_path           = params.qnn_params_path;
+    qnn_config.max_gen_tokens        = params.n_predict > 0 ? params.n_predict : 100;
+    qnn_config.log_level             = params.qnn_log_level;
+    qnn_config.use_multi_context     = params.qnn_use_multi_context;
+    qnn_config.num_shards            = params.qnn_num_shards;
+    qnn_config.deferred_kv_writeback = params.qnn_deferred_kv_writeback;
+
+    llama_model_params tgt_model_param = llama_model_default_params();
+    tgt_model_param.vocab_only = true;
+    model_tgt = llama_model_load_from_file(qnn_config.tokenizer_path.c_str(), tgt_model_param);
+
+    llama_context_params tgt_ctx_param = llama_context_default_params();
+    tgt_ctx_param.n_ctx     = 4096;
+    tgt_ctx_param.n_batch   = 2048;
+    tgt_ctx_param.n_seq_max = params.n_parallel;
+    ctx_tgt = llama_init_from_model(model_tgt, tgt_ctx_param);
+
+    if (!model_tgt || !ctx_tgt) {
+        fprintf(stderr, "Error: failed to initialize QNN target model from '%s'\n", qnn_config.tokenizer_path.c_str());
+        llama_backend_free();
+        return 1;
+    }
+
+    if (qnn_config.ctx_dir.empty()) {
+        fprintf(stderr, "Error: --qnn-ctx-dir is required for the QNN target model\n");
+        llama_backend_free();
+        return 1;
+    }
+
+    auto qnn_runner = std::make_unique<llama_qnn::LLMDecodeRunner>(qnn_config);
+    if (!qnn_runner->initialize()) {
+        fprintf(stderr, "Error: failed to initialize QNN runner: %s\n", qnn_runner->get_error().c_str());
+        llama_backend_free();
+        return 1;
+    }
+    fprintf(stderr, "[Spec-Bench] QNN target runner initialized successfully\n");
+#else
     common_init_result llama_init_tgt = common_init_from_params(params);
     model_tgt = llama_init_tgt.model.get();
     ctx_tgt   = llama_init_tgt.context.get();
@@ -532,6 +743,7 @@ int main(int argc, char ** argv) {
         llama_backend_free();
         return 1;
     }
+#endif
 
     params.devices = params.speculative.devices;
     params.model = params.speculative.model;
@@ -554,6 +766,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+#ifndef SPEC_BENCH_USE_QNN
     // LM HEAD SHARING
     {
         struct ggml_tensor * tgt_output = llama_get_model(ctx_tgt)->output;
@@ -569,6 +782,7 @@ int main(int argc, char ** argv) {
         }
         fprintf(stderr, "[Spec-Bench] LM head sharing: OK\n");
     }
+#endif
 
     // Vocab check
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
@@ -579,7 +793,53 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    const auto & dft_vocab_map = model_dft->vocab_map;
+    const bool has_vocab_trim = !dft_vocab_map.empty();
+    if (has_vocab_trim) {
+        fprintf(stderr,
+                "[Spec-Bench] Draft vocab trimming active: %zu entries in vocab_map (output_vocab_size=%u)\n",
+                dft_vocab_map.size(), model_dft->hparams.n_vocab_output);
+    }
+
+    if (llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
+        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
+        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)) {
+        fprintf(stderr, "Error: draft model special tokens must match target model\n");
+        return 1;
+    }
+
+    {
+        const int n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
+        const int n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
+        const int vocab_diff  = std::abs(n_vocab_tgt - n_vocab_dft);
+
+        if (!has_vocab_trim && vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
+            fprintf(stderr,
+                    "Error: target vocab size %d does not closely match draft vocab size %d (diff=%d, max=%d)\n",
+                    n_vocab_tgt, n_vocab_dft, vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
+            return 1;
+        }
+
+        if (!has_vocab_trim) {
+            for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
+                const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
+                const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
+                if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
+                    fprintf(stderr,
+                            "Error: token %d differs between target and draft vocabularies ('%s' vs '%s')\n",
+                            i,
+                            common_token_to_piece(ctx_tgt, i).c_str(),
+                            common_token_to_piece(ctx_dft, i).c_str());
+                    return 1;
+                }
+            }
+        }
+    }
+
+#ifndef SPEC_BENCH_USE_QNN
     auto * mem_tgt = llama_get_memory(ctx_tgt);
+#endif
     auto * mem_dft = llama_get_memory(ctx_dft);
 
     const int max_context_size     = llama_n_ctx(ctx_tgt);
@@ -600,6 +860,9 @@ int main(int argc, char ** argv) {
 
     const size_t idx_start = std::max(0, bench_start);
     const size_t idx_end   = bench_count < 0 ? prompts.size() : std::min(prompts.size(), (size_t)(bench_start + bench_count));
+    auto persist_result = [&](const bench_result & res, const bench_prompt & bp) {
+        write_prompt_result_file(make_prompt_output_path(results_dir, res.sample_index), res, bp.text);
+    };
 
     for (size_t prompt_idx = idx_start; prompt_idx < idx_end; ++prompt_idx) {
         const auto & bp = prompts[prompt_idx];
@@ -612,21 +875,30 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  --- output start ---\n");
 
         bench_result res = {};
+        res.sample_index = (int) prompt_idx + 1;
         res.question_id = bp.question_id;
         res.category = bp.category;
         res.success = false;
 
         // ------ Reset state ------
+#ifdef SPEC_BENCH_USE_QNN
+        qnn_runner->reset();
+        ctx_tgt->final_hiddens.clear();
+#else
         llama_memory_clear(mem_tgt, true);
+#endif
         llama_memory_clear(mem_dft, true);
 
         // ------ Tokenize ------
         std::vector<llama_token> inp = common_tokenize(ctx_tgt, prompt_text, true, true);
         res.n_input = (int)inp.size();
+        const int n_input = (int) inp.size();
 
-        if ((int)inp.size() > max_tokens_list_size) {
+        if (n_input > max_tokens_list_size) {
             fprintf(stderr, "  SKIP: prompt too long (%d tokens, max %d)\n", (int)inp.size(), max_tokens_list_size);
+            res.error_message = "prompt too long";
             results.push_back(res);
+            persist_result(res, bp);
             continue;
         }
 
@@ -636,18 +908,46 @@ int main(int argc, char ** argv) {
         // ------ Prefill (chunked to respect n_batch limit) ------
         const auto t_enc_start = ggml_time_us();
 
-        const int n_batch_tgt = (int)llama_n_batch(ctx_tgt);
         const int n_batch_dft = (int)llama_n_batch(ctx_dft);
-        const int n_embd_tgt  = llama_model_n_embd(model_tgt);
-        const int n_prefill   = (int)inp.size() - 1;
+        int hidden_dim = llama_model_n_embd(model_tgt);
+        if (hidden_dim <= 0) {
+            hidden_dim = llama_model_n_embd(model_dft);
+        }
 
+        bool tgt_prefill_ok = true;
+        std::vector<float> sliced_data;
+        std::vector<float> backup_data;
 
-        // Target model prefill: inp[0..n-2] in chunks of n_batch_tgt
+#ifdef SPEC_BENCH_USE_QNN
+        if (qnn_runner->qnn_decode(ctx_tgt, llama_batch_get_one(inp.data(), n_input)) != 0) {
+            fprintf(stderr, "  SKIP: QNN target prefill failed: %s\n", qnn_runner->get_error().c_str());
+            tgt_prefill_ok = false;
+        } else if (ctx_tgt->final_hiddens.empty()) {
+            fprintf(stderr, "  SKIP: QNN target prefill did not produce hidden states\n");
+            tgt_prefill_ok = false;
+        } else {
+            const int inferred_hidden_dim = n_input > 0 ? (int) ctx_tgt->final_hiddens.size() / n_input : 0;
+            if (inferred_hidden_dim > 0) {
+                hidden_dim = inferred_hidden_dim;
+            }
+            sliced_data.assign(
+                ctx_tgt->final_hiddens.begin(),
+                ctx_tgt->final_hiddens.begin() + std::min(ctx_tgt->final_hiddens.size(), (size_t) std::max(0, n_input - 1) * (size_t) hidden_dim));
+            backup_data = ctx_tgt->final_hiddens;
+            if ((int) sliced_data.size() < std::max(0, n_input - 1) * hidden_dim ||
+                (int) backup_data.size() < n_input * hidden_dim) {
+                fprintf(stderr, "  SKIP: QNN hidden state size mismatch (hidden_dim=%d, n_input=%d, final_hiddens=%zu)\n",
+                        hidden_dim, n_input, ctx_tgt->final_hiddens.size());
+                tgt_prefill_ok = false;
+            }
+        }
+#else
+        const int n_batch_tgt = (int)llama_n_batch(ctx_tgt);
+        const int n_prefill   = n_input - 1;
         llama_batch temp_batch_tgt = llama_batch_init(n_batch_tgt, 0, 1);
         cb_data.data.clear();
         int temp_n_past = 0;
 
-        bool tgt_prefill_ok = true;
         for (int chunk_start = 0; chunk_start < n_prefill; chunk_start += n_batch_tgt) {
             const int chunk_size = std::min(n_batch_tgt, n_prefill - chunk_start);
             common_batch_clear(temp_batch_tgt);
@@ -661,29 +961,39 @@ int main(int argc, char ** argv) {
             }
         }
 
+        if (tgt_prefill_ok) {
+            ctx_tgt->synchronize();
+            sliced_data.assign(cb_data.data.begin(), cb_data.data.end());
+            cb_data.data.clear();
+            if (llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1)) != 0) {
+                fprintf(stderr, "  SKIP: target model last-token prefill failed\n");
+                tgt_prefill_ok = false;
+            } else {
+                backup_data.assign(cb_data.data.begin(), cb_data.data.end());
+            }
+        }
+#endif
+
         if (!tgt_prefill_ok) {
-            llama_batch_free(temp_batch_tgt);
             common_sampler_free(smpl);
+            res.error_message = "target prefill failed";
             results.push_back(res);
+            persist_result(res, bp);
+#ifndef SPEC_BENCH_USE_QNN
+            llama_batch_free(temp_batch_tgt);
+#endif
             continue;
         }
-
-        ctx_tgt->synchronize();
-        std::vector<float> sliced_data(cb_data.data.begin(), cb_data.data.end());
-
-        cb_data.data.clear();
-        llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
-        std::vector<float> backup_data(cb_data.data.begin(), cb_data.data.end());
 
         // Draft model prefill: inp[1..n-1] in chunks of n_batch_dft
         cb_data.data.clear();
         bool dft_prefill_ok = true;
-        const int n_eagle_tokens = (int)inp.size() - 1;
+        const int n_eagle_tokens = n_input - 1;
         for (int chunk_start = 0; chunk_start < n_eagle_tokens; chunk_start += n_batch_dft) {
             const int chunk_size = std::min(n_batch_dft, n_eagle_tokens - chunk_start);
             if (llama_decode_eagle(ctx_dft,
                     llama_batch_get_one(inp.data() + 1 + chunk_start, chunk_size),
-                    sliced_data.data() + (size_t)chunk_start * n_embd_tgt) != 0) {
+                    sliced_data.data() + (size_t)chunk_start * hidden_dim) != 0) {
                 fprintf(stderr, "  SKIP: draft model prefill failed at token %d/%d\n", chunk_start, n_eagle_tokens);
                 dft_prefill_ok = false;
                 break;
@@ -691,23 +1001,29 @@ int main(int argc, char ** argv) {
         }
 
         if (!dft_prefill_ok) {
-            llama_batch_free(temp_batch_tgt);
             common_sampler_free(smpl);
+            res.error_message = "draft prefill failed";
             results.push_back(res);
+            persist_result(res, bp);
+#ifndef SPEC_BENCH_USE_QNN
+            llama_batch_free(temp_batch_tgt);
+#endif
             continue;
         }
 
         const auto t_enc_end = ggml_time_us();
+#ifndef SPEC_BENCH_USE_QNN
         llama_batch_free(temp_batch_tgt);
+#endif
 
         // ------ Decode state init ------
-        const int n_input = (int)inp.size();
         int n_predict = 0;
         int n_drafted = 0;
         int n_accept  = 0;
         int n_past_tgt = n_input;
         int n_past_dft = n_input - 1;
         bool has_eos = false;
+        bool prompt_failed = false;
 
         std::vector<seq_draft> drafts(n_seq_dft);
         std::vector<int> acceptance_lengths;
@@ -726,7 +1042,11 @@ int main(int argc, char ** argv) {
         }
 
         drafts[0].i_batch_tgt.resize(1);
+#ifdef SPEC_BENCH_USE_QNN
+        drafts[0].i_batch_tgt[0] = n_input - 1;
+#else
         drafts[0].i_batch_tgt[0] = 0;
+#endif
 
         const auto t_dec_start = ggml_time_us();
         auto verification_start = ggml_time_us();
@@ -827,9 +1147,6 @@ int main(int argc, char ** argv) {
                         token_id = common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft]);
                         common_sampler_accept(smpl, token_id, true);
                         token_str = common_token_to_piece(ctx_tgt, token_id);
-                        temp2.insert(temp2.end(), backup_data.begin() + (4096 * drafts[s_keep].i_batch_tgt[i_dft]),
-                                                  backup_data.begin() + (4096 * (drafts[s_keep].i_batch_tgt[i_dft] + 1)));
-                        recompute.push_back(token_id);
                         for (int s = 0; s < n_seq_dft; ++s) {
                             if (!drafts[s].active) continue;
                             if (i_dft < (int)drafts[s].tokens.size() && token_id == drafts[s].tokens[i_dft]) {
@@ -839,6 +1156,9 @@ int main(int argc, char ** argv) {
                             }
                         }
                     }
+
+                    append_hidden_state_slice(temp2, backup_data, hidden_dim, drafts[s_keep].i_batch_tgt[i_dft]);
+                    recompute.push_back(token_id);
 
                     if (llama_vocab_is_eog(vocab_tgt, token_id)) has_eos = true;
                     ++n_predict;
@@ -870,7 +1190,7 @@ int main(int argc, char ** argv) {
                     scores[i][j] = 0.0f;
 
             backup_data = temp2;
-            std::vector<float> temp3(backup_data.end() - std::min((size_t)4096, backup_data.size()), backup_data.end());
+            std::vector<float> temp3 = take_last_hidden_states(backup_data, hidden_dim, 1);
             int recompute_point = n_past_dft - i_dft;
 
             // ---- Drafting ----
@@ -883,10 +1203,27 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_keep(mem_dft, s_keep);
                 llama_memory_seq_cp  (mem_dft, s_keep, 0, -1, -1);
                 llama_memory_seq_keep(mem_dft, 0);
+#ifdef SPEC_BENCH_USE_QNN
+                qnn_runner->kv_seq_rm  (s_keep, n_past_tgt, -1);
+                qnn_runner->kv_seq_keep(s_keep);
+                qnn_runner->kv_seq_cp  (s_keep, 0, -1, -1);
+                qnn_runner->kv_seq_keep(0);
+                if (qnn_runner->is_pending_KV_write() && !qnn_runner->KV_commit()) {
+                    fprintf(stderr, "  SKIP: failed to commit deferred QNN KV writeback: %s\n",
+                            qnn_runner->get_error().c_str());
+                    res.error_message = "QNN KV writeback commit failed";
+                    prompt_failed = true;
+                }
+#else
                 llama_memory_seq_rm  (mem_tgt, s_keep, n_past_tgt, -1);
                 llama_memory_seq_keep(mem_tgt, s_keep);
                 llama_memory_seq_cp  (mem_tgt, s_keep, 0, -1, -1);
                 llama_memory_seq_keep(mem_tgt, 0);
+#endif
+
+                if (prompt_failed) {
+                    break;
+                }
 
                 for (int s = 0; s < n_seq_dft; ++s) {
                     drafts[s].active = false;
@@ -900,7 +1237,7 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_rm(mem_dft, 0, recompute_point, -1);
 
                 if (i_dft > 0) {
-                    std::vector<float> temp4(backup_data.begin(), backup_data.end() - 4096);
+                    std::vector<float> temp4 = take_first_hidden_states(backup_data, hidden_dim, i_dft);
                     common_batch_clear(batch_dft);
                     for (size_t i = 0; i + 1 < recompute.size(); i++) {
                         common_batch_add(batch_dft, recompute[i], recompute_point + (int)i, { 0 }, false);
@@ -925,7 +1262,15 @@ int main(int argc, char ** argv) {
                 }
             }
 
-            if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos || dft_exhausted) {
+            if (prompt_failed || (params.n_predict >= 0 && n_predict > params.n_predict) || has_eos || dft_exhausted) {
+                break;
+            }
+
+            const int n_ctx_dft = (int) llama_n_ctx(ctx_dft);
+            if (n_past_dft + n_draft_max + n_depth >= n_ctx_dft - 2) {
+                fprintf(stderr, "  SKIP: draft model context nearly full (n_past_dft=%d, n_ctx=%d)\n",
+                        n_past_dft, n_ctx_dft);
+                res.error_message = "draft context nearly full";
                 break;
             }
 
@@ -975,8 +1320,17 @@ int main(int argc, char ** argv) {
                     common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft, true);
                     const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
 
+                    if (has_vocab_trim) {
+                        for (size_t ci = 0; ci < cur_p->size; ++ci) {
+                            const int idx = cur_p->data[ci].id;
+                            if (idx >= 0 && idx < (int) dft_vocab_map.size()) {
+                                cur_p->data[ci].id = dft_vocab_map[idx];
+                            }
+                        }
+                    }
+
                     std::vector<int> sa(1, s);
-                    temp.insert(temp.end(), cb_data.data.begin() + (4096 * s), cb_data.data.begin() + (4096 * (s + 1)));
+                    append_hidden_state_slice(temp, cb_data.data, hidden_dim, drafts[s].i_batch_dft);
 
                     float prob = cur_p->data[0].p;
                     if (i == 0) { scores[s][i] = prob; column_scores[s] = prob; }
@@ -1011,7 +1365,7 @@ int main(int argc, char ** argv) {
                         if (n_seq_cur < n_seq_dft) {
                             llama_memory_seq_rm(mem_dft,    n_seq_cur, -1, -1);
                             llama_memory_seq_cp(mem_dft, s, n_seq_cur, -1, -1);
-                            temp.insert(temp.end(), cb_data.data.begin() + (4096 * s), cb_data.data.begin() + (4096 * (s + 1)));
+                            append_hidden_state_slice(temp, cb_data.data, hidden_dim, drafts[s].i_batch_dft);
                             for (int t = 0; t < batch_tgt.n_tokens; ++t) {
                                 for (int p = 0; p < batch_tgt.n_seq_id[t]; ++p) {
                                     if (batch_tgt.seq_id[t][p] == s) {
@@ -1095,6 +1449,22 @@ int main(int argc, char ** argv) {
 
             // Evaluate target model on drafted tokens
             {
+#ifdef SPEC_BENCH_USE_QNN
+                qnn_runner->kv_seq_keep(0);
+                for (int s = 1; s < n_seq_dft; ++s) {
+                    qnn_runner->kv_seq_cp(0, s, -1, -1);
+                }
+
+                ctx_tgt->final_hiddens.clear();
+                if (qnn_runner->qnn_decode(ctx_tgt, batch_tgt) != 0) {
+                    fprintf(stderr, "  SKIP: QNN verification decode failed: %s\n", qnn_runner->get_error().c_str());
+                    prompt_failed = true;
+                    res.error_message = "target verification failed";
+                    break;
+                }
+                backup_data = ctx_tgt->final_hiddens;
+                ++n_past_tgt;
+#else
                 llama_memory_seq_keep(mem_tgt, 0);
                 for (int s = 1; s < n_seq_dft; ++s) {
                     llama_memory_seq_cp(mem_tgt, 0, s, -1, -1);
@@ -1104,6 +1474,7 @@ int main(int argc, char ** argv) {
                 ctx_tgt->synchronize();
                 backup_data = cb_data.data;
                 ++n_past_tgt;
+#endif
             }
 
             for (int s = 0; s < n_seq_dft; ++s) {
@@ -1115,6 +1486,18 @@ int main(int argc, char ** argv) {
 
         const auto t_dec_end = ggml_time_us();
 
+        if (prompt_failed) {
+            printf("\n");
+            fprintf(stderr, "  --- output end ---\n");
+            results.push_back(res);
+            persist_result(res, bp);
+            common_sampler_free(smpl);
+            for (int s = 0; s < n_seq_dft; ++s) {
+                if (drafts[s].smpl) { common_sampler_free(drafts[s].smpl); drafts[s].smpl = nullptr; }
+            }
+            continue;
+        }
+
         // ---- Collect per-prompt stats ----
         res.n_predict = n_predict;
         res.n_drafted = n_drafted;
@@ -1124,6 +1507,7 @@ int main(int argc, char ** argv) {
         res.prefill_tps = n_input / (res.prefill_ms / 1000.0);
         res.decode_tps  = n_predict > 0 ? n_predict / (res.decode_ms / 1000.0) : 0;
         res.decode_lat  = n_predict > 0 ? res.decode_ms / n_predict : 0;
+        res.draft_len = !decoding_latencies.empty() ? (double) n_drafted / decoding_latencies.size() : 0;
         res.accept_ratio = n_drafted > 0 ? 100.0 * n_accept / n_drafted : 0;
 
         int n_steps = (int)decoding_latencies.size();
@@ -1139,6 +1523,7 @@ int main(int argc, char ** argv) {
                 n_predict, res.decode_tps, res.avg_accept_len, res.accept_ratio);
 
         results.push_back(res);
+        persist_result(res, bp);
 
         // ---- Cleanup per-prompt resources ----
         common_sampler_free(smpl);
@@ -1152,7 +1537,7 @@ int main(int argc, char ** argv) {
     // ====================================================================
     fprintf(stderr, "\n\n");
     fprintf(stderr, "============================================================\n");
-    fprintf(stderr, "            Spec-Bench Results (%zu prompts)\n", results.size());
+    fprintf(stderr, "            %s Results (%zu prompts)\n", SPEC_BENCH_BACKEND_LABEL, results.size());
     fprintf(stderr, "============================================================\n");
 
     // Per-category aggregation
@@ -1194,13 +1579,14 @@ int main(int argc, char ** argv) {
 
     // Write CSV (metrics only)
     {
-        std::string csv_path = bench_file + "_results.csv";
+        std::string csv_path = (std::filesystem::path(results_dir) / "results.csv").string();
         std::ofstream csv(csv_path);
         if (csv.is_open()) {
-            csv << "question_id,category,n_input,n_predict,decode_tps,decode_lat_ms,accept_len,accept_ratio,prefill_ms,avg_draft_ms,avg_verify_ms,avg_td_ms\n";
+            csv << "sample_index,question_id,category,n_input,n_predict,draft_len,decode_tps,decode_lat_ms,accept_len,accept_ratio,prefill_ms,avg_draft_ms,avg_verify_ms,avg_td_ms\n";
             for (const auto & r : results) {
                 if (!r.success) continue;
-                csv << r.question_id << "," << r.category << "," << r.n_input << "," << r.n_predict << ","
+                csv << r.sample_index << "," << r.question_id << ",\"" << csv_escape(r.category) << "\"," << r.n_input << "," << r.n_predict << ","
+                    << r.draft_len << ","
                     << r.decode_tps << "," << r.decode_lat << "," << r.avg_accept_len << "," << r.accept_ratio << ","
                     << r.prefill_ms << "," << r.avg_draft_lat << "," << r.avg_verify_lat << "," << r.avg_td << "\n";
             }
@@ -1210,26 +1596,18 @@ int main(int argc, char ** argv) {
 
     // Write JSONL with outputs
     {
-        std::string jsonl_path = bench_file + "_outputs.jsonl";
+        std::string jsonl_path = (std::filesystem::path(results_dir) / "outputs.jsonl").string();
         std::ofstream ofs(jsonl_path);
         if (ofs.is_open()) {
             for (const auto & r : results) {
                 if (!r.success) continue;
-                // escape quotes and backslashes in output text for JSON
-                std::string escaped;
-                for (char c : r.output_text) {
-                    if (c == '"') escaped += "\\\"";
-                    else if (c == '\\') escaped += "\\\\";
-                    else if (c == '\n') escaped += "\\n";
-                    else if (c == '\r') escaped += "\\r";
-                    else if (c == '\t') escaped += "\\t";
-                    else escaped += c;
-                }
-                ofs << "{\"question_id\":" << r.question_id
-                    << ",\"category\":\"" << r.category << "\""
+                ofs << "{\"sample_index\":" << r.sample_index
+                    << ",\"question_id\":" << r.question_id
+                    << ",\"category\":\"" << json_escape(r.category) << "\""
                     << ",\"decode_tps\":" << r.decode_tps
+                    << ",\"draft_len\":" << r.draft_len
                     << ",\"accept_len\":" << r.avg_accept_len
-                    << ",\"output\":\"" << escaped << "\"}\n";
+                    << ",\"output\":\"" << json_escape(r.output_text) << "\"}\n";
             }
             fprintf(stderr, "Outputs saved to: %s\n", jsonl_path.c_str());
         }
@@ -1263,7 +1641,7 @@ int main(int argc, char ** argv) {
         }
         fprintf(stderr, "============================================================\n");
 
-        std::string freq_path = bench_file + "_token_freq.csv";
+        std::string freq_path = (std::filesystem::path(results_dir) / "token_freq.csv").string();
         std::ofstream freq_csv(freq_path);
         if (freq_csv.is_open()) {
             freq_csv << "token_id,token_text,draft_count,accepted_count,rejected_count,bonus_count,accept_rate\n";

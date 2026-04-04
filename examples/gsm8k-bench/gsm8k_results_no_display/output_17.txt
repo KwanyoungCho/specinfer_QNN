@@ -1,0 +1,835 @@
+ggml_opencl: OpenCL profiling enabled
+ggml_opencl: selected platform: 'QUALCOMM Snapdragon(TM)'
+
+ggml_opencl: device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
+ggml_opencl: OpenCL driver: OpenCL 3.0 QUALCOMM build: 0800.40.1 Compiler E031.47.18.36
+ggml_opencl: vector subgroup broadcast support: true
+ggml_opencl: device FP16 support: true
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 1024 MB
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: true
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: true
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
+ggml_opencl: loading OpenCL kernels.........................................................................
+ggml_opencl: default device: 'QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)'
+build: 36 (a433633) with Android (12470979, +pgo, +bolt, +lto, +mlgo, based on r522817c) clang version 18.0.3 (https://android.googlesource.com/toolchain/llvm-project d8003a456d14a3deb8054cdaa529ffbf02d9b262) for x86_64-unknown-linux-gnu
+llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
+llama_model_loader: loaded meta data with 27 key-value pairs and 0 tensors from tokenizer.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = llama
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Llama_3_8B_Instruct
+llama_model_loader: - kv   3:                            general.license str              = llama3
+llama_model_loader: - kv   4:                               general.tags arr[str,6]       = ["facebook", "meta", "pytorch", "llam...
+llama_model_loader: - kv   5:                          general.languages arr[str,1]       = ["en"]
+llama_model_loader: - kv   6:                          llama.block_count u32              = 32
+llama_model_loader: - kv   7:                       llama.context_length u32              = 8192
+llama_model_loader: - kv   8:                     llama.embedding_length u32              = 4096
+llama_model_loader: - kv   9:                  llama.feed_forward_length u32              = 14336
+llama_model_loader: - kv  10:                 llama.attention.head_count u32              = 32
+llama_model_loader: - kv  11:              llama.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  12:     llama.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  13:                 llama.attention.key_length u32              = 128
+llama_model_loader: - kv  14:               llama.attention.value_length u32              = 128
+llama_model_loader: - kv  15:                          general.file_type u32              = 1
+llama_model_loader: - kv  16:                           llama.vocab_size u32              = 128256
+llama_model_loader: - kv  17:                 llama.rope.dimension_count u32              = 128
+llama_model_loader: - kv  18:               general.quantization_version u32              = 2
+llama_model_loader: - kv  19:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  20:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  21:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  22:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  23:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  24:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  25:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  26:                    tokenizer.chat_template str              = {% set loop_messages = messages %}{% ...
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = F16
+print_info: file size   = 0.00 MiB (nan BPW) 
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.8000 MB
+print_info: arch             = llama
+print_info: vocab_only       = 1
+print_info: model type       = ?B
+print_info: model params     = 0.00 K
+print_info: general.name     = Llama_3_8B_Instruct
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128001 '<|end_of_text|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+llama_model_load: vocab only - skipping tensors
+llama_context: constructing llama_context
+llama_context: n_ctx is not divisible by n_seq_max - rounding down to 128000
+llama_context: n_seq_max     = 500
+llama_context: n_ctx         = 128000
+llama_context: n_ctx_seq     = 256
+llama_context: n_batch       = 2048
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = auto
+llama_context: kv_unified    = false
+llama_context: freq_base     = 0.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (256) > n_ctx_train (0) -- possible training context overflow
+[QNN] Target model runner initialized successfully
+llama_model_load_from_file_impl: using device GPUOpenCL (QUALCOMM Adreno(TM) 830) (unknown id) - 0 MiB free
+llama_model_loader: loaded meta data with 34 key-value pairs and 11 tensors from EAGLE-llama-test-q4.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = eagle
+llama_model_loader: - kv   1:                    eagle.output_vocab_size u32              = 32768
+llama_model_loader: - kv   2:                            eagle.vocab_map arr[i32,32768]   = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11...
+llama_model_loader: - kv   3:                               general.type str              = model
+llama_model_loader: - kv   4:                               general.name str              = EAGLE LLaMA3 Instruct 8B
+llama_model_loader: - kv   5:                           general.finetune str              = Instruct-8b
+llama_model_loader: - kv   6:                           general.basename str              = EAGLE-LLaMA3
+llama_model_loader: - kv   7:                         general.size_label str              = 911M
+llama_model_loader: - kv   8:                            general.license str              = apache-2.0
+llama_model_loader: - kv   9:                          eagle.block_count u32              = 1
+llama_model_loader: - kv  10:                       eagle.context_length u32              = 2048
+llama_model_loader: - kv  11:                     eagle.embedding_length u32              = 4096
+llama_model_loader: - kv  12:                  eagle.feed_forward_length u32              = 14336
+llama_model_loader: - kv  13:                 eagle.attention.head_count u32              = 32
+llama_model_loader: - kv  14:              eagle.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  15:                       eagle.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  16:     eagle.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  17:                 eagle.attention.key_length u32              = 128
+llama_model_loader: - kv  18:               eagle.attention.value_length u32              = 128
+llama_model_loader: - kv  19:                           eagle.vocab_size u32              = 128256
+llama_model_loader: - kv  20:                 eagle.rope.dimension_count u32              = 128
+llama_model_loader: - kv  21:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  22:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  23:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  24:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  25:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  26:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  27:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  28:            tokenizer.ggml.padding_token_id u32              = 0
+llama_model_loader: - kv  29:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  30:               tokenizer.ggml.add_sep_token bool             = false
+llama_model_loader: - kv  31:                    tokenizer.chat_template str              = {% set loop_messages = messages %}{% ...
+llama_model_loader: - kv  32:               general.quantization_version u32              = 2
+llama_model_loader: - kv  33:                          general.file_type u32              = 2
+llama_model_loader: - type  f32:    1 tensors
+llama_model_loader: - type q4_0:   10 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_0
+print_info: file size   = 488.83 MiB (4.50 BPW) 
+load_hparams: EAGLE vocab_map loaded with 32768 entries
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.8000 MB
+print_info: arch             = eagle
+print_info: vocab_only       = 0
+print_info: n_ctx_train      = 2048
+print_info: n_embd           = 4096
+print_info: n_embd_inp       = 4096
+print_info: n_layer          = 1
+print_info: n_head           = 32
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 4
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 14336
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 2048
+print_info: rope_finetuned   = unknown
+print_info: model type       = ?B
+print_info: model params     = 911.22 M
+print_info: general.name     = EAGLE LLaMA3 Instruct 8B
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128001 '<|end_of_text|>'
+print_info: PAD token        = 0 '!'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = false)
+load_tensors: EAGLE using trimmed output vocab: 32768 (full: 128256)
+load_tensors: offloading 1 repeating layers to GPU
+load_tensors: offloading output layer to GPU
+load_tensors: offloaded 2/2 layers to GPU
+load_tensors:          CPU model buffer size =   281.81 MiB
+load_tensors:       OpenCL model buffer size =   207.02 MiB
+.........
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 500
+llama_context: n_ctx         = 4096
+llama_context: n_ctx_seq     = 4096
+llama_context: n_batch       = 2048
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = disabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (4096) > n_ctx_train (2048) -- possible training context overflow
+llama_context:        CPU  output buffer size =    62.50 MiB
+llama_kv_cache:     OpenCL KV buffer size =    16.00 MiB
+llama_kv_cache: size =   16.00 MiB (  4096 cells,   1 layers, 500/1 seqs), K (f16):    8.00 MiB, V (f16):    8.00 MiB
+llama_context:     OpenCL compute buffer size =   292.01 MiB
+llama_context:        CPU compute buffer size =    28.01 MiB
+llama_context: graph nodes  = 40
+llama_context: graph splits = 2
+common_init_from_params: added <|end_of_text|> logit bias = -inf
+common_init_from_params: added <|eot_id|> logit bias = -inf
+common_init_from_params: setting dry_penalty_last_n to ctx_size = 4096
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+[EAGLE] Vocab trimming active: 32768 entries in vocab_map (output_vocab_size=32768)
+[ModelParams] Loaded from: params.json
+  dim=4096, n_layers=32, n_heads=32, n_kv_heads=8
+  head_dim=128, vocab_size=128256
+[Multi-Context] Auto-detecting shards in: ctx_out_0316
+[Multi-Context] Total shards detected: 8
+[Multi-Context] All 8 contexts created
+[KV Cache] Allocated 67.9375 MiB (layer-wise for all shards)
+[Shared Buffers] Allocated:
+  hidden_state: 512 KiB
+  rope_cos/sin: 512 KiB
+  attention_mask: 128 KiB
+[Init] All components initialized successfully
+
+
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+A basket contains 25 oranges among which 1 is bad, 20% are unripe, 2 are sour and the rest are good. How many oranges are good?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+
+Let's break it down step by step!
+
+We know that 1 orange is bad, so we'll subtract it from the total number of oranges.
+
+25 - 1 = 24 oranges remaining
+
+Out of the 20% that are unripe, we can calculate the number of unripe oranges:
+
+20% of 25 = 0.20 x 25 = 5 oranges (which is the same as 20/100)
+
+So, 5 oranges are unripe. We'll subtract these from the remaining good oranges:
+
+24 - 5 = 19 oranges
+
+We also know that 2 oranges are sour. Since these are separate from the unripe and bad oranges, we'll subtract these from the remaining good oranges as well:
+
+19 - 2 = 17 oranges
+
+At this point, we've accounted for all the oranges that aren't good. Therefore, the number of good oranges is equal to the total oranges minus the bad, unripe, and sour oranges:
+
+25 (total) - 1 (bad) - 5 (unripe) - 2 (sour) = 17 good oranges<|eot_id|><|start_header_id|>
+
+
+================ Latency Breakdown ==================
+Prefill Time                    :  463.955 ms
+[1] Drafting Phase
+  - Draft Recompute/Alignment   : 2235.542 ms
+  - Draft Tree Forward          : 3592.077 ms
+  - Tree Expansion (Total)      : 5106.289 ms
+     ㄴ Sampling from Draft     :  177.121 ms
+     ㄴ Splitting Sequence      : 4843.176 ms
+        - KV Cache Copy         :  904.082 ms
+        - Seq History Update    :   12.955 ms
+        - Draft State Alloc     : 3926.139 ms
+     ㄴ Temp Probs Array Prep   :   11.861 ms
+     ㄴ TopK Sorting            :    1.601 ms
+     ㄴ Target Batch Append     :   72.530 ms
+  - Tree Pruning (Reranking)    :  350.430 ms
+[2] Verification Phase
+  - Target Model Forward        :   11.156 ms
+  - Target KV Cache Management  :  582.591 ms
+  - Tree Verification Logic     :    6.976 ms
+  - Fallback Sampling           :   40.915 ms
+-----------------------------------------------------
+Avg Draft Recompute/Step        :   29.033 ms
+Avg Draft Forward/Step          :   46.650 ms
+Avg Tree Expansion Total/Step   :   66.315 ms
+   ㄴ Avg Sampling Dfts/Step    :    2.300 ms
+   ㄴ Avg Split Sequence/Step   :   62.898 ms
+      - KV Cache Copy           :   11.741 ms
+      - Seq History Update      :    0.168 ms
+      - Draft State Alloc       :   50.989 ms
+   ㄴ Avg Temp Probs Prep/Step  :    0.154 ms
+   ㄴ Avg TopK Sorting/Step     :    0.021 ms
+   ㄴ Avg Target Batch/Step     :    0.942 ms
+Avg Tree Pruning/Step           :    4.551 ms
+Avg Target Forward/Step         :    0.145 ms
+Avg Target KV Cache/Step        :    7.566 ms
+Avg Tree Verify Logic/Step      :    0.091 ms
+Avg Fallback Sampling/Step      :    0.531 ms
+=====================================================
+
+============================================================
+          EAGLE-2-QNN  Performance Summary
+============================================================
+  Prefill           :   152 tokens |    463.95 ms |   327.62 t/s
+  Decode            :   231 tokens |  24203.76 ms |     9.54 t/s
+  Decode latency    :              |    104.78 ms/tok
+------------------------------------------------------------
+  n_draft   = 500
+  n_predict = 231
+  n_drafted = 308 (depth), total_draft_tokens = 4543
+  n_accept  = 153
+  Draft length (depth)  : 5.000
+  Draft tokens/step     : 59.000
+  Avg accept length     : 2.987
+  Accept ratio          : 49.675%
+------------------------------------------------------------
+  Avg draft phase       :   159.727 ms
+  Avg verification      :   151.179 ms
+  Avg T_d (1-tok dft)   :    11.663 ms
+  Avg (draft+verify)    :   310.907 ms
+------------------------------------------------------------
+
+Acceptance length stats:
+  Min length: 1
+  Max length: 6
+  Avg length: 2.987
+
+avg drafting latency: 159.727 ms
+avg verification latency: 151.179 ms
+avg T_d: 11.663 ms
+Verification/Draft Phase Count: 78
+Accepted Token Counts Matrix:
+[ 48 19  9  3  0 ]
+[  8  2  1  0  0 ]
+[  2  0  0  0  0 ]
+[  1  1  1  0  0 ]
+[  3  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  1  1  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[ 48  6  2  0  0 ]
+[ 48  4  2  0  0 ]
+[ 48  4  1  0  0 ]
+[ 48  0  0  0  0 ]
+[ 48  2  0  0  0 ]
+[ 48  0  0  0  0 ]
+[ 48  1  1  0  0 ]
+[ 48  0  0  0  0 ]
+[ 48  0  0  0  0 ]
+[  8  1  1  0  0 ]
+[  8  1  0  0  0 ]
+[  8  0  0  0  0 ]
+[  8  1  0  0  0 ]
+[  8  0  0  0  0 ]
+[  8  0  0  0  0 ]
+[  8  0  0  0  0 ]
+[  8  0  0  0  0 ]
+[  8  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  3  0  0  0  0 ]
+[  3  0  0  0  0 ]
+[  3  0  0  0  0 ]
+[  3  0  0  0  0 ]
+[  3  0  0  0  0 ]
+[  3  0  0  0  0 ]
+[  3  0  0  0  0 ]
+[  3  0  0  0  0 ]
+[  3  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  2  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  1  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[ 48 19  3  0  0 ]
+[ 48 19  2  1  0 ]
+[ 48 19  1  0  0 ]
+[ 48 19  0  0  0 ]
+[ 48 19  0  0  0 ]
+[ 48 19  0  0  0 ]
+[ 48 19  0  0  0 ]
+[ 48 19  1  0  0 ]
+[ 48 19  0  0  0 ]
+[ 28  5  0  0  0 ]
+[ 28  5  0  0  0 ]
+[ 28  5  0  0  0 ]
+[ 28  5  0  0  0 ]
+[ 28  5  0  0  0 ]
+[ 28  5  0  0  0 ]
+[ 28  5  0  0  0 ]
+[ 28  5  0  0  0 ]
+[ 28  5  0  0  0 ]
+[ 29  2  0  0  0 ]
+[ 29  2  0  0  0 ]
+[ 29  2  0  0  0 ]
+[ 29  2  0  0  0 ]
+[ 29  2  0  0  0 ]
+[ 29  2  0  0  0 ]
+[ 29  2  0  0  0 ]
+[ 29  2  0  0  0 ]
+[ 29  2  0  0  0 ]
+[ 34  5  1  0  0 ]
+[ 34  5  0  0  0 ]
+[ 34  5  0  0  0 ]
+[ 34  5  0  0  0 ]
+[ 34  5  0  0  0 ]
+[ 34  5  1  0  0 ]
+[ 34  5  0  0  0 ]
+[ 34  5  0  0  0 ]
+[ 34  5  0  0  0 ]
+[ 37  2  0  0  0 ]
+[ 37  2  1  0  0 ]
+[ 37  2  0  0  0 ]
+[ 37  2  0  0  0 ]
+[ 37  2  0  0  0 ]
+[ 37  2  0  0  0 ]
+[ 37  2  0  0  0 ]
+[ 37  2  0  0  0 ]
+[ 37  2  0  0  0 ]
+[ 41  2  1  0  0 ]
+[ 41  2  0  0  0 ]
+[ 41  2  0  0  0 ]
+[ 41  2  0  0  0 ]
+[ 41  2  0  0  0 ]
+[ 41  2  0  0  0 ]
+[ 41  2  0  0  0 ]
+[ 41  2  0  0  0 ]
+[ 41  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  2  0  0  0 ]
+[ 44  0  0  0  0 ]
+[ 44  0  0  0  0 ]
+[ 44  0  0  0  0 ]
+[ 44  0  0  0  0 ]
+[ 44  0  0  0  0 ]
+[ 44  0  0  0  0 ]
+[ 44  0  0  0  0 ]
+[ 44  0  0  0  0 ]
+[ 44  0  0  0  0 ]
+[ 33  2  0  0  0 ]
+[ 33  2  0  0  0 ]
+[ 33  2  0  0  0 ]
+[ 33  2  0  0  0 ]
+[ 33  2  0  0  0 ]
+[ 33  2  0  0  0 ]
+[ 33  2  0  0  0 ]
+[ 33  2  0  0  0 ]
+[ 33  2  0  0  0 ]
+[ 48 19  9  2  1 ]
+[ 48 19  9  1  0 ]
+[ 48 19  9  0  0 ]
+[ 48 19  9  2  1 ]
+[ 48 19  9  0  0 ]
+[ 48 19  9  0  0 ]
+[ 48 19  9  0  0 ]
+[ 48 19  9  0  0 ]
+[ 48 19  9  0  0 ]
+[ 37  8  2  0  0 ]
+[ 37  8  2  1  0 ]
+[ 37  8  2  0  0 ]
+[ 37  8  2  0  0 ]
+[ 37  8  2  0  0 ]
+[ 37  8  2  0  0 ]
+[ 37  8  2  0  0 ]
+[ 37  8  2  0  0 ]
+[ 37  8  2  0  0 ]
+[ 40  8  4  0  0 ]
+[ 40  8  4  0  0 ]
+[ 40  8  4  0  0 ]
+[ 40  8  4  0  0 ]
+[ 40  8  4  0  0 ]
+[ 40  8  4  0  0 ]
+[ 40  8  4  0  0 ]
+[ 40  8  4  0  0 ]
+[ 40  8  4  0  0 ]
+[ 40  6  0  0  0 ]
+[ 40  6  0  0  0 ]
+[ 40  6  0  0  0 ]
+[ 40  6  0  0  0 ]
+[ 40  6  0  0  0 ]
+[ 40  6  0  0  0 ]
+[ 40  6  0  0  0 ]
+[ 40  6  0  0  0 ]
+[ 40  6  0  0  0 ]
+[ 41  7  2  1  0 ]
+[ 41  7  2  0  0 ]
+[ 41  7  2  0  0 ]
+[ 41  7  2  0  0 ]
+[ 41  7  2  0  0 ]
+[ 41  7  2  0  0 ]
+[ 41  7  2  0  0 ]
+[ 41  7  2  0  0 ]
+[ 41  7  2  0  0 ]
+[ 48 13  2  0  0 ]
+[ 48 13  2  0  0 ]
+[ 48 13  2  0  0 ]
+[ 48 13  2  0  0 ]
+[ 48 13  2  0  0 ]
+[ 48 13  2  0  0 ]
+[ 48 13  2  0  0 ]
+[ 48 13  2  0  0 ]
+[ 48 13  2  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 48 15  1  0  0 ]
+[ 48 15  1  0  0 ]
+[ 48 15  1  0  0 ]
+[ 48 15  1  0  0 ]
+[ 48 15  1  0  0 ]
+[ 48 15  1  0  0 ]
+[ 48 15  1  0  0 ]
+[ 48 15  1  0  0 ]
+[ 48 15  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 44 13  1  0  0 ]
+[ 43 10  1  0  0 ]
+[ 43 10  1  0  0 ]
+[ 43 10  1  0  0 ]
+[ 43 10  1  0  0 ]
+[ 43 10  1  0  0 ]
+[ 43 10  1  0  0 ]
+[ 43 10  1  0  0 ]
+[ 43 10  1  0  0 ]
+[ 43 10  1  0  0 ]
+[ 48 19  9  3  0 ]
+[ 48 19  9  3  2 ]
+[ 48 19  9  3  0 ]
+[ 48 19  9  3  0 ]
+[ 48 19  9  3  0 ]
+[ 48 19  9  3  0 ]
+[ 48 19  9  3  0 ]
+[ 48 19  9  3  0 ]
+[ 48 19  9  3  0 ]
+[ 39  8  2  0  0 ]
+[ 39  8  2  0  0 ]
+[ 39  8  2  0  0 ]
+[ 39  8  2  0  0 ]
+[ 39  8  2  0  0 ]
+[ 39  8  2  0  0 ]
+[ 39  8  2  0  0 ]
+[ 39  8  2  0  0 ]
+[ 39  8  2  0  0 ]
+[ 41 11  5  0  0 ]
+[ 41 11  5  0  0 ]
+[ 41 11  5  0  0 ]
+[ 41 11  5  0  0 ]
+[ 41 11  5  0  0 ]
+[ 41 11  5  0  0 ]
+[ 41 11  5  0  0 ]
+[ 41 11  5  0  0 ]
+[ 41 11  5  0  0 ]
+[ 44 12  3  2  0 ]
+[ 44 12  3  2  1 ]
+[ 44 12  3  2  0 ]
+[ 44 12  3  2  0 ]
+[ 44 12  3  2  0 ]
+[ 44 12  3  2  0 ]
+[ 44 12  3  2  0 ]
+[ 44 12  3  2  0 ]
+[ 44 12  3  2  0 ]
+[ 45 15  5  1  0 ]
+[ 45 15  5  1  0 ]
+[ 45 15  5  1  0 ]
+[ 45 15  5  1  0 ]
+[ 45 15  5  1  0 ]
+[ 45 15  5  1  0 ]
+[ 45 15  5  1  0 ]
+[ 45 15  5  1  0 ]
+[ 45 15  5  1  0 ]
+[ 47 14  5  0  0 ]
+[ 47 14  5  0  0 ]
+[ 47 14  5  0  0 ]
+[ 47 14  5  0  0 ]
+[ 47 14  5  0  0 ]
+[ 47 14  5  0  0 ]
+[ 47 14  5  0  0 ]
+[ 47 14  5  0  0 ]
+[ 47 14  5  0  0 ]
+[ 46 14  6  2  0 ]
+[ 46 14  6  2  0 ]
+[ 46 14  6  2  0 ]
+[ 46 14  6  2  0 ]
+[ 46 14  6  2  0 ]
+[ 46 14  6  2  0 ]
+[ 46 14  6  2  0 ]
+[ 46 14  6  2  0 ]
+[ 46 14  6  2  0 ]
+[ 48 18  6  0  0 ]
+[ 48 18  6  0  0 ]
+[ 48 18  6  0  0 ]
+[ 48 18  6  0  0 ]
+[ 48 18  6  0  0 ]
+[ 48 18  6  0  0 ]
+[ 48 18  6  0  0 ]
+[ 48 18  6  0  0 ]
+[ 48 18  6  0  0 ]
+[ 48 16  7  0  0 ]
+[ 48 16  7  0  0 ]
+[ 48 16  7  0  0 ]
+[ 48 16  7  0  0 ]
+[ 48 16  7  0  0 ]
+[ 48 16  7  0  0 ]
+[ 48 16  7  0  0 ]
+[ 48 16  7  0  0 ]
+[ 48 16  7  0  0 ]
+[ 45 14  5  1  0 ]
+[ 45 14  5  1  0 ]
+[ 45 14  5  1  0 ]
+[ 45 14  5  1  0 ]
+[ 45 14  5  1  0 ]
+[ 45 14  5  1  0 ]
+[ 45 14  5  1  0 ]
+[ 45 14  5  1  0 ]
+[ 45 14  5  1  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+[  0  0  0  0  0 ]
+
+

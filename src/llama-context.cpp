@@ -12,6 +12,19 @@
 #include <limits>
 #include <stdexcept>
 
+namespace {
+
+bool llama_gpu_supports_non_flash_quantized_v_cache(ggml_type type_v) {
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_OPENCL)
+    return type_v == GGML_TYPE_Q4_0;
+#else
+    GGML_UNUSED(type_v);
+    return false;
+#endif
+}
+
+}
+
 //
 // llama_context
 //
@@ -352,7 +365,8 @@ llama_context::llama_context(
             if (fa_device_mismatch) {
                 cparams.flash_attn = false;
                 LLAMA_LOG_WARN("%s: Flash Attention was auto, set to disabled\n", __func__);
-                if (ggml_is_quantized(params.type_v)) {
+                if (ggml_is_quantized(params.type_v) &&
+                    !llama_gpu_supports_non_flash_quantized_v_cache(params.type_v)) {
                     throw std::runtime_error("quantized V cache was requested, but this requires Flash Attention");
                 }
             } else {
@@ -2812,8 +2826,26 @@ llama_context * llama_init_from_model(
     }
 
     if (ggml_is_quantized(params.type_v) && params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED) {
-        LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
-        return nullptr;
+        if (!llama_gpu_supports_non_flash_quantized_v_cache(params.type_v)) {
+            LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
+            return nullptr;
+        }
+
+        const uint32_t blck_size = ggml_blck_size(params.type_v);
+        for (uint32_t il = 0; il < model->hparams.n_layer; ++il) {
+            if (!model->hparams.has_kv(il)) {
+                continue;
+            }
+
+            if (model->hparams.n_embd_v_gqa(il) % blck_size != 0) {
+                LLAMA_LOG_ERROR("%s: V cache type %s with block size %u does not divide n_embd_v_gqa(layer=%u)=%u\n",
+                    __func__, ggml_type_name(params.type_v), blck_size, il, model->hparams.n_embd_v_gqa(il));
+                return nullptr;
+            }
+        }
+
+        LLAMA_LOG_WARN("%s: V cache type %s without flash_attn uses the experimental GPU path\n",
+            __func__, ggml_type_name(params.type_v));
     }
 
     if (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED &&
