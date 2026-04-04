@@ -21,12 +21,8 @@
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
 
-//Dynamic Generation 및 Reranking 관련 파라미터 설정
-#define n_depth 5
-#define expand_k 10
-
-#define rerank true
-#define rerank_k 59
+//Dynamic Generation 및 Reranking 관련 파라미터 설정 (CLI 인자로 변경됨)
+// 기본값: n_depth=5, draft_top_k=10, expand_k=10, rerank=true, rerank_k=59
 
 
 struct callback_data {
@@ -100,18 +96,57 @@ struct seq_draft { //각 드래프트 시퀀스(트리의 브랜치)의 상태�
     std::vector<int> i_batch_tgt; //타겟 모델의 배치에서 이 시퀀스에 해당하는 토큰들의 인덱스 -ym-
 
     std::vector<llama_token> tokens; //이 시퀀스가 추측한 토큰들의 목록 -ym-
-    std::vector<std::vector<llama_token_data>> dists;
 
     struct common_sampler * smpl = nullptr;
 };
 
 int main(int argc, char ** argv) {
+    // ---- Draft Tree Expansion CLI 인자 파싱 시작 ----
+    int n_depth = 5;
+    int draft_top_k = 10;
+    int expand_k = 10;
+    bool rerank = true;
+    int rerank_k = 59;
+
+    std::vector<char *> new_argv;
+    new_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--n-depth" && i + 1 < argc) {
+            n_depth = std::stoi(argv[++i]);
+        } else if (arg == "--top-k" && i + 1 < argc) {
+            draft_top_k = std::stoi(argv[++i]);
+            expand_k = draft_top_k; // expand-k도 top-k와 같은 값을 사용하도록 수정
+        } else if (arg == "--expand-k" && i + 1 < argc) {
+            expand_k = std::stoi(argv[++i]);
+        } else if (arg == "--rerank-k" && i + 1 < argc) {
+            rerank_k = std::stoi(argv[++i]);
+        } else if (arg == "--no-rerank") {
+            rerank = false;
+        } else if (arg == "--rerank") {
+            rerank = true;
+        } else if (arg == "--help" || arg == "-h") {
+            printf("\nDraft Tree Expansion Options:\n");
+            printf("  --n-depth N        Draft tree depth (default: 5)\n");
+            printf("  --top-k N          Draft tree Top-K (default: 10)\n");
+            printf("  --expand-k N       Draft tree Expand-K (default: 10)\n");
+            printf("  --rerank-k N       Token-level Reranking K (default: 59)\n");
+            printf("  --no-rerank        Disable token-level reranking\n\n");
+            new_argv.push_back(argv[i]); // pass to base parser
+        } else {
+            new_argv.push_back(argv[i]);
+        }
+    }
+    int new_argc = new_argv.size();
+    char ** new_argv_ptr = new_argv.data();
+    // ---- CLI 인자 파싱 끝 ----
+
     common_params params;
 
     // needed to get candidate probs even for temp <= 0.0
     params.sampling.n_probs = 128;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SPECULATIVE)) {
+    if (!common_params_parse(new_argc, new_argv_ptr, params, LLAMA_EXAMPLE_SPECULATIVE)) {
         return 1;
     }
 
@@ -172,10 +207,17 @@ int main(int argc, char ** argv) {
     model_dft = llama_init_dft.model.get();
     ctx_dft   = llama_init_dft.context.get();
 
+    const auto & dft_vocab_map = model_dft->vocab_map;
+    const bool has_vocab_trim = !dft_vocab_map.empty();
+
     // ================================================================================================
     // LM HEAD SHARING IMPLEMENTATION (Execute immediately after both models are loaded)
     // ================================================================================================
-    {
+    if (has_vocab_trim) {
+        LOG_INF("[EAGLE] Vocab trimming active: %zu entries in vocab_map (output_vocab_size=%u)\n",
+                dft_vocab_map.size(), model_dft->hparams.n_vocab_output);
+        LOG_INF("[EAGLE] LM head sharing disabled because draft vocab is trimmed\n");
+    } else {
         struct ggml_tensor * tgt_output = llama_get_model(ctx_tgt)->output;
         struct ggml_tensor * dft_output = llama_get_model(ctx_dft)->output;
         
@@ -260,22 +302,24 @@ int main(int argc, char ** argv) {
             ? n_vocab_tgt - n_vocab_dft
             : n_vocab_dft - n_vocab_tgt;
 
-        if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
+        if (!has_vocab_trim && vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
             LOG_ERR("%s: draft model vocab must closely match target model to use speculation but ", __func__);
             LOG_ERR("target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
                     n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
             return 1;
         }
 
-        for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
-            const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
-            const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
-            if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-                LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
-                LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
-                        common_token_to_piece(ctx_tgt, i).c_str(),
-                        common_token_to_piece(ctx_dft, i).c_str());
-                return 1;
+        if (!has_vocab_trim) {
+            for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
+                const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
+                const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
+                if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
+                    LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
+                    LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
+                            common_token_to_piece(ctx_tgt, i).c_str(),
+                            common_token_to_piece(ctx_dft, i).c_str());
+                    return 1;
+                }
             }
         }
     }
@@ -355,6 +399,10 @@ int main(int argc, char ** argv) {
 
     // draft sequence data
     std::vector<seq_draft> drafts(n_seq_dft);
+    for (int s = 0; s < n_seq_dft; ++s) {
+        drafts[s].tokens.reserve(n_depth + 2);
+        drafts[s].i_batch_tgt.reserve(n_depth + 2);
+    }
 
     // 각 단계별 수락 길이를 저장하기 위한 벡터
     std::vector<int> acceptance_lengths;
@@ -391,7 +439,33 @@ int main(int argc, char ** argv) {
 
     auto verification_start = ggml_time_us();
 
+    // Latency breakdown variables (in microseconds)
+    int64_t total_draft_recompute_us = 0;
+    int64_t total_draft_forward_us = 0;
+    
+    // New fine-grained variables for Tree Expansion
+    int64_t total_expansion_sampling_us = 0;
+    
+    // Splitting Sequence Breakdown Variables
+    int64_t total_split_kv_copy_us = 0;
+    int64_t total_split_history_update_us = 0;
+    int64_t total_split_draft_state_alloc_us = 0;
+
+    int64_t total_expansion_temp_probs_us = 0;
+    int64_t total_expansion_topk_us = 0;
+    int64_t total_expansion_target_batch_us = 0;
+
+    int64_t total_tree_pruning_us = 0;
+
+    int64_t total_target_forward_us = 0;
+    int64_t total_target_kv_cache_us = 0;
+    int64_t total_verify_logic_us = 0;
+    int64_t total_fallback_sampling_us = 0;
+    int num_steps = 0;
+
     while (true) {
+        int64_t step_fallback_sampling_us = 0;
+        const auto step_verify_logic_start = ggml_time_us();
         std::set<int> active_seqs = {};
 
         // print current draft sequences
@@ -451,7 +525,7 @@ int main(int argc, char ** argv) {
 
                         LOG_DBG("verifying sequence #%d at pos #%d from %d active sequence(s)\n", s, i_dft, (int) active_seqs.size());
                         float r = u_dist(rng);
-                        llama_token_data_array dist_dft = { drafts[s].dists[i_dft].data() , drafts[s].dists[i_dft].size(), LLAMA_TOKEN_NULL, true };
+                        llama_token_data_array dist_dft = { nullptr, 0, LLAMA_TOKEN_NULL, true };
 
                         //GGML_ASSERT(dist_tgt.size <= dist_dft.size);
 
@@ -532,6 +606,7 @@ int main(int argc, char ** argv) {
                     }
 
                     if (!accept) {
+                        const auto fallback_start = ggml_time_us();
                         // all drafted tokens were rejected
                         // sample from the target model
                         LOG_DBG("all drafted tokens were rejected, sampling from residual distribution\n");
@@ -547,17 +622,20 @@ int main(int argc, char ** argv) {
                         token_id = dist_tgt.data[idx].id;
                         common_sampler_accept(smpl, token_id, true);
                         token_str = common_token_to_piece(ctx_tgt, token_id);
+                        step_fallback_sampling_us += (ggml_time_us() - fallback_start);
                     }
                 } else {
                     // greedy verification
 
                     // sample from the target model
                     LOG_DBG("sampling target: s_keep = %3d, i_dft = %3d, i_batch_tgt = %3d\n", s_keep, i_dft, drafts[s_keep].i_batch_tgt[i_dft]);
+                    const auto fallback_start = ggml_time_us();
                     token_id = common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft]);
 
                     common_sampler_accept(smpl, token_id, true);
 
                     token_str = common_token_to_piece(ctx_tgt, token_id);
+                    step_fallback_sampling_us += (ggml_time_us() - fallback_start);
 
                     temp2.insert(temp2.end(), backup_data.begin() + (4096 * (drafts[s_keep].i_batch_tgt[i_dft])), backup_data.begin() + (4096 * (drafts[s_keep].i_batch_tgt[i_dft] + 1)));
                     recompute.push_back(token_id);
@@ -604,6 +682,8 @@ int main(int argc, char ** argv) {
         }
 
         const auto verification_end = ggml_time_us();
+        total_verify_logic_us += ((verification_end - step_verify_logic_start) - step_fallback_sampling_us);
+        total_fallback_sampling_us += step_fallback_sampling_us;
 
         int verification_latency = (verification_end - verification_start) / 1000;
         verification_latencies.push_back(verification_latency);
@@ -629,6 +709,7 @@ int main(int argc, char ** argv) {
         const auto drafting_start = ggml_time_us();
 
         //////////////////////////////////////////Recompute Logic Start////////////////////////////////////////
+        const auto step_recompute_start = ggml_time_us();
         {
             LOG_DBG("the sampled target token (%d, '%s') did not match, or we ran out of drafted tokens\n", token_id, token_str.c_str());
 
@@ -650,11 +731,9 @@ int main(int argc, char ** argv) {
                 drafts[s].active = false;
                 drafts[s].tokens.clear();
                 drafts[s].i_batch_tgt.clear();
-                drafts[s].dists.clear();
             }
             // note: will be erased after the speculation phase
             drafts[0].tokens.push_back(token_id);
-            drafts[0].dists.push_back(std::vector<llama_token_data>());
             drafts[0].i_batch_tgt.push_back(0);
 
             llama_memory_seq_rm(mem_dft, 0, recompute_point, -1);
@@ -682,6 +761,9 @@ int main(int argc, char ** argv) {
         }
 
         //////////////////////////////////////////Recompute Logic End////////////////////////////////////////
+        const auto step_recompute_end = ggml_time_us();
+        total_draft_recompute_us += (step_recompute_end - step_recompute_start);
+
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
             break;
         }
@@ -709,6 +791,8 @@ int main(int argc, char ** argv) {
         drafts[0].i_batch_dft = 0;
 
         /////////////////////////////////////////Tree Decoding Start///////////////////////////////////////
+        const auto step_tree_start = ggml_time_us();
+        int64_t step_draft_forward_us = 0;
         common_batch_clear(batch_tgt);
         common_batch_add  (batch_tgt, drafts[0].tokens[0], n_past_tgt, { 0 }, true);
 
@@ -744,7 +828,6 @@ int main(int argc, char ** argv) {
             std::vector<llama_token> ids;
             std::vector<int> ss;
             std::vector<float> temp_probs;
-            std::vector<std::vector<llama_token_data>> datas;
 
             for (int s = 0; s < n_seq_dft; ++s) {
                 if (!drafts[s].drafting || drafts[s].skip) {
@@ -754,6 +837,7 @@ int main(int argc, char ** argv) {
                 LOG_DBG("drafting sequence %d at pos %d\n", s, i);
 
                 ////////////////////////////////////////Sampling Start///////////////////////////////////////
+                const auto t_samp_start = ggml_time_us();
                 // ctx_dft->synchronize(); // synchronize the draft model context
                 // const auto top_k = ctx_dft->get_topk();
                 // LOG_DBG("top_k = %f\n", *top_k);
@@ -761,7 +845,18 @@ int main(int argc, char ** argv) {
                 LOG_DBG("sampling draft: s = %3d, i = %3d, i_batch_dft = %3d\n", s, i, drafts[s].i_batch_dft);
                 common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft, true);
 
-                const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
+                auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
+                const auto t_samp_end = ggml_time_us();
+                total_expansion_sampling_us += (t_samp_end - t_samp_start);
+
+                if (has_vocab_trim) {
+                    for (size_t ci = 0; ci < cur_p->size; ++ci) {
+                        const int idx = cur_p->data[ci].id;
+                        if (idx >= 0 && idx < (int) dft_vocab_map.size()) {
+                            cur_p->data[ci].id = dft_vocab_map[idx];
+                        }
+                    }
+                }
 
                 for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
                     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
@@ -788,18 +883,23 @@ int main(int argc, char ** argv) {
                 }
 
                 ////////////////////////////////////////Split Start///////////////////////////////////////
+                const auto t_split_start = ggml_time_us();
                 for (int f = 1; f < expand_k; ++f) {
                     LOG_DBG("cur_p->data[f].p = %lf\n", cur_p->data[f].p);
                     // if (n_seq_cur < n_seq_dft && cur_p->data[f].p > p_draft_split) {
                     if (n_seq_cur < n_seq_dft) {
                         LOG_DBG("splitting seq %3d into %3d, drafts[n_seq_cur].i_batch_dft = %d, drafts[s].i_batch_dft = %d\n", s, n_seq_cur, drafts[n_seq_cur].i_batch_dft, drafts[s].i_batch_dft);
 
+                        const auto t_split_kv_start = ggml_time_us();
                         llama_memory_seq_rm(mem_dft,    n_seq_cur, -1, -1);
                         llama_memory_seq_cp(mem_dft, s, n_seq_cur, -1, -1);
+                        const auto t_split_kv_end = ggml_time_us();
+                        total_split_kv_copy_us += (t_split_kv_end - t_split_kv_start);
                         
                         LOG_DBG("디버그: n_seq_cur = %d, cb_data.data.size() = %zu\n", n_seq_cur, backup_data.size());
                         //temp.insert(temp.end(), cb_data.data.begin() + (4096 * s), cb_data.data.begin() + (4096 * (s + 1)));
 
+                        const auto t_split_history_start = ggml_time_us();
                         // all previous tokens from this branch are now also part of the new branch
                         for (int t = 0; t < batch_tgt.n_tokens; ++t) {
                             for (int p = 0; p < batch_tgt.n_seq_id[t]; ++p) {
@@ -810,14 +910,16 @@ int main(int argc, char ** argv) {
                                 }
                             }
                         }
+                        const auto t_split_history_end = ggml_time_us();
+                        total_split_history_update_us += (t_split_history_end - t_split_history_start);
 
+                        const auto t_split_state_start = ggml_time_us();
                         // copy the draft state
                         drafts[n_seq_cur].active   = true;
                         drafts[n_seq_cur].drafting = true;
                         drafts[n_seq_cur].skip     = true;
 
                         drafts[n_seq_cur].tokens      = drafts[s].tokens;
-                        drafts[n_seq_cur].dists       = drafts[s].dists;
                         drafts[n_seq_cur].i_batch_dft = drafts[s].i_batch_dft;
                         drafts[n_seq_cur].i_batch_tgt = drafts[s].i_batch_tgt;
 
@@ -842,74 +944,29 @@ int main(int argc, char ** argv) {
                             scores.at(n_seq_cur-1).at(i) = scores.at(s).at(i-1) * prob;
                             column_scores.at(n_seq_cur-1) = scores.at(s).at(i-1) * prob;
                         }
+                        const auto t_split_state_end = ggml_time_us();
+                        total_split_draft_state_alloc_us += (t_split_state_end - t_split_state_start);
                     } else {
                         break;
                     }
                 }
+               
 
                 ////////////////////////////////////////Split End///////////////////////////////////////
 
                 ////////////////////////////////////////Add Tokens Start///////////////////////////////////////
-                // LOG("\nsa.size = %d\n\n", (int) sa.size());
-                // LOG("\n1.) topk_indices(Data Size: %d, K: %d):\n", (int)column_scores.size(), expand_k);
-                // for (int i = 0; i < topk_indices.size(); i++) {
-                //     LOG("%ld ", topk_indices[i]);
-                // }
-                // LOG("\n");
-
+                const auto t_temp_prob_start = ggml_time_us();
                 // add drafted token for each sequence
                 for (int is = 0; is < (int) sa.size(); ++is) {
                     const llama_token id = cur_p->data[is].id;
                     ids.push_back(id);
                     temp_probs.push_back(cur_p->data[is].p);
-                    datas.push_back({cur_p->data, cur_p->data + cur_p->size});
 
                     const int s = sa[is];
                     ss.push_back(s);
-
-                    // LOG_DBG("/////////////////////////current s: %d\n", (int) s);
-
-                    // common_sampler_accept(drafts[s].smpl, id, true);
-                    // drafts[s].tokens.push_back(id);
-                    // // save cur_p.data into drafts[s].dists
-                    // drafts[s].dists.push_back({cur_p->data, cur_p->data + cur_p->size});
-
-                    // // add unique drafted tokens to the target batch
-                    // drafts[s].i_batch_tgt.push_back(batch_tgt.n_tokens);
-                    // common_batch_add(batch_tgt, id, n_past_tgt + i + 1, { s }, true);
-                    // LOG_DBG("batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
-
-                    // if (batch_tgt.n_tokens >= n_draft)
-                    //     break;
-
-                    // // add the token to the batch for batched decoding with the draft model
-                    // if (batch_dft.n_tokens >= expand_k)
-                    //     drafts[s].i_batch_dft = expand_k - 1;
-                    // else
-                    //     drafts[s].i_batch_dft = batch_dft.n_tokens;
-                    // LOG_DBG("drafts[s].i_batch_dft = %d, batch_dft.n_tokens: %d\n", drafts[s].i_batch_dft, batch_dft.n_tokens);
-
-                    // if (topk_indices.size() == 1) {
-                    //     common_batch_add(batch_dft, id, n_past_cur, {s}, true);
-                    //     LOG_DBG("Adding token %d ('%s') for sequence %d to draft batch\n", id, common_token_to_piece(ctx_dft, id).c_str(), s);
-                    //     temp.insert(temp.end(), cb_data.data.begin() + (4096 * temp_i_batch_dft[s]), cb_data.data.begin() + (4096 * (temp_i_batch_dft[s] + 1)));
-                    //     LOG_DBG("s*4096=%d, (s+1)*4096=%d\n", (4096 * temp_i_batch_dft[s]), (4096 * (temp_i_batch_dft[s] + 1)));
-                    // }
-                    // else {
-                    //     auto it_last = std::find(topk_indices.begin(), topk_indices.end(), s);
-                    //     if (it_last != topk_indices.end()) {
-                    //         LOG_DBG("Adding token %d ('%s') for sequence %d to draft batch\n", id, common_token_to_piece(ctx_dft, id).c_str(), s);
-                    //         common_batch_add(batch_dft, id, n_past_cur, {s}, true);
-                    //         temp.insert(temp.end(), cb_data.data.begin() + (4096 * temp_i_batch_dft[s]), cb_data.data.begin() + (4096 * (temp_i_batch_dft[s] + 1)));
-                    //         LOG_DBG("s*4096=%d, (s+1)*4096=%d\n", (4096 * temp_i_batch_dft[s]), (4096 * (temp_i_batch_dft[s] + 1)));
-                    //         LOG_DBG("\nbatch_dft.n_tokens: %d\n\n", batch_dft.n_tokens);
-                    //     }
-                    // }
-
-                    // if (batch_tgt.n_tokens > n_draft) {
-                    //     drafts[s].drafting = false;
-                    // }    
                 }
+                const auto t_temp_prob_end = ggml_time_us();
+                total_expansion_temp_probs_us += (t_temp_prob_end - t_temp_prob_start);
                 
                 for (int i = 0; i < n_seq_dft; i++) {
                     temp_i_batch_dft[i] = drafts[i].i_batch_dft;
@@ -924,22 +981,20 @@ int main(int argc, char ** argv) {
                 ////////////////////////////////////////Add Tokens End///////////////////////////////////////
             }
 
-            expandk_indices = TopK(temp_probs, expand_k);
-
             const auto topk_start = ggml_time_us();
-            topk_indices = TopK(column_scores, expand_k);
+            expandk_indices = TopK(temp_probs, expand_k);
+            topk_indices = TopK(column_scores, draft_top_k);
             const auto topk_end = ggml_time_us();
+            total_expansion_topk_us += (topk_end - topk_start);
 
+            const auto target_batch_start = ggml_time_us();
             for (int is = 0; is < (int) ids.size(); ++is) {
                 const llama_token id = ids[is];
                 const int s = ss[is];
                 const float p = temp_probs[is];
-                const auto cur_p = &datas[is];
 
                 common_sampler_accept(drafts[s].smpl, id, true);
                 drafts[s].tokens.push_back(id);
-                // save cur_p.data into drafts[s].dists
-                //drafts[s].dists.push_back({cur_p->data, cur_p->data + cur_p->size});
 
                 // add unique drafted tokens to the target batch
                 drafts[s].i_batch_tgt.push_back(batch_tgt.n_tokens);
@@ -950,8 +1005,8 @@ int main(int argc, char ** argv) {
                     break;
 
                 // add the token to the batch for batched decoding with the draft model
-                if (batch_dft.n_tokens >= expand_k)
-                    drafts[s].i_batch_dft = expand_k - 1;
+                if (batch_dft.n_tokens >= draft_top_k)
+                    drafts[s].i_batch_dft = draft_top_k - 1;
                 else
                     drafts[s].i_batch_dft = batch_dft.n_tokens;
                 LOG_DBG("drafts[s].i_batch_dft = %d, batch_dft.n_tokens: %d\n", drafts[s].i_batch_dft, batch_dft.n_tokens);
@@ -977,6 +1032,8 @@ int main(int argc, char ** argv) {
                     drafts[s].drafting = false;
                 }    
             }
+            const auto target_batch_end = ggml_time_us();
+            total_expansion_target_batch_us += (target_batch_end - target_batch_start);
 
             for (int i = 0; i < n_seq_dft; i++) {
                     temp_i_batch_dft[i] = drafts[i].i_batch_dft;
@@ -988,8 +1045,8 @@ int main(int argc, char ** argv) {
             // }
             // LOG("\n");
 
-            // LOG("222222222topk_indices(Data Size: %d, K: %d):\n", (int)column_scores.size(), expand_k);
-            // for (int i = 0; i < expand_k; i++) {
+            // LOG("222222222topk_indices(Data Size: %d, K: %d):\n", (int)column_scores.size(), draft_top_k);
+            // for (int i = 0; i < draft_top_k; i++) {
             //     LOG("%ld ", topk_indices[i]);
             // }
             // LOG("\nTop-K took %lld us\n", (topk_end - topk_start));
@@ -1039,6 +1096,8 @@ int main(int argc, char ** argv) {
             llama_decode_eagle(ctx_dft, batch_dft, temp.data());
             ctx_dft->synchronize();
             const auto dft_model_decode_end = ggml_time_us(); //dft_model decode 종료 시간 기록 -ym-
+            step_draft_forward_us += (dft_model_decode_end - dft_model_decode_start);
+            total_draft_forward_us += (dft_model_decode_end - dft_model_decode_start);
             T_d.push_back((dft_model_decode_end - dft_model_decode_start) / 1000.0f); //ms 단위로 변환 -ym-
             ++n_past_cur;
             ++n_drafted;
@@ -1052,7 +1111,9 @@ int main(int argc, char ** argv) {
         // [추가] Token-level Reranking 알고리즘 (Verification 대상 토큰 축소)
         // 트리 전체의 생성된 토큰들을 누적 확률(Confidence Score) 기준으로 평가하여 Top-K 토큰만 남김
         // =========================================================================================
+        int64_t step_rerank_us = 0;
         if (rerank) {
+            const auto rerank_start = ggml_time_us();
             int total_drafted_tokens = batch_tgt.n_tokens - 1; // Root 토큰(index 0) 제외
             if (total_drafted_tokens > rerank_k) {
                 LOG_DBG("Token-Level Reranking: drafted tokens(%d) > rerank_k(%d), pruning tree...\n", total_drafted_tokens, rerank_k);
@@ -1112,7 +1173,6 @@ int main(int argc, char ** argv) {
 
                     std::vector<int> new_i_batch_tgt;
                     std::vector<llama_token> new_tokens;
-                    std::vector<std::vector<llama_token_data>> new_dists;
 
                     // resize()가 아닌 정확한 매핑으로 살아남은 토큰만 추출
                     for (size_t i = 0; i < drafts[s].i_batch_tgt.size(); ++i) {
@@ -1121,9 +1181,6 @@ int main(int argc, char ** argv) {
                             new_i_batch_tgt.push_back(old_to_new_idx[old_idx]);
                             if (i < drafts[s].tokens.size()) {
                                 new_tokens.push_back(drafts[s].tokens[i]);
-                            }
-                            if (i < drafts[s].dists.size()) {
-                                new_dists.push_back(drafts[s].dists[i]);
                             }
                         }
                     }
@@ -1142,7 +1199,6 @@ int main(int argc, char ** argv) {
                     } else {
                         drafts[s].i_batch_tgt = new_i_batch_tgt;
                         drafts[s].tokens = new_tokens;
-                        drafts[s].dists = new_dists;
                     }
                 }
 
@@ -1159,10 +1215,15 @@ int main(int argc, char ** argv) {
                     batch_tgt.n_seq_id[t] = valid_seqs;
                 }
             }
+            const auto rerank_end = ggml_time_us();
+            step_rerank_us = (rerank_end - rerank_start);
+            total_tree_pruning_us += step_rerank_us;
         }
         // =========================================================================================
 
         /////////////////////////////////////////Drafting End///////////////////////////////////////
+
+
         LOG_DBG("// Target: batch_tgt.n_tokens: %d\n", batch_tgt.n_tokens);
 
         const auto drafting_end = ggml_time_us();
@@ -1173,6 +1234,7 @@ int main(int argc, char ** argv) {
 
         // evaluate the target model on the drafted tokens
         {
+            const auto step_target_forward_start = ggml_time_us();
             llama_memory_seq_keep(mem_tgt, 0);
             for (int s = 1; s < n_seq_dft; ++s) {
                 // Reranking에서 살아남은(active) 시퀀스만 KV Cache 복사
@@ -1180,6 +1242,8 @@ int main(int argc, char ** argv) {
                     llama_memory_seq_cp(mem_tgt, 0, s, -1, -1);
                 }
             }
+            const auto target_kv_end = ggml_time_us();
+            total_target_kv_cache_us += (target_kv_end - step_target_forward_start);
 
             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
             const auto t_dec_start = ggml_time_us(); //target model decode 시작 시간 기록 -ym-
@@ -1188,12 +1252,16 @@ int main(int argc, char ** argv) {
             const auto t_dec_end = ggml_time_us(); //target model decode 종료 시간 기록 -ym-
             LOG_DBG("/////////////////////////////batch_tgt.n_tokens: %d, target model decoding took %.3f seconds\n", batch_tgt.n_tokens, (t_dec_end - t_dec_start) / 1e6f);
 
+            const auto step_target_forward_end = ggml_time_us();
+            total_target_forward_us += (step_target_forward_end - t_dec_start);
+
             for (int i = 0; i < n_seq_dft; i++) {
                 temp_i_batch_dft[i] = 0;
             }
             backup_data = cb_data.data;
             ++n_past_tgt;
         }
+        num_steps++;
 
         // the first token is always proposed by the target model before the speculation loop so we erase it here
         for (int s = 0; s < n_seq_dft; ++s) {
@@ -1202,7 +1270,6 @@ int main(int argc, char ** argv) {
             }
 
             drafts[s].tokens.erase(drafts[s].tokens.begin());
-            drafts[s].dists.erase(drafts[s].dists.begin());
         }
     }
 
@@ -1219,6 +1286,50 @@ int main(int argc, char ** argv) {
     LOG_INF("n_drafted = %d\n", n_drafted);
     LOG_INF("n_accept  = %d\n", n_accept);
     LOG_INF("accept    = %.3f%%\n", 100.0f * n_accept / n_drafted);
+
+    LOG_INF("\n");
+    LOG_INF("================ Latency Breakdown ==================\n");
+    LOG_INF("Prefill Time                    : %8.3f ms\n", (t_enc_end - t_enc_start) / 1000.0f);
+    LOG_INF("[1] Drafting Phase\n");
+    LOG_INF("  - Draft Recompute/Alignment   : %8.3f ms\n", total_draft_recompute_us / 1000.0f);
+    LOG_INF("  - Draft Tree Forward          : %8.3f ms\n", total_draft_forward_us / 1000.0f);
+    auto total_expansion_split_us = total_split_kv_copy_us + total_split_history_update_us + total_split_draft_state_alloc_us;
+    LOG_INF("  - Tree Expansion (Total)      : %8.3f ms\n", (total_expansion_sampling_us + total_expansion_split_us + total_expansion_temp_probs_us + total_expansion_topk_us + total_expansion_target_batch_us) / 1000.0f);
+    LOG_INF("     ㄴ Sampling from Draft     : %8.3f ms\n", total_expansion_sampling_us / 1000.0f);
+    LOG_INF("     ㄴ Splitting Sequence      : %8.3f ms\n", total_expansion_split_us / 1000.0f);
+    LOG_INF("        - KV Cache Copy         : %8.3f ms\n", total_split_kv_copy_us / 1000.0f);
+    LOG_INF("        - Seq History Update    : %8.3f ms\n", total_split_history_update_us / 1000.0f);
+    LOG_INF("        - Draft State Alloc     : %8.3f ms\n", total_split_draft_state_alloc_us / 1000.0f);
+    LOG_INF("     ㄴ Temp Probs Array Prep   : %8.3f ms\n", total_expansion_temp_probs_us / 1000.0f);
+    LOG_INF("     ㄴ TopK Sorting            : %8.3f ms\n", total_expansion_topk_us / 1000.0f);
+    LOG_INF("     ㄴ Target Batch Append     : %8.3f ms\n", total_expansion_target_batch_us / 1000.0f);
+    LOG_INF("  - Tree Pruning (Reranking)    : %8.3f ms\n", total_tree_pruning_us / 1000.0f);
+    LOG_INF("[2] Verification Phase\n");
+    LOG_INF("  - Target Model Forward        : %8.3f ms\n", total_target_forward_us / 1000.0f);
+    LOG_INF("  - Target KV Cache Management  : %8.3f ms\n", total_target_kv_cache_us / 1000.0f);
+    LOG_INF("  - Tree Verification Logic     : %8.3f ms\n", total_verify_logic_us / 1000.0f);
+    LOG_INF("  - Fallback Sampling           : %8.3f ms\n", total_fallback_sampling_us / 1000.0f);
+    LOG_INF("-----------------------------------------------------\n");
+    if (num_steps > 0) {
+        auto total_expansion_split_us = total_split_kv_copy_us + total_split_history_update_us + total_split_draft_state_alloc_us;
+        LOG_INF("Avg Draft Recompute/Step        : %8.3f ms\n", (total_draft_recompute_us / 1000.0f) / num_steps);
+        LOG_INF("Avg Draft Forward/Step          : %8.3f ms\n", (total_draft_forward_us / 1000.0f) / num_steps);
+        LOG_INF("Avg Tree Expansion Total/Step   : %8.3f ms\n", ((total_expansion_sampling_us + total_expansion_split_us + total_expansion_temp_probs_us + total_expansion_topk_us + total_expansion_target_batch_us) / 1000.0f) / num_steps);
+        LOG_INF("   ㄴ Avg Sampling Dfts/Step    : %8.3f ms\n", (total_expansion_sampling_us / 1000.0f) / num_steps);
+        LOG_INF("   ㄴ Avg Split Sequence/Step   : %8.3f ms\n", (total_expansion_split_us / 1000.0f) / num_steps);
+        LOG_INF("      - KV Cache Copy           : %8.3f ms\n", (total_split_kv_copy_us / 1000.0f) / num_steps);
+        LOG_INF("      - Seq History Update      : %8.3f ms\n", (total_split_history_update_us / 1000.0f) / num_steps);
+        LOG_INF("      - Draft State Alloc       : %8.3f ms\n", (total_split_draft_state_alloc_us / 1000.0f) / num_steps);
+        LOG_INF("   ㄴ Avg Temp Probs Prep/Step  : %8.3f ms\n", (total_expansion_temp_probs_us / 1000.0f) / num_steps);
+        LOG_INF("   ㄴ Avg TopK Sorting/Step     : %8.3f ms\n", (total_expansion_topk_us / 1000.0f) / num_steps);
+        LOG_INF("   ㄴ Avg Target Batch/Step     : %8.3f ms\n", (total_expansion_target_batch_us / 1000.0f) / num_steps);
+        LOG_INF("Avg Tree Pruning/Step           : %8.3f ms\n", (total_tree_pruning_us / 1000.0f) / num_steps);
+        LOG_INF("Avg Target Forward/Step         : %8.3f ms\n", (total_target_forward_us / 1000.0f) / num_steps);
+        LOG_INF("Avg Target KV Cache/Step        : %8.3f ms\n", (total_target_kv_cache_us / 1000.0f) / num_steps);
+        LOG_INF("Avg Tree Verify Logic/Step      : %8.3f ms\n", (total_verify_logic_us / 1000.0f) / num_steps);
+        LOG_INF("Avg Fallback Sampling/Step      : %8.3f ms\n", (total_fallback_sampling_us / 1000.0f) / num_steps);
+    }
+    LOG_INF("=====================================================\n");
 
     // [추가] 수락 길이 통계 계산 및 출력
     if (!acceptance_lengths.empty()) {
@@ -1302,3 +1413,4 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
+

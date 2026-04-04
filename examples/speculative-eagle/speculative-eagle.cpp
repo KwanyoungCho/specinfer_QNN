@@ -49,8 +49,9 @@ static bool cb_get_hidden(struct ggml_tensor * tensor, bool ask, void * user_dat
     LOG_DBG("[%d, %d, %d, %d]\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     auto * cb_data = (struct callback_data *) user_data;
     auto n_bytes = ggml_nbytes(tensor);
-    cb_data->data.resize(n_bytes / sizeof(float)); //float 타입으로 변경 -ym-
-    ggml_backend_tensor_get(tensor, cb_data->data.data(), 0, n_bytes);
+    size_t prev_size = cb_data->data.size();
+    cb_data->data.resize(prev_size + n_bytes / sizeof(float));
+    ggml_backend_tensor_get(tensor, cb_data->data.data() + prev_size, 0, n_bytes);
 
     return true;
 }
@@ -152,10 +153,17 @@ int main(int argc, char ** argv) {
     model_dft = llama_init_dft.model.get();
     ctx_dft   = llama_init_dft.context.get();
 
+    const auto & dft_vocab_map = model_dft->vocab_map;
+    const bool has_vocab_trim = !dft_vocab_map.empty();
+
     // ================================================================================================
     // LM HEAD SHARING IMPLEMENTATION (Execute immediately after both models are loaded)
     // ================================================================================================
-    {
+    if (has_vocab_trim) {
+        LOG_INF("[EAGLE] Vocab trimming active: %zu entries in vocab_map (output_vocab_size=%u)\n",
+                dft_vocab_map.size(), model_dft->hparams.n_vocab_output);
+        LOG_INF("[EAGLE] LM head sharing disabled because draft vocab is trimmed\n");
+    } else {
         // The EAGLE graph building code already expects this scenario (output tensor can be NULL initially)
         // We simply assign the target model's output tensor to the draft model
         struct ggml_tensor * tgt_output = llama_get_model(ctx_tgt)->output;
@@ -249,22 +257,24 @@ int main(int argc, char ** argv) {
             ? n_vocab_tgt - n_vocab_dft
             : n_vocab_dft - n_vocab_tgt;
 
-        if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
+        if (!has_vocab_trim && vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
             LOG_ERR("%s: draft model vocab must closely match target model to use speculation but ", __func__);
             LOG_ERR("target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
                     n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
             return 1;
         }
 
-        for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
-            const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
-            const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
-            if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-                LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
-                LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
-                        common_token_to_piece(ctx_tgt, i).c_str(),
-                        common_token_to_piece(ctx_dft, i).c_str());
-                return 1;
+        if (!has_vocab_trim) {
+            for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
+                const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
+                const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
+                if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
+                    LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
+                    LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
+                            common_token_to_piece(ctx_tgt, i).c_str(),
+                            common_token_to_piece(ctx_dft, i).c_str());
+                    return 1;
+                }
             }
         }
     }
@@ -279,6 +289,37 @@ int main(int argc, char ** argv) {
     // }
     // // copy output parameters from target to draft
     // ggml_backend_tensor_copy(llama_get_model(ctx_tgt)->output, llama_get_model(ctx_dft)->output);
+
+    // Apply chat template if --chat-template is specified (e.g., --chat-template llama3)
+    if (!params.chat_template.empty()) {
+        std::string sys_prompt = params.system_prompt;
+        if (sys_prompt.empty()) {
+            sys_prompt = "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. "
+                         "Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. "
+                         "Please ensure that your responses are socially unbiased and positive in nature.\n\n"
+                         "If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. "
+                         "If you don't know the answer to a question, please don't share false information.";
+        }
+
+        std::vector<llama_chat_message> chat_msgs;
+        chat_msgs.push_back({"system", sys_prompt.c_str()});
+        chat_msgs.push_back({"user",   params.prompt.c_str()});
+
+        int32_t res = llama_chat_apply_template(
+            params.chat_template.c_str(), chat_msgs.data(), chat_msgs.size(), true, nullptr, 0);
+
+        if (res < 0) {
+            LOG_ERR("%s: failed to apply chat template '%s'\n", __func__, params.chat_template.c_str());
+            return 1;
+        }
+
+        std::vector<char> buf(res + 1);
+        llama_chat_apply_template(
+            params.chat_template.c_str(), chat_msgs.data(), chat_msgs.size(), true, buf.data(), buf.size());
+
+        params.prompt = std::string(buf.data(), res);
+        LOG_INF("%s: applied chat template '%s' to prompt\n", __func__, params.chat_template.c_str());
+    }
 
     // Tokenize the prompt
     std::vector<llama_token> inp;
@@ -312,17 +353,25 @@ int main(int argc, char ** argv) {
 
     // eval the prompt with both models
     const auto t_prefill_start = ggml_time_us();
+    cb_data.data.clear();
     llama_decode(ctx_tgt, temp_batch_tgt);
     const auto t_prefill_end = ggml_time_us();
     ctx_tgt->synchronize();
     std::vector<float> sliced_data = std::vector<float>(cb_data.data.begin(), cb_data.data.end()); // callback data에서 마지막 데이터를 제외한 나머지 백업 -ym-
 
     LOG("\nbatch_tgt.n_tokens: %d, prefill latency: %.3f seconds\n", temp_batch_tgt.n_tokens, (t_prefill_end - t_prefill_start) / 1e6f);
+    LOG("sliced_data size: %zu floats (expected %d)\n", sliced_data.size(), (n_input - 1) * 4096);
 
+    LOG("decoding last token of prompt (target)...\n");
+    cb_data.data.clear();
     llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
     std::vector<float> backup_data = std::vector<float>(cb_data.data.begin(), cb_data.data.end()); // callback data에서 마지막 데이터만 백업 -ym-
 
-    llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
+    LOG("prefilling draft model with %d tokens (draft n_ctx=%d)...\n", n_input - 1, llama_n_ctx(ctx_dft));
+    if (llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data()) != 0) {
+        LOG_ERR("%s: failed to prefill draft model (n_tokens=%d, n_ctx=%d)\n", __func__, n_input - 1, llama_n_ctx(ctx_dft));
+        return 1;
+    }
 
     // float* p_data = sliced_data.data();
     // size_t total_size = sliced_data.size();
@@ -820,9 +869,18 @@ int main(int argc, char ** argv) {
                 LOG_DBG("common_sampler_sample took %f seconds\n", (common_sampler_sample_end - common_sampler_sample_start) / 1e6f);
 
                 const auto common_sampler_get_candidates_start = ggml_time_us(); //common_sampler_get_candidates 시작 시간 기록 -ym-
-                const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
+                auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
                 const auto common_sampler_get_candidates_end = ggml_time_us(); //common_sampler_get_candidates 시작 시간 기록 -ym-
                 LOG_DBG("common_sampler_get_candidates took %f seconds\n", (common_sampler_get_candidates_end - common_sampler_get_candidates_start) / 1e6f);
+
+                if (has_vocab_trim) {
+                    for (size_t ci = 0; ci < cur_p->size; ++ci) {
+                        const int idx = cur_p->data[ci].id;
+                        if (idx >= 0 && idx < (int) dft_vocab_map.size()) {
+                            cur_p->data[ci].id = dft_vocab_map[idx];
+                        }
+                    }
+                }
 
                 for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
                     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
@@ -1094,6 +1152,7 @@ int main(int argc, char ** argv) {
 
             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
             const auto t_dec_start = ggml_time_us(); //target model decode 시작 시간 기록 -ym-
+            cb_data.data.clear();
             llama_decode(ctx_tgt, batch_tgt);
             ctx_tgt->synchronize();
             const auto t_dec_end = ggml_time_us(); //target model decode 종료 시간 기록 -ym-
@@ -1257,8 +1316,9 @@ int main(int argc, char ** argv) {
 //     LOG_DBG("[%d, %d, %d, %d]\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
 //     auto * cb_data = (struct callback_data *) user_data;
 //     auto n_bytes = ggml_nbytes(tensor);
-//     cb_data->data.resize(n_bytes / sizeof(float)); //float 타입으로 변경 -ym-
-//     ggml_backend_tensor_get(tensor, cb_data->data.data(), 0, n_bytes);
+//     size_t prev_size = cb_data->data.size();
+//     cb_data->data.resize(prev_size + n_bytes / sizeof(float)); //float 타입으로 변경 -ym-
+//     ggml_backend_tensor_get(tensor, cb_data->data.data() + prev_size, 0, n_bytes);
 
 //     return true;
 // }
@@ -1428,6 +1488,13 @@ int main(int argc, char ** argv) {
 //     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
 //     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
+//     const auto & dft_vocab_map = model_dft->vocab_map;
+//     const bool has_vocab_trim = !dft_vocab_map.empty();
+//     if (has_vocab_trim) {
+//         LOG_INF("[EAGLE] Vocab trimming active: %zu entries in vocab_map (output_vocab_size=%u)\n",
+//                 dft_vocab_map.size(), model_dft->hparams.n_vocab_output);
+//     }
+
 //     const bool vocab_type_tgt = llama_vocab_type(vocab_tgt);
 //     LOG_DBG("vocab_type tgt: %d\n", vocab_type_tgt);
 
@@ -1457,22 +1524,24 @@ int main(int argc, char ** argv) {
 //             ? n_vocab_tgt - n_vocab_dft
 //             : n_vocab_dft - n_vocab_tgt;
 
-//         if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
+//         if (!has_vocab_trim && vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
 //             LOG_ERR("%s: draft model vocab must closely match target model to use speculation but ", __func__);
 //             LOG_ERR("target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
 //                     n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
 //             return 1;
 //         }
 
-//         for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
-//             const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
-//             const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
-//             if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-//                 LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
-//                 LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
-//                         common_token_to_piece(ctx_tgt, i).c_str(),
-//                         common_token_to_piece(ctx_dft, i).c_str());
-//                 return 1;
+//         if (!has_vocab_trim) {
+//             for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
+//                 const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
+//                 const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
+//                 if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
+//                     LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
+//                     LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
+//                             common_token_to_piece(ctx_tgt, i).c_str(),
+//                             common_token_to_piece(ctx_dft, i).c_str());
+//                     return 1;
+//                 }
 //             }
 //         }
 //     }
@@ -1520,6 +1589,7 @@ int main(int argc, char ** argv) {
 
 //     // eval the prompt with both models
 //     const auto t_prefill_start = ggml_time_us();
+//     cb_data.data.clear();
 //     llama_decode(ctx_tgt, temp_batch_tgt);
 //     const auto t_prefill_end = ggml_time_us();
 //     ctx_tgt->synchronize();
@@ -1529,11 +1599,13 @@ int main(int argc, char ** argv) {
 
 //     LOG_DBG("\nbatch_tgt.n_tokens: %d, prefill latency: %.3f seconds\n", temp_batch_tgt.n_tokens, (t_prefill_end - t_prefill_start) / 1e6f);
 
+//     cb_data.data.clear();
 //     llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
 //     std::vector<float> backup_data = std::vector<float>(cb_data.data.begin(), cb_data.data.end()); // callback data에서 마지막 데이터만 백업 -ym-
 
 //     LOG_DBG("hidden_state extraction completed for target model.\n");
 
+//     cb_data.data.clear();
 //     llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
 
 //     LOG_DBG("Prefill completed for draft model.\n");
@@ -1896,6 +1968,7 @@ int main(int argc, char ** argv) {
 //                     common_batch_add  (batch_dft, recompute[i], recompute_point + i, { 0 }, false);
 //                 }
 //                 const auto recompute_decode_start = ggml_time_us();
+//                 cb_data.data.clear();
 //                 llama_decode_eagle(ctx_dft, batch_dft, temp4.data());
 //                 const auto recompute_decode_end = ggml_time_us();
 //                 LOG_DBG("recompute decode latency: %.3f seconds\n", (recompute_decode_end - recompute_decode_start) / 1e6f);
@@ -1912,6 +1985,7 @@ int main(int argc, char ** argv) {
 
 
 //             const auto recompute_decode_start1 = ggml_time_us();
+//             cb_data.data.clear();
 //             llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
 //             const auto recompute_decode_end1 = ggml_time_us();
 //             LOG_DBG("recompute decode latency: %.3f seconds\n", (recompute_decode_end1 - recompute_decode_start1) / 1e6f);
@@ -2024,9 +2098,18 @@ int main(int argc, char ** argv) {
 //                 LOG_DBG("common_sampler_sample took %f seconds\n", (common_sampler_sample_end - common_sampler_sample_start) / 1e6f);
 
 //                 const auto common_sampler_get_candidates_start = ggml_time_us(); //common_sampler_get_candidates 시작 시간 기록 -ym-
-//                 const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
+//                 auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
 //                 const auto common_sampler_get_candidates_end = ggml_time_us(); //common_sampler_get_candidates 시작 시간 기록 -ym-
 //                 LOG_DBG("common_sampler_get_candidates took %f seconds\n", (common_sampler_get_candidates_end - common_sampler_get_candidates_start) / 1e6f);
+
+//                 if (has_vocab_trim) {
+//                     for (size_t ci = 0; ci < cur_p->size; ++ci) {
+//                         const int idx = cur_p->data[ci].id;
+//                         if (idx >= 0 && idx < (int) dft_vocab_map.size()) {
+//                             cur_p->data[ci].id = dft_vocab_map[idx];
+//                         }
+//                     }
+//                 }
 
 //                 for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
 //                     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
@@ -2260,6 +2343,7 @@ int main(int argc, char ** argv) {
 
 //             // evaluate the drafted tokens on the draft model
 //             const auto dft_model_decode_start = ggml_time_us(); //dft_model decode 시작 시간 기록 -ym-
+//             cb_data.data.clear();
 //             llama_decode_eagle(ctx_dft, batch_dft, temp.data());
 //             ctx_dft->synchronize();
 //             const auto dft_model_decode_end = ggml_time_us(); //dft_model decode 종료 시간 기록 -ym-
@@ -2299,6 +2383,7 @@ int main(int argc, char ** argv) {
 
 //             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
 //             const auto t_dec_start = ggml_time_us(); //target model decode 시작 시간 기록 -ym-
+//             cb_data.data.clear();
 //             llama_decode(ctx_tgt, batch_tgt);
 //             ctx_tgt->synchronize();
 //             const auto t_dec_end = ggml_time_us(); //target model decode 종료 시간 기록 -ym-
