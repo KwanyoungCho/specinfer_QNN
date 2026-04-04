@@ -40,8 +40,9 @@ static bool cb_get_hidden(struct ggml_tensor * tensor, bool ask, void * user_dat
     LOG_DBG("[%ld, %ld, %ld, %ld]\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     auto * cb_data = (struct callback_data *) user_data;
     auto n_bytes = ggml_nbytes(tensor);
-    cb_data->data.resize(n_bytes / sizeof(float)); //float 타입으로 변경 -ym-
-    ggml_backend_tensor_get(tensor, cb_data->data.data(), 0, n_bytes);
+    const size_t prev_size = cb_data->data.size();
+    cb_data->data.resize(prev_size + n_bytes / sizeof(float)); // prefill chunk별 hidden state를 이어붙인다.
+    ggml_backend_tensor_get(tensor, cb_data->data.data() + prev_size, 0, n_bytes);
 
     return true;
 }
@@ -201,6 +202,8 @@ int main(int argc, char ** argv) {
     }
 
     params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
+    // Keep the draft context aligned with the target context.
+    params.n_ctx = llama_n_ctx(ctx_tgt);
     //params.cb_eval = cb_get_latency;
     common_init_result llama_init_dft = common_init_from_params(params);
 
@@ -356,23 +359,71 @@ int main(int argc, char ** argv) {
     }
 
     const int n_input = inp.size();
-
-    llama_batch temp_batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
-    int temp_n_past = 0;
-    for (size_t i = 0; i < inp.size() - 1; i++) {
-        common_batch_add(temp_batch_tgt, inp[i], temp_n_past++, { 0 }, true);
+    const int n_prefill_chunk_tgt = std::max(1, (int) llama_n_ubatch(ctx_tgt));
+    const int n_prefill_chunk_dft = std::max(1, (int) llama_n_ubatch(ctx_dft));
+    int hidden_dim = llama_model_n_embd(model_tgt);
+    if (hidden_dim <= 0) {
+        hidden_dim = llama_model_n_embd(model_dft);
     }
+    if (hidden_dim <= 0) {
+        hidden_dim = 4096;
+    }
+
+    llama_batch temp_batch_tgt = llama_batch_init(n_prefill_chunk_tgt, 0, 1);
+    const int n_prefill = n_input - 1;
+    int temp_n_past = 0;
 
     const auto t_enc_start = ggml_time_us(); // 인코딩 시작 시간 측정
 
     // eval the prompt with both models
-    llama_decode(ctx_tgt, temp_batch_tgt);
+    cb_data.data.clear();
+    for (int chunk_start = 0; chunk_start < n_prefill; chunk_start += n_prefill_chunk_tgt) {
+        const int chunk_size = std::min(n_prefill_chunk_tgt, n_prefill - chunk_start);
+        common_batch_clear(temp_batch_tgt);
+        for (int j = 0; j < chunk_size; ++j) {
+            common_batch_add(temp_batch_tgt, inp[chunk_start + j], temp_n_past++, { 0 }, true);
+        }
+        if (llama_decode(ctx_tgt, temp_batch_tgt) != 0) {
+            LOG_ERR("%s: target model prefill failed at chunk start=%d\n", __func__, chunk_start);
+            llama_batch_free(temp_batch_tgt);
+            common_sampler_free(smpl);
+            return 1;
+        }
+    }
+    ctx_tgt->synchronize();
     std::vector<float> sliced_data = std::vector<float>(cb_data.data.begin(), cb_data.data.end()); // callback data에서 마지막 데이터를 제외한 나머지 백업 -ym-
+    cb_data.data.clear();
 
-    llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
+    if (llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1)) != 0) {
+        LOG_ERR("%s: target model last-token prefill failed\n", __func__);
+        llama_batch_free(temp_batch_tgt);
+        common_sampler_free(smpl);
+        return 1;
+    }
     std::vector<float> backup_data = std::vector<float>(cb_data.data.begin(), cb_data.data.end()); // callback data에서 마지막 데이터만 백업 -ym-
 
-    llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
+    const size_t expected_sliced = (size_t) std::max(0, n_prefill) * (size_t) hidden_dim;
+    const size_t expected_backup = (size_t) hidden_dim;
+    if (sliced_data.size() < expected_sliced || backup_data.size() < expected_backup) {
+        LOG_ERR("%s: hidden state size mismatch (hidden_dim=%d, n_prefill=%d, sliced=%zu, backup=%zu)\n",
+                __func__, hidden_dim, n_prefill, sliced_data.size(), backup_data.size());
+        llama_batch_free(temp_batch_tgt);
+        common_sampler_free(smpl);
+        return 1;
+    }
+
+    cb_data.data.clear();
+    for (int chunk_start = 0; chunk_start < n_prefill; chunk_start += n_prefill_chunk_dft) {
+        const int chunk_size = std::min(n_prefill_chunk_dft, n_prefill - chunk_start);
+        if (llama_decode_eagle(ctx_dft,
+                llama_batch_get_one(inp.data() + 1 + chunk_start, chunk_size),
+                sliced_data.data() + (size_t) chunk_start * hidden_dim) != 0) {
+            LOG_ERR("%s: draft model prefill failed at token %d/%d\n", __func__, chunk_start, n_prefill);
+            llama_batch_free(temp_batch_tgt);
+            common_sampler_free(smpl);
+            return 1;
+        }
+    }
 
     const auto t_enc_end = ggml_time_us(); // 인코딩 종료 시간 측정
 
@@ -637,7 +688,9 @@ int main(int argc, char ** argv) {
                     token_str = common_token_to_piece(ctx_tgt, token_id);
                     step_fallback_sampling_us += (ggml_time_us() - fallback_start);
 
-                    temp2.insert(temp2.end(), backup_data.begin() + (4096 * (drafts[s_keep].i_batch_tgt[i_dft])), backup_data.begin() + (4096 * (drafts[s_keep].i_batch_tgt[i_dft] + 1)));
+                    temp2.insert(temp2.end(),
+                                 backup_data.begin() + (hidden_dim * (drafts[s_keep].i_batch_tgt[i_dft])),
+                                 backup_data.begin() + (hidden_dim * (drafts[s_keep].i_batch_tgt[i_dft] + 1)));
                     recompute.push_back(token_id);
 
                     for (int s = 0; s < n_seq_dft; ++s) {
@@ -698,7 +751,7 @@ int main(int argc, char ** argv) {
         LOG_DBG("Accepted Tokens: %d\n", i_dft + 1);
 
         backup_data = temp2;
-        std::vector temp3 = std::vector<float>(backup_data.end() - 4096, backup_data.end());
+        std::vector temp3 = std::vector<float>(backup_data.end() - hidden_dim, backup_data.end());
         int recompute_point = n_past_dft - i_dft;
 
         topk_indices = { 0, };
@@ -740,12 +793,13 @@ int main(int argc, char ** argv) {
 
             //recompute logic 추가 -ym-
             if (i_dft > 0) {
-                std::vector temp4 = std::vector<float>(backup_data.begin(), backup_data.end() - 4096);
+                std::vector temp4 = std::vector<float>(backup_data.begin(), backup_data.end() - hidden_dim);
 
                 common_batch_clear(batch_dft);
                 for (size_t i = 0; i < recompute.size() - 1; i++) {
                     common_batch_add  (batch_dft, recompute[i], recompute_point + i, { 0 }, false);
                 }
+                cb_data.data.clear();
                  llama_decode_eagle(ctx_dft, batch_dft, temp4.data());
             }
 
@@ -753,9 +807,10 @@ int main(int argc, char ** argv) {
             common_batch_add(batch_dft, token_id, n_past_dft, {0}, true);
 
             LOG_DBG("n_past_tgt: %d, n_past_dft: %d\n", n_past_tgt, n_past_dft);
-            LOG_DBG("recompute point: %d, n_past_dft: %d, recompute.size(): %zu, batch_dft.n_tokens: %d, backup_data.size(): %zu\n", recompute_point, n_past_dft, recompute.size(), batch_dft.n_tokens, backup_data.size()/4096);
+            LOG_DBG("recompute point: %d, n_past_dft: %d, recompute.size(): %zu, batch_dft.n_tokens: %d, backup_data.size(): %zu\n", recompute_point, n_past_dft, recompute.size(), batch_dft.n_tokens, backup_data.size() / hidden_dim);
 
             // LOG_DBG("dft batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_dft, batch_dft).c_str());
+            cb_data.data.clear();
             llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
             ++n_past_dft;
         }
@@ -1014,16 +1069,20 @@ int main(int argc, char ** argv) {
                 if (topk_indices.size() == 1) {
                     common_batch_add(batch_dft, id, n_past_cur, {s}, true);
                     LOG_DBG("Adding token %d ('%s') for sequence %d to draft batch\n", id, common_token_to_piece(ctx_dft, id).c_str(), s);
-                    temp.insert(temp.end(), cb_data.data.begin() + (4096 * temp_i_batch_dft[s]), cb_data.data.begin() + (4096 * (temp_i_batch_dft[s] + 1)));
-                    LOG_DBG("s*4096=%d, (s+1)*4096=%d\n", (4096 * temp_i_batch_dft[s]), (4096 * (temp_i_batch_dft[s] + 1)));
+                    temp.insert(temp.end(),
+                                cb_data.data.begin() + (hidden_dim * temp_i_batch_dft[s]),
+                                cb_data.data.begin() + (hidden_dim * (temp_i_batch_dft[s] + 1)));
+                    LOG_DBG("s*hidden_dim=%d, (s+1)*hidden_dim=%d\n", (hidden_dim * temp_i_batch_dft[s]), (hidden_dim * (temp_i_batch_dft[s] + 1)));
                 }
                 else {
                     auto it_last = std::find(topk_indices.begin(), topk_indices.end(), s);
                     if (it_last != topk_indices.end()) {
                         LOG_DBG("Adding token %d ('%s') for sequence %d to draft batch\n", id, common_token_to_piece(ctx_dft, id).c_str(), s);
                         common_batch_add(batch_dft, id, n_past_cur, {s}, true);
-                        temp.insert(temp.end(), cb_data.data.begin() + (4096 * temp_i_batch_dft[s]), cb_data.data.begin() + (4096 * (temp_i_batch_dft[s] + 1)));
-                        LOG_DBG("s*4096=%d, (s+1)*4096=%d\n", (4096 * temp_i_batch_dft[s]), (4096 * (temp_i_batch_dft[s] + 1)));
+                        temp.insert(temp.end(),
+                                    cb_data.data.begin() + (hidden_dim * temp_i_batch_dft[s]),
+                                    cb_data.data.begin() + (hidden_dim * (temp_i_batch_dft[s] + 1)));
+                        LOG_DBG("s*hidden_dim=%d, (s+1)*hidden_dim=%d\n", (hidden_dim * temp_i_batch_dft[s]), (hidden_dim * (temp_i_batch_dft[s] + 1)));
                         LOG_DBG("\nbatch_dft.n_tokens: %d\n\n", batch_dft.n_tokens);
                     }
                 }
@@ -1089,7 +1148,7 @@ int main(int argc, char ** argv) {
                 break;
             }
 
-            LOG_DBG("Draft: batch_dft.n_tokens: %d, temp.size(): %zu\nTarget Temp: batch_tgt.n_tokens: %d\n", batch_dft.n_tokens, temp.size()/4096, batch_tgt.n_tokens);
+            LOG_DBG("Draft: batch_dft.n_tokens: %d, temp.size(): %zu\nTarget Temp: batch_tgt.n_tokens: %d\n", batch_dft.n_tokens, temp.size() / hidden_dim, batch_tgt.n_tokens);
 
             // evaluate the drafted tokens on the draft model
             const auto dft_model_decode_start = ggml_time_us(); //dft_model decode 시작 시간 기록 -ym-
