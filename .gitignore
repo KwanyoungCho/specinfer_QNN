@@ -138,8 +138,17 @@ CLAUDE.md
 
 /tmp_result/
 
+<<<<<<< Updated upstream
 
 =======
 /data/
 /data/**
 
+=======
+CLAUDE.md
+
+/tmp_result/
+
+/data/
+/data/**
+>>>>>>> Stashed changes
