@@ -645,6 +645,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_LLAMA:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_OUTPUT_VOCAB_SIZE, hparams.n_vocab_output, false);
+                ml.get_arr(LLM_KV_VOCAB_MAP, vocab_map, false);
+                if (!vocab_map.empty()) {
+                    LLAMA_LOG_INFO("%s: LLAMA vocab_map loaded with %zu entries\n", __func__, vocab_map.size());
+                }
 
                 if (hparams.n_expert == 8) {
                     switch (hparams.n_layer) {
@@ -2574,13 +2579,23 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_GRANITE_MOE:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+                    const int64_t n_vocab_out = hparams.n_vocab_output > 0
+                        ? (int64_t) hparams.n_vocab_output : n_vocab;
+
+                    if (hparams.n_vocab_output > 0) {
+                        LLAMA_LOG_INFO("%s: %s using trimmed output vocab: %u (full: %d)\n",
+                                       __func__, llm_arch_name(arch), hparams.n_vocab_output, (int) n_vocab);
+                    }
 
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab_out}, TENSOR_NOT_REQUIRED);
 
                     // if output is NULL, init from the input tok embed
                     if (output == NULL) {
+                        if (n_vocab_out != n_vocab) {
+                            throw std::runtime_error("trimmed output vocab requires an explicit output tensor");
+                        }
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                     }
 
@@ -6646,6 +6661,16 @@ uint32_t llama_model::n_vocab_out() const {
     return hparams.n_vocab_output > 0 ? hparams.n_vocab_output : vocab.n_tokens();
 }
 
+llama_token llama_model::output_token_id(int32_t idx) const {
+    if (vocab_map.empty()) {
+        return idx;
+    }
+
+    GGML_ASSERT(idx >= 0);
+    GGML_ASSERT((size_t) idx < vocab_map.size());
+    return vocab_map[idx];
+}
+
 std::string llama_model::desc() const {
     return pimpl->desc_str;
 }
@@ -7595,6 +7620,18 @@ int32_t llama_model_n_head_kv(const llama_model * model) {
 
 int32_t llama_model_n_swa(const llama_model * model) {
     return model->hparams.n_swa;
+}
+
+uint32_t llama_model_n_vocab_out(const struct llama_model * model) {
+    return model->n_vocab_out();
+}
+
+llama_token llama_model_output_token_id(const struct llama_model * model, int32_t i) {
+    if (i < 0 || (uint32_t) i >= model->n_vocab_out()) {
+        return -1;
+    }
+
+    return model->output_token_id(i);
 }
 
 uint32_t llama_model_n_cls_out(const struct llama_model * model) {

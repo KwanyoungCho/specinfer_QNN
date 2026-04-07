@@ -2257,6 +2257,79 @@ class StableLMModel(TextModel):
             if len(norms) > 0:
                 raise ValueError(f"Unprocessed norms: {norms}")
 
+
+def _load_vocab_trim_map(
+    *,
+    vocab_trim_file: Path | None,
+    vocab_trim: bool,
+    full_vocab_size: int,
+    log_prefix: str,
+) -> list[int] | None:
+    vocab_map = None
+
+    if vocab_trim_file is not None:
+        with open(vocab_trim_file, "r", encoding="utf-8") as f:
+            vocab_map = json.load(f)
+        assert isinstance(vocab_map, list), "vocab-trim-file must contain a JSON list of integer token IDs"
+        vocab_map = sorted(set(int(x) for x in vocab_map))
+        if len(vocab_map) == 0:
+            raise ValueError("vocab-trim-file must contain at least one token ID")
+        logger.info(f"{log_prefix}: Loaded {len(vocab_map)} token IDs from {vocab_trim_file}")
+    elif vocab_trim:
+        trimmed_size = max(1, full_vocab_size // 4)
+        vocab_map = list(range(trimmed_size))
+        logger.info(f"{log_prefix}: --vocab-trim enabled, keeping first quarter ({trimmed_size}/{full_vocab_size})")
+
+    return vocab_map
+
+
+def _trim_output_weight(
+    output_weight: Tensor,
+    *,
+    vocab_trim_file: Path | None,
+    vocab_trim: bool,
+    log_prefix: str,
+) -> tuple[Tensor, list[int]] | None:
+    full_vocab_size = output_weight.shape[0]
+    vocab_map = _load_vocab_trim_map(
+        vocab_trim_file=vocab_trim_file,
+        vocab_trim=vocab_trim,
+        full_vocab_size=full_vocab_size,
+        log_prefix=log_prefix,
+    )
+
+    if vocab_map is None:
+        return None
+
+    max_id = max(vocab_map)
+    assert max_id < full_vocab_size, f"vocab_map contains ID {max_id} >= full vocab size {full_vocab_size}"
+
+    indices = torch.tensor(vocab_map, dtype=torch.long)
+    trimmed_weight = output_weight.index_select(0, indices)
+    logger.info(f"{log_prefix}: Trimmed output weight from {output_weight.shape} to {trimmed_weight.shape}")
+
+    # Keep output rows aligned for the OpenCL kernels that expect an 8-row SOA layout.
+    n_trimmed = trimmed_weight.shape[0]
+    pad_to = (n_trimmed + 7) // 8 * 8
+    if pad_to > n_trimmed:
+        n_pad = pad_to - n_trimmed
+        logger.info(f"{log_prefix}: Padding trimmed vocab from {n_trimmed} to {pad_to} (+{n_pad} zero rows) for OpenCL alignment")
+        zero_pad = torch.zeros(n_pad, trimmed_weight.shape[1], dtype=trimmed_weight.dtype)
+        trimmed_weight = torch.cat([trimmed_weight, zero_pad], dim=0)
+        vocab_map = vocab_map + [0] * n_pad
+
+    return trimmed_weight, vocab_map
+
+
+def _write_output_vocab_trim_metadata(model: ModelBase, *, log_prefix: str) -> None:
+    if hasattr(model, "_output_vocab_size"):
+        model.gguf_writer.add_output_vocab_size(model._output_vocab_size)
+        logger.info(f"{log_prefix}: Writing output_vocab_size = {model._output_vocab_size}")
+    if hasattr(model, "_output_vocab_map"):
+        key = f"{gguf.MODEL_ARCH_NAMES[model.model_arch]}.vocab_map"
+        model.gguf_writer.add_array(key, model._output_vocab_map)
+        logger.info(f"{log_prefix}: Writing vocab_map with {len(model._output_vocab_map)} entries")
+
 @ModelBase.register(
     "LLaMAForCausalLM",
     "LlamaForCausalLM",
@@ -2273,9 +2346,69 @@ class LlamaModel(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.vocab_trim_file: Path | None = None
+        self.vocab_trim: bool = False
+        self._output_tensor_name = self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT)
+        self._token_embd_tensor_name = self.format_tensor_name(gguf.MODEL_TENSOR.TOKEN_EMBD)
         # fix for SmolVLM2, missing `num_attention_heads` in config.json
         if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
+
+    def _normalize_text_tensor_name(self, name: str) -> str | None:
+        vision_prefixes = [
+            "vision_encoder.",
+            "vision_language_adapter.",
+            "patch_merger.",
+            "pre_mm_projector_norm",
+        ]
+
+        is_multimodal_tensor = "vision_tower" in name \
+            or "vision_model" in name \
+            or "audio_tower" in name \
+            or "model.connector" in name \
+            or "multi_modal_projector" in name \
+            or any(
+                name.startswith(prefix)
+                for prefix in vision_prefixes
+            )
+
+        if is_multimodal_tensor:
+            return None
+        if self.hf_arch == "LlamaModel":
+            return "model." + name
+        if name.startswith("model.text_model"):
+            return name.replace("text_model.", "") # for SmolVLM
+        if name.startswith("language_model."):
+            return name.replace("language_model.", "") # for the rest
+        return name
+
+    def _find_model_tensor(self, gguf_name: str) -> str | None:
+        for raw_name in self.model_tensors.keys():
+            normalized_name = self._normalize_text_tensor_name(raw_name)
+            if normalized_name is None:
+                continue
+            try:
+                mapped_name = self.map_tensor_name(normalized_name)
+            except ValueError:
+                continue
+            if mapped_name == gguf_name:
+                return raw_name
+        return None
+
+    def _maybe_trim_output_tensor(self, output_weight: Tensor) -> Tensor:
+        trimmed = _trim_output_weight(
+            output_weight,
+            vocab_trim_file=self.vocab_trim_file,
+            vocab_trim=self.vocab_trim,
+            log_prefix="LLAMA",
+        )
+        if trimmed is None:
+            return output_weight
+
+        trimmed_weight, vocab_map = trimmed
+        self._output_vocab_map = vocab_map
+        self._output_vocab_size = len(vocab_map)
+        return trimmed_weight
 
     def _set_vocab_mistral(self):
         if not _mistral_common_installed:
@@ -2408,32 +2541,10 @@ class LlamaModel(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.find_hparam(["n_heads", "num_attention_heads"])
         n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
-
-        vision_prefixes = [
-            "vision_encoder.",
-            "vision_language_adapter.",
-            "patch_merger.",
-            "pre_mm_projector_norm",
-        ]
-
-        is_multimodal_tensor = "vision_tower" in name \
-            or "vision_model" in name \
-            or "audio_tower" in name \
-            or "model.connector" in name \
-            or "multi_modal_projector" in name \
-            or any(
-                name.startswith(prefix)
-                for prefix in vision_prefixes
-            )
-
-        if is_multimodal_tensor:
+        normalized_name = self._normalize_text_tensor_name(name)
+        if normalized_name is None:
             return [] # skip vision tensors
-        elif self.hf_arch == "LlamaModel":
-            name = "model." + name
-        elif name.startswith("model.text_model"):
-            name = name.replace("text_model.", "") # for SmolVLM
-        elif name.startswith("language_model."):
-            name = name.replace("language_model.", "") # for the rest
+        name = normalized_name
 
         if self.undo_permute:
             if name.endswith(("q_proj.weight", "q_proj.bias")):
@@ -2475,7 +2586,11 @@ class LlamaModel(TextModel):
             else:
                 return []
 
-        return [(self.map_tensor_name(name), data_torch)]
+        new_name = self.map_tensor_name(name)
+        if new_name == self._output_tensor_name:
+            data_torch = self._maybe_trim_output_tensor(data_torch)
+
+        return [(new_name, data_torch)]
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         if rope_scaling := self.find_hparam(["rope_scaling"], optional=True):
@@ -2507,8 +2622,20 @@ class LlamaModel(TextModel):
 
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
+        if self.vocab_trim or self.vocab_trim_file is not None:
+            has_explicit_output = self._find_model_tensor(self._output_tensor_name) is not None
+            if not has_explicit_output:
+                token_embd_name = self._find_model_tensor(self._token_embd_tensor_name)
+                if token_embd_name is None:
+                    logger.warning("LLAMA: vocab trimming requested but no token embedding tensor was found")
+                else:
+                    logger.info(f"LLAMA: No explicit lm_head found, deriving trimmed output from {token_embd_name}")
+                    output_weight = self.model_tensors[token_embd_name]()
+                    yield (self._output_tensor_name, self._maybe_trim_output_tensor(output_weight))
+
     def prepare_tensors(self):
         super().prepare_tensors()
+        _write_output_vocab_trim_metadata(self, log_prefix="LLAMA")
 
         if self._experts is not None:
             # flatten `list[dict[str, Tensor]]` into `list[str]`
@@ -2792,52 +2919,17 @@ class LlamaModel(TextModel):
 
             if "lm_head.weight" in found:
                 lm_head = found["lm_head.weight"]
-                full_vocab_size = lm_head.shape[0]
-
-                # Determine vocab_map: which token IDs to keep
-                vocab_map = None
-                if self.vocab_trim_file is not None:
-                    # Load token ID list from JSON file
-                    with open(self.vocab_trim_file, "r") as f:
-                        vocab_map = json.load(f)
-                    assert isinstance(vocab_map, list), "vocab-trim-file must contain a JSON list of integer token IDs"
-                    vocab_map = sorted(set(int(x) for x in vocab_map))
-                    logger.info(f"EAGLE: Loaded {len(vocab_map)} token IDs from {self.vocab_trim_file}")
-                elif self.vocab_trim:
-                    # --vocab-trim flag: keep first quarter of vocab
-                    trimmed_size = full_vocab_size // 4
-                    vocab_map = list(range(trimmed_size))
-                    logger.info(f"EAGLE: --vocab-trim enabled, keeping first quarter ({trimmed_size}/{full_vocab_size})")
-
-                if vocab_map is not None:
-                    # Validate all IDs are in range
-                    max_id = max(vocab_map)
-                    assert max_id < full_vocab_size, f"vocab_map contains ID {max_id} >= full vocab size {full_vocab_size}"
-
-                    # Index-select rows from lm_head: trimmed[i] = lm_head[vocab_map[i]]
-                    indices = torch.tensor(vocab_map, dtype=torch.long)
-                    lm_head_trimmed = lm_head.index_select(0, indices)
-                    logger.info(f"EAGLE: Trimmed lm_head from {lm_head.shape} to {lm_head_trimmed.shape}")
-
-                    # Pad to multiple of 8 for Adreno OpenCL SOA 8x kernel compatibility (N_DST=8)
-                    n_trimmed = lm_head_trimmed.shape[0]
-                    pad_to = (n_trimmed + 7) // 8 * 8
-                    if pad_to > n_trimmed:
-                        n_pad = pad_to - n_trimmed
-                        logger.info(f"EAGLE: Padding trimmed vocab from {n_trimmed} to {pad_to} (+{n_pad} zero rows) for OpenCL alignment")
-                        zero_pad = torch.zeros(n_pad, lm_head_trimmed.shape[1], dtype=lm_head_trimmed.dtype)
-                        lm_head_trimmed = torch.cat([lm_head_trimmed, zero_pad], dim=0)
-                        # Add dummy entries (token ID 0) to vocab_map for padding rows
-                        vocab_map = vocab_map + [0] * n_pad
-
-                    # Store vocab_map and output_vocab_size as GGUF metadata
-                    self._eagle_vocab_map = vocab_map
-                    self._eagle_output_vocab_size = len(vocab_map)
-
-                    yield (self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), lm_head_trimmed)
-                else:
-                    # No trimming - use full lm_head
-                    yield (self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), lm_head)
+                trimmed = _trim_output_weight(
+                    lm_head,
+                    vocab_trim_file=self.vocab_trim_file,
+                    vocab_trim=self.vocab_trim,
+                    log_prefix="EAGLE",
+                )
+                if trimmed is not None:
+                    lm_head, vocab_map = trimmed
+                    self._output_vocab_map = vocab_map
+                    self._output_vocab_size = len(vocab_map)
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), lm_head)
             else:
                 logger.warning("EAGLE: lm_head.weight not found in base model!")
 
@@ -2850,15 +2942,7 @@ class LlamaModel(TextModel):
 
     def prepare_tensors(self):
         super().prepare_tensors()
-
-        # Write EAGLE vocab trim metadata after generate_extra_tensors has run
-        if hasattr(self, '_eagle_output_vocab_size'):
-            self.gguf_writer.add_output_vocab_size(self._eagle_output_vocab_size)
-            logger.info(f"EAGLE: Writing output_vocab_size = {self._eagle_output_vocab_size}")
-        if hasattr(self, '_eagle_vocab_map'):
-            key = f"{gguf.MODEL_ARCH_NAMES[self.model_arch]}.vocab_map"
-            self.gguf_writer.add_array(key, self._eagle_vocab_map)
-            logger.info(f"EAGLE: Writing vocab_map with {len(self._eagle_vocab_map)} entries")
+        _write_output_vocab_trim_metadata(self, log_prefix="EAGLE")
 
         if self._experts is not None:
             # flatten `list[dict[str, Tensor]]` into `list[str]`
@@ -10580,14 +10664,14 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--vocab-trim", action="store_true",
-        help="Enable EAGLE lm_head vocab trimming (keeps first half of vocab by default). "
+        help="Enable EAGLE/LLAMA output vocab trimming (keeps the first quarter of vocab by default). "
              "Use --vocab-trim-file to specify custom token IDs instead.",
     )
 
     parser.add_argument(
         "--vocab-trim-file", type=Path, default=None,
         help="path to JSON file containing list of token IDs to keep for trimmed lm_head "
-             "(e.g. for EAGLE vocab trimming). Implies --vocab-trim.",
+             "(e.g. for EAGLE/LLAMA vocab trimming). Implies --vocab-trim.",
     )
 
     args = parser.parse_args()

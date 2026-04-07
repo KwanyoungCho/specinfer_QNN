@@ -840,44 +840,124 @@ struct results_log_softmax {
     float  prob;
 };
 
-static std::vector<float> softmax(const std::vector<float> & logits) {
-    std::vector<float> probs(logits.size());
-    float max_logit = logits[0];
-    for (float v : logits) {
-        max_logit = std::max(max_logit, v);
+struct output_vocab_lookup {
+    int32_t n_vocab = 0;
+    int32_t n_vocab_full = 0;
+    bool identity = true;
+    std::vector<int32_t> token_to_output;
+    std::vector<int32_t> active_output_indices;
+
+    int32_t output_index(const llama_token tok) const {
+        if (tok < 0 || tok >= n_vocab_full) {
+            return -1;
+        }
+
+        if (identity) {
+            return tok < n_vocab ? tok : -1;
+        }
+
+        return token_to_output[tok];
     }
-    double sum_exp = 0.0;
-    for (size_t i = 0; i < logits.size(); i++) {
-        // Subtract the maximum logit value from the current logit value for numerical stability
-        const float logit = logits[i] - max_logit;
-        const float exp_logit = expf(logit);
-        sum_exp += exp_logit;
-        probs[i] = exp_logit;
+
+    size_t active_size() const {
+        return identity ? (size_t) n_vocab : active_output_indices.size();
     }
-    for (size_t i = 0; i < probs.size(); i++) {
-        probs[i] /= sum_exp;
+};
+
+static output_vocab_lookup build_output_vocab_lookup(const llama_model * model, const llama_vocab * vocab) {
+    output_vocab_lookup lookup;
+    lookup.n_vocab = (int32_t) llama_model_n_vocab_out(model);
+    lookup.n_vocab_full = llama_vocab_n_tokens(vocab);
+    lookup.identity = lookup.n_vocab == lookup.n_vocab_full;
+
+    if (lookup.identity) {
+        for (int32_t i = 0; i < lookup.n_vocab; ++i) {
+            if (llama_model_output_token_id(model, i) != i) {
+                lookup.identity = false;
+                break;
+            }
+        }
     }
-    return probs;
+
+    if (lookup.identity) {
+        return lookup;
+    }
+
+    lookup.token_to_output.assign(lookup.n_vocab_full, -1);
+    lookup.active_output_indices.reserve(lookup.n_vocab);
+
+    for (int32_t i = 0; i < lookup.n_vocab; ++i) {
+        const llama_token token_id = llama_model_output_token_id(model, i);
+        if (token_id < 0 || token_id >= lookup.n_vocab_full) {
+            continue;
+        }
+        if (lookup.token_to_output[token_id] != -1) {
+            continue;
+        }
+
+        lookup.token_to_output[token_id] = i;
+        lookup.active_output_indices.push_back(i);
+    }
+
+    return lookup;
 }
 
-static results_log_softmax log_softmax(int n_vocab, const float * logits, int tok) {
-    float max_logit = logits[0];
-    for (int i = 1; i < n_vocab; ++i) {
-        max_logit = std::max(max_logit, logits[i]);
+static void log_output_vocab_lookup(const char * func, const output_vocab_lookup & lookup) {
+    if (lookup.identity) {
+        return;
     }
+
+    LOG_WRN("%s: output vocab remap enabled (%zu active outputs, %d logits, tokenizer vocab %d)\n",
+            func, lookup.active_size(), lookup.n_vocab, lookup.n_vocab_full);
+    if (lookup.active_size() < (size_t) lookup.n_vocab_full) {
+        LOG_WRN("%s: tokens outside the trimmed vocab_map receive zero probability and can produce infinite loss\n", func);
+    }
+}
+
+static void compute_logsumexp(const output_vocab_lookup & lookup, const float * logits, float & max_logit, double & sum_exp) {
+    if (lookup.identity) {
+        max_logit = logits[0];
+        for (int i = 1; i < lookup.n_vocab; ++i) {
+            max_logit = std::max(max_logit, logits[i]);
+        }
+        sum_exp = 0.0;
+        for (int i = 0; i < lookup.n_vocab; ++i) {
+            sum_exp += expf(logits[i] - max_logit);
+        }
+        return;
+    }
+
+    GGML_ASSERT(!lookup.active_output_indices.empty());
+    max_logit = logits[lookup.active_output_indices[0]];
+    for (size_t i = 1; i < lookup.active_output_indices.size(); ++i) {
+        max_logit = std::max(max_logit, logits[lookup.active_output_indices[i]]);
+    }
+    sum_exp = 0.0;
+    for (const int32_t idx : lookup.active_output_indices) {
+        sum_exp += expf(logits[idx] - max_logit);
+    }
+}
+
+static results_log_softmax log_softmax(const output_vocab_lookup & lookup, const float * logits, llama_token tok) {
+    float max_logit = -INFINITY;
     double sum_exp = 0.0;
-    for (int i = 0; i < n_vocab; ++i) {
-        sum_exp += expf(logits[i] - max_logit);
+    compute_logsumexp(lookup, logits, max_logit, sum_exp);
+
+    const int32_t tok_idx = lookup.output_index(tok);
+    if (tok_idx < 0) {
+        return {-INFINITY, -INFINITY, 0.0f};
     }
-    return {logits[tok] - max_logit - log(sum_exp), logits[tok], expf(logits[tok] - max_logit) / (float) sum_exp};
+
+    const float tok_logit = logits[tok_idx];
+    return {tok_logit - max_logit - log(sum_exp), tok_logit, expf(tok_logit - max_logit) / (float) sum_exp};
 }
 
 static void process_logits(
-    int n_vocab, const float * logits, const int * tokens, int n_token, std::vector<std::thread> & workers,
+    const output_vocab_lookup & lookup, const float * logits, const int * tokens, int n_token, std::vector<std::thread> & workers,
     double & nll, double & nll2, float * logit_history, float * prob_history) {
     std::mutex mutex;
     int counter = 0;
-    auto compute = [&mutex, &counter, &nll, &nll2, logit_history, prob_history, n_vocab, logits, tokens, n_token] () {
+    auto compute = [&mutex, &counter, &nll, &nll2, logit_history, prob_history, &lookup, logits, tokens, n_token] () {
         double local_nll  = 0;
         double local_nll2 = 0;
         while (true) {
@@ -888,7 +968,7 @@ static void process_logits(
                 break;
             }
             lock.unlock();
-            const results_log_softmax results = log_softmax(n_vocab, logits + i*n_vocab, tokens[i+1]);
+            const results_log_softmax results = log_softmax(lookup, logits + i*lookup.n_vocab, tokens[i+1]);
             const double v = -results.log_softmax;
             local_nll += v;
             local_nll2 += v*v;
@@ -909,10 +989,12 @@ static void process_logits(
 static bool compute_imatrix(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    const output_vocab_lookup lookup = build_output_vocab_lookup(model, vocab);
 
     const bool add_bos = llama_vocab_get_add_bos(vocab);
 
     GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
+    log_output_vocab_lookup(__func__, lookup);
 
     auto tim1 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenizing the input ..\n", __func__);
@@ -948,7 +1030,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
     const int n_chunk_max = tokens.size() / n_ctx;
 
     const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
-    const int n_vocab = llama_vocab_n_tokens(vocab);
+    const int n_vocab = lookup.n_vocab;
     const int n_batch = params.n_batch;
 
     int count = 0;
@@ -1045,7 +1127,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
                 llama_token * tokens_data = tokens.data() + start + seq*n_ctx + first;
 
-                process_logits(n_vocab, all_logits + first*n_vocab,
+                process_logits(lookup, all_logits + first*n_vocab,
                         tokens_data, n_ctx - 1 - first,
                         workers, nll, nll2,
                         logit_history.data() + start + seq*n_ctx + first,

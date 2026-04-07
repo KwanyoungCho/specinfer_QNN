@@ -1,9 +1,9 @@
-// Spec-Bench runner for EAGLE speculative decoding
-// Based on speculative-eagle.cpp — loads models once, runs multiple prompts sequentially.
+// QNN Spec-Bench runner for EAGLE speculative decoding.
+// Loads the QNN target and draft model once, then runs multiple prompts sequentially.
 //
 // Usage:
-//   ./llama-spec-bench --bench-file prompts.jsonl [all normal speculative-eagle flags]
-//   ./llama-spec-bench --bench-file prompts.jsonl -n 512 -m model.gguf -md draft.gguf ...
+//   ./llama-spec-bench-qnn --bench-file prompts.jsonl [all normal speculative-eagle flags]
+//   ./llama-spec-bench-qnn -n 512 --ctx-dir qnn_ctx --tokenizer tok.gguf --params params.json -md draft.gguf ...
 //
 // JSONL format (Spec-Bench):
 //   {"question_id": 81, "category": "writing", "turns": ["prompt text..."]}
@@ -15,6 +15,7 @@
 #include "sampling.h"
 #include "log.h"
 #include "llama.h"
+#include "../../src/QNN/llm_decode_runner.h"
 #include "../src/llama-context.h"
 #include "../src/llama-model.h"
 
@@ -33,13 +34,12 @@
 #include <fstream>
 #include <sstream>
 #include <numeric>
-#include <unordered_map>
-
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
-#define SPEC_BENCH_BACKEND_LABEL "Spec-Bench"
-#define SPEC_BENCH_RESULTS_SUFFIX "_results"
+#define SPEC_BENCH_BACKEND_LABEL "Spec-Bench-QNN"
+#define SPEC_BENCH_RESULTS_SUFFIX "_qnn_results"
+#define SPEC_BENCH_DEFAULT_BENCH_FILE "/home/jongjip/specinfer_QNN/data/spec_bench.jsonl"
 
 #define n_depth 5
 #define expand_k 2
@@ -111,16 +111,6 @@ struct bench_result {
     bool   success;
     std::string error_message;
     std::string output_text;
-};
-
-// ============================================================
-// Token frequency tracking for vocab compression analysis
-// ============================================================
-
-struct token_freq_stats {
-    std::unordered_map<llama_token, int64_t> draft_freq;
-    std::unordered_map<llama_token, int64_t> draft_accepted;
-    std::unordered_map<llama_token, int64_t> bonus_freq;
 };
 
 // ============================================================
@@ -719,14 +709,7 @@ int main(int argc, char ** argv) {
     }
 
     if (bench_file.empty()) {
-        fprintf(stderr, "Usage: %s --bench-file <prompts.jsonl> [speculative-eagle args...]\n", argv[0]);
-        fprintf(stderr, "\nRun EAGLE speculative decoding on multiple prompts (models loaded once).\n");
-        fprintf(stderr, "  --bench-file FILE        JSONL file with prompts (Spec-Bench format) or plain text\n");
-        fprintf(stderr, "  --chat-template TMPL     Chat template: llama3 (default), vicuna, none\n");
-        fprintf(stderr, "  --no-chat-template       Same as --chat-template none\n");
-        fprintf(stderr, "  --dataset-type TYPE      Dataset format: auto (default), specbench, sharegpt\n");
-        fprintf(stderr, "  --results-dir DIR        Directory for per-prompt outputs and aggregate files\n");
-        return 1;
+        bench_file = SPEC_BENCH_DEFAULT_BENCH_FILE;
     }
 
     if (dataset_type != "auto" && dataset_type != "specbench" && dataset_type != "sharegpt") {
@@ -770,7 +753,7 @@ int main(int argc, char ** argv) {
         } else {
             dataset_type = "specbench";
         }
-        fprintf(stderr, "[Spec-Bench] Auto-detected dataset type: %s\n", dataset_type.c_str());
+        fprintf(stderr, "[%s] Auto-detected dataset type: %s\n", SPEC_BENCH_BACKEND_LABEL, dataset_type.c_str());
     }
 
     std::vector<bench_prompt> prompts;
@@ -797,9 +780,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    fprintf(stderr, "[Spec-Bench] Loaded %zu prompts from %s (type: %s, template: %s)\n",
+    fprintf(stderr, "[%s] Loaded %zu prompts from %s (type: %s, template: %s)\n",
+            SPEC_BENCH_BACKEND_LABEL,
             prompts.size(), bench_file.c_str(), dataset_type.c_str(), chat_template.c_str());
-    fprintf(stderr, "[Spec-Bench] Per-prompt results will be saved under %s\n", results_dir.c_str());
+    fprintf(stderr, "[%s] Per-prompt results will be saved under %s\n",
+            SPEC_BENCH_BACKEND_LABEL, results_dir.c_str());
 
     const int n_seq_dft = params.n_parallel;
 
@@ -816,17 +801,63 @@ int main(int argc, char ** argv) {
     params.cb_eval = cb_get_hidden;
     params.cb_eval_user_data = &cb_data;
 
+    llama_model_ptr model_tgt_guard;
+    llama_context_ptr ctx_tgt_guard;
     llama_model * model_tgt = NULL;
     llama_model * model_dft = NULL;
     llama_context * ctx_tgt = NULL;
     llama_context * ctx_dft = NULL;
 
-    common_init_result llama_init_tgt = common_init_from_params(params);
-    model_tgt = llama_init_tgt.model.get();
-    ctx_tgt   = llama_init_tgt.context.get();
+    llama_qnn::LLMDecodeConfig qnn_config;
+    qnn_config.ctx_dir               = params.qnn_ctx_dir;
+    qnn_config.backend_so            = params.qnn_backend_so.empty() ? "libQnnHtp.so" : params.qnn_backend_so;
+    qnn_config.system_so             = params.qnn_system_so.empty() ? "libQnnSystem.so" : params.qnn_system_so;
+    qnn_config.tokenizer_path        = params.qnn_tokenizer_path;
+    qnn_config.params_path           = params.qnn_params_path;
+    qnn_config.max_gen_tokens        = params.n_predict > 0 ? params.n_predict : 100;
+    qnn_config.log_level             = params.qnn_log_level;
+    qnn_config.use_multi_context     = params.qnn_use_multi_context;
+    qnn_config.num_shards            = params.qnn_num_shards;
+    qnn_config.deferred_kv_writeback = params.qnn_deferred_kv_writeback;
 
-    if (!model_tgt || !ctx_tgt) {
-        fprintf(stderr, "Error: failed to load target model from '%s'\n", params.model.path.c_str());
+    if (qnn_config.ctx_dir.empty()) {
+        fprintf(stderr, "Error: --ctx-dir is required for QNN target model\n");
+        llama_backend_free();
+        return 1;
+    }
+    if (qnn_config.tokenizer_path.empty()) {
+        fprintf(stderr, "Error: --tokenizer is required for QNN target model\n");
+        llama_backend_free();
+        return 1;
+    }
+
+    llama_model_params tgt_model_param = llama_model_default_params();
+    tgt_model_param.vocab_only = true;
+    model_tgt_guard.reset(llama_model_load_from_file(qnn_config.tokenizer_path.c_str(), tgt_model_param));
+    model_tgt = model_tgt_guard.get();
+
+    if (!model_tgt) {
+        fprintf(stderr, "Error: failed to load QNN tokenizer model from '%s'\n", qnn_config.tokenizer_path.c_str());
+        llama_backend_free();
+        return 1;
+    }
+
+    llama_context_params tgt_ctx_param = llama_context_default_params();
+    tgt_ctx_param.n_ctx     = 4096;
+    tgt_ctx_param.n_batch   = 2048;
+    tgt_ctx_param.n_seq_max = params.n_parallel;
+    ctx_tgt_guard.reset(llama_init_from_model(model_tgt, tgt_ctx_param));
+    ctx_tgt = ctx_tgt_guard.get();
+
+    if (!ctx_tgt) {
+        fprintf(stderr, "Error: failed to create QNN target context\n");
+        llama_backend_free();
+        return 1;
+    }
+
+    auto qnn_runner = std::make_unique<llama_qnn::LLMDecodeRunner>(qnn_config);
+    if (!qnn_runner->initialize()) {
+        fprintf(stderr, "Error: failed to initialize QNN runner: %s\n", qnn_runner->get_error().c_str());
         llama_backend_free();
         return 1;
     }
@@ -863,28 +894,10 @@ int main(int argc, char ** argv) {
 
     const auto & dft_vocab_map = model_dft->vocab_map;
     const bool has_vocab_trim = !dft_vocab_map.empty();
-
-    // LM head sharing is only safe when the draft logits already use the target vocab layout.
-    if (!has_vocab_trim) {
-        struct ggml_tensor * tgt_output = llama_get_model(ctx_tgt)->output;
-        if (!tgt_output) {
-            fprintf(stderr, "Error: target model output tensor is NULL\n");
-            return 1;
-        }
-        const_cast<struct llama_model *>(llama_get_model(ctx_dft))->output = tgt_output;
-        auto * mem_dft_init = llama_get_memory(ctx_dft);
-        llama_memory_clear(mem_dft_init, false);
-        if (llama_get_model(ctx_tgt)->output_norm && !llama_get_model(ctx_dft)->output_norm) {
-            const_cast<struct llama_model *>(llama_get_model(ctx_dft))->output_norm = llama_get_model(ctx_tgt)->output_norm;
-        }
-        fprintf(stderr, "[Spec-Bench] LM head sharing: OK\n");
-    } else {
-        fprintf(stderr, "[Spec-Bench] LM head sharing: disabled because draft vocab is trimmed\n");
-    }
-
     if (has_vocab_trim) {
         fprintf(stderr,
-                "[Spec-Bench] Draft vocab trimming active: %zu entries in vocab_map (output_vocab_size=%u)\n",
+                "[%s] Draft vocab trimming active: %zu entries in vocab_map (output_vocab_size=%u)\n",
+                SPEC_BENCH_BACKEND_LABEL,
                 dft_vocab_map.size(), model_dft->hparams.n_vocab_output);
     }
 
@@ -924,7 +937,6 @@ int main(int argc, char ** argv) {
         }
     }
 
-    auto * mem_tgt = llama_get_memory(ctx_tgt);
     auto * mem_dft = llama_get_memory(ctx_dft);
 
     const int max_context_size     = llama_n_ctx(ctx_tgt);
@@ -935,13 +947,12 @@ int main(int argc, char ** argv) {
     llama_batch batch_dft = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, n_seq_dft);
 
-    fprintf(stderr, "[Spec-Bench] Models loaded. Starting benchmark...\n\n");
+    fprintf(stderr, "[%s] Models loaded. Starting benchmark...\n\n", SPEC_BENCH_BACKEND_LABEL);
 
     // ====================================================================
     // Prompt loop
     // ====================================================================
     std::vector<bench_result> results;
-    token_freq_stats token_stats;
 
     const size_t idx_start = std::max(0, bench_start);
     const size_t idx_end   = bench_count < 0 ? prompts.size() : std::min(prompts.size(), (size_t)(bench_start + bench_count));
@@ -966,7 +977,8 @@ int main(int argc, char ** argv) {
         res.success = false;
 
         // ------ Reset state ------
-        llama_memory_clear(mem_tgt, true);
+        qnn_runner->reset();
+        ctx_tgt->final_hiddens.clear();
         llama_memory_clear(mem_dft, true);
 
         // ------ Tokenize ------
@@ -985,7 +997,7 @@ int main(int argc, char ** argv) {
         // ------ Sampler ------
         struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
 
-        // ------ Prefill (chunked to respect n_batch limit) ------
+        // ------ Prefill ------
         const auto t_enc_start = ggml_time_us();
 
         const int n_batch_dft = (int)llama_n_batch(ctx_dft);
@@ -998,34 +1010,26 @@ int main(int argc, char ** argv) {
         std::vector<float> sliced_data;
         std::vector<float> backup_data;
 
-        const int n_batch_tgt = (int)llama_n_batch(ctx_tgt);
-        const int n_prefill   = n_input - 1;
-        llama_batch temp_batch_tgt = llama_batch_init(n_batch_tgt, 0, 1);
-        cb_data.data.clear();
-        int temp_n_past = 0;
+        ctx_tgt->final_hiddens.clear();
+        if (qnn_runner->qnn_decode(ctx_tgt, llama_batch_get_one(inp.data(), n_input)) != 0) {
+            fprintf(stderr, "  SKIP: QNN target prefill failed: %s\n", qnn_runner->get_error().c_str());
+            tgt_prefill_ok = false;
+        } else {
+            const auto & final_hiddens = ctx_tgt->final_hiddens;
+            const size_t expected_floats = (size_t) n_input * hidden_dim;
+            const size_t sliced_floats   = (size_t) std::max(0, n_input - 1) * hidden_dim;
 
-        for (int chunk_start = 0; chunk_start < n_prefill; chunk_start += n_batch_tgt) {
-            const int chunk_size = std::min(n_batch_tgt, n_prefill - chunk_start);
-            common_batch_clear(temp_batch_tgt);
-            for (int j = 0; j < chunk_size; j++) {
-                common_batch_add(temp_batch_tgt, inp[chunk_start + j], temp_n_past++, { 0 }, true);
-            }
-            if (llama_decode(ctx_tgt, temp_batch_tgt) != 0) {
-                fprintf(stderr, "  SKIP: target model prefill failed at chunk start=%d\n", chunk_start);
+            if (final_hiddens.empty()) {
+                fprintf(stderr, "  SKIP: QNN target prefill produced no hidden states\n");
                 tgt_prefill_ok = false;
-                break;
-            }
-        }
-
-        if (tgt_prefill_ok) {
-            ctx_tgt->synchronize();
-            sliced_data.assign(cb_data.data.begin(), cb_data.data.end());
-            cb_data.data.clear();
-            if (llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1)) != 0) {
-                fprintf(stderr, "  SKIP: target model last-token prefill failed\n");
+            } else if (final_hiddens.size() < expected_floats) {
+                fprintf(stderr,
+                        "  SKIP: QNN target hidden state buffer too small (%zu < %zu)\n",
+                        final_hiddens.size(), expected_floats);
                 tgt_prefill_ok = false;
             } else {
-                backup_data.assign(cb_data.data.begin(), cb_data.data.end());
+                sliced_data.assign(final_hiddens.begin(), final_hiddens.begin() + sliced_floats);
+                backup_data.assign(final_hiddens.begin(), final_hiddens.begin() + expected_floats);
             }
         }
 
@@ -1034,7 +1038,6 @@ int main(int argc, char ** argv) {
             res.error_message = "target prefill failed";
             results.push_back(res);
             persist_result(res, bp);
-            llama_batch_free(temp_batch_tgt);
             continue;
         }
 
@@ -1058,12 +1061,10 @@ int main(int argc, char ** argv) {
             res.error_message = "draft prefill failed";
             results.push_back(res);
             persist_result(res, bp);
-            llama_batch_free(temp_batch_tgt);
             continue;
         }
 
         const auto t_enc_end = ggml_time_us();
-        llama_batch_free(temp_batch_tgt);
 
         // ------ Decode state init ------
         int n_predict = 0;
@@ -1091,7 +1092,7 @@ int main(int argc, char ** argv) {
         }
 
         drafts[0].i_batch_tgt.resize(1);
-        drafts[0].i_batch_tgt[0] = 0;
+        drafts[0].i_batch_tgt[0] = n_input - 1;
 
         const auto t_dec_start = ggml_time_us();
         auto verification_start = ggml_time_us();
@@ -1217,10 +1218,8 @@ int main(int argc, char ** argv) {
 
                     if (accept) {
                         ++n_accept; ++n_past_tgt; ++n_past_dft; ++i_dft;
-                        token_stats.draft_accepted[token_id]++;
                         continue;
                     } else {
-                        token_stats.bonus_freq[token_id]++;
                         break;
                     }
                 }
@@ -1248,10 +1247,17 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_keep(mem_dft, s_keep);
                 llama_memory_seq_cp  (mem_dft, s_keep, 0, -1, -1);
                 llama_memory_seq_keep(mem_dft, 0);
-                llama_memory_seq_rm  (mem_tgt, s_keep, n_past_tgt, -1);
-                llama_memory_seq_keep(mem_tgt, s_keep);
-                llama_memory_seq_cp  (mem_tgt, s_keep, 0, -1, -1);
-                llama_memory_seq_keep(mem_tgt, 0);
+                qnn_runner->kv_seq_rm  (s_keep, n_past_tgt, -1);
+                qnn_runner->kv_seq_keep(s_keep);
+                qnn_runner->kv_seq_cp  (s_keep, 0, -1, -1);
+                qnn_runner->kv_seq_keep(0);
+
+                if (qnn_runner->is_pending_KV_write() && !qnn_runner->KV_commit()) {
+                    fprintf(stderr, "  SKIP: failed to commit deferred QNN KV writeback: %s\n",
+                            qnn_runner->get_error().c_str());
+                    res.error_message = "QNN KV writeback commit failed";
+                    prompt_failed = true;
+                }
 
                 if (prompt_failed) {
                     break;
@@ -1429,7 +1435,6 @@ int main(int argc, char ** argv) {
                     for (int is = 0; is < (int)sa.size(); ++is) {
                         const llama_token id = cur_p->data[is].id;
                         const int ss = sa[is];
-                        token_stats.draft_freq[id]++;
                         common_sampler_accept(drafts[ss].smpl, id, true);
                         drafts[ss].tokens.push_back(id);
                         drafts[ss].dists.push_back({cur_p->data, cur_p->data + cur_p->size});
@@ -1481,14 +1486,26 @@ int main(int argc, char ** argv) {
 
             // Evaluate target model on drafted tokens
             {
-                llama_memory_seq_keep(mem_tgt, 0);
+                qnn_runner->kv_seq_keep(0);
                 for (int s = 1; s < n_seq_dft; ++s) {
-                    llama_memory_seq_cp(mem_tgt, 0, s, -1, -1);
+                    qnn_runner->kv_seq_cp(0, s, -1, -1);
                 }
-                cb_data.data.clear();
-                llama_decode(ctx_tgt, batch_tgt);
-                ctx_tgt->synchronize();
-                backup_data = cb_data.data;
+
+                ctx_tgt->final_hiddens.clear();
+                if (qnn_runner->qnn_decode(ctx_tgt, batch_tgt) != 0) {
+                    fprintf(stderr, "  SKIP: QNN verification decode failed: %s\n", qnn_runner->get_error().c_str());
+                    res.error_message = "QNN verification decode failed";
+                    prompt_failed = true;
+                    break;
+                }
+                if (ctx_tgt->final_hiddens.empty()) {
+                    fprintf(stderr, "  SKIP: QNN verification produced no hidden states\n");
+                    res.error_message = "QNN verification hidden states missing";
+                    prompt_failed = true;
+                    break;
+                }
+
+                backup_data = ctx_tgt->final_hiddens;
                 ++n_past_tgt;
             }
 
@@ -1641,76 +1658,6 @@ int main(int argc, char ** argv) {
                     << ",\"error_message\":\"" << json_escape(r.error_message) << "\"}\n";
             }
             fprintf(stderr, "Outputs saved to: %s\n", jsonl_path.c_str());
-        }
-    }
-
-    // ====================================================================
-    // Token frequency stats for vocab compression
-    // ====================================================================
-    {
-        std::unordered_map<llama_token, int64_t> all_tokens;
-        for (const auto & [tid, cnt] : token_stats.draft_freq)    all_tokens[tid] += 0;
-        for (const auto & [tid, cnt] : token_stats.draft_accepted) all_tokens[tid] += 0;
-        for (const auto & [tid, cnt] : token_stats.bonus_freq)    all_tokens[tid] += 0;
-
-        int64_t total_draft = 0, total_accepted = 0, total_bonus = 0;
-        for (const auto & [tid, cnt] : token_stats.draft_freq)    total_draft    += cnt;
-        for (const auto & [tid, cnt] : token_stats.draft_accepted) total_accepted += cnt;
-        for (const auto & [tid, cnt] : token_stats.bonus_freq)    total_bonus    += cnt;
-
-        fprintf(stderr, "\n============================================================\n");
-        fprintf(stderr, "  Token Frequency Stats (for vocab compression)\n");
-        fprintf(stderr, "============================================================\n");
-        fprintf(stderr, "  Unique tokens drafted  : %zu\n", token_stats.draft_freq.size());
-        fprintf(stderr, "  Unique tokens accepted : %zu\n", token_stats.draft_accepted.size());
-        fprintf(stderr, "  Unique bonus tokens    : %zu\n", token_stats.bonus_freq.size());
-        fprintf(stderr, "  Total draft count      : %lld\n", (long long)total_draft);
-        fprintf(stderr, "  Total accepted count   : %lld\n", (long long)total_accepted);
-        fprintf(stderr, "  Total bonus count      : %lld\n", (long long)total_bonus);
-        if (total_draft > 0) {
-            fprintf(stderr, "  Overall accept rate    : %.2f%%\n", 100.0 * total_accepted / total_draft);
-        }
-        fprintf(stderr, "============================================================\n");
-
-        std::string freq_path = (std::filesystem::path(results_dir) / "token_freq.csv").string();
-        std::ofstream freq_csv(freq_path);
-        if (freq_csv.is_open()) {
-            freq_csv << "token_id,token_text,draft_count,accepted_count,rejected_count,bonus_count,accept_rate\n";
-
-            struct token_row {
-                llama_token id;
-                int64_t draft, accepted, bonus;
-            };
-            std::vector<token_row> rows;
-            for (const auto & [tid, _] : all_tokens) {
-                token_row r;
-                r.id       = tid;
-                r.draft    = token_stats.draft_freq.count(tid)    ? token_stats.draft_freq.at(tid)    : 0;
-                r.accepted = token_stats.draft_accepted.count(tid) ? token_stats.draft_accepted.at(tid) : 0;
-                r.bonus    = token_stats.bonus_freq.count(tid)    ? token_stats.bonus_freq.at(tid)    : 0;
-                rows.push_back(r);
-            }
-            std::sort(rows.begin(), rows.end(), [](const token_row & a, const token_row & b) {
-                return (a.draft + a.bonus) > (b.draft + b.bonus);
-            });
-
-            for (const auto & r : rows) {
-                std::string tok_text = common_token_to_piece(ctx_tgt, r.id);
-                std::string escaped;
-                for (char c : tok_text) {
-                    if (c == '"')  escaped += "\"\"";
-                    else if (c == '\n') escaped += "\\n";
-                    else if (c == '\r') escaped += "\\r";
-                    else if (c == '\t') escaped += "\\t";
-                    else escaped += c;
-                }
-                int64_t rejected = r.draft > r.accepted ? r.draft - r.accepted : 0;
-                double accept_rate = r.draft > 0 ? 100.0 * r.accepted / r.draft : 0.0;
-                freq_csv << r.id << ",\"" << escaped << "\"," << r.draft << ","
-                         << r.accepted << "," << rejected << "," << r.bonus << ","
-                         << accept_rate << "\n";
-            }
-            fprintf(stderr, "\nToken frequency stats saved to: %s\n", freq_path.c_str());
         }
     }
 

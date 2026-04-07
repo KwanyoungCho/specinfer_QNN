@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
 // TODO: deduplicate with llama-impl.h
@@ -130,11 +131,28 @@ struct common_sampler {
         // const int n_vocab = llama_vocab_n_tokens(vocab);
 
         const int n_vocab = model->n_vocab_out();
+        const bool remap_output_vocab = model->arch == LLM_ARCH_LLAMA && !model->vocab_map.empty();
 
-        cur.resize(n_vocab);
+        if (!remap_output_vocab) {
+            cur.resize(n_vocab);
 
-        for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-            cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+            for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+                cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+            }
+        } else {
+            cur.clear();
+            cur.reserve(n_vocab);
+
+            std::unordered_set<llama_token> seen_token_ids;
+            seen_token_ids.reserve(n_vocab);
+
+            for (int32_t token_idx = 0; token_idx < n_vocab; ++token_idx) {
+                const llama_token token_id = model->output_token_id(token_idx);
+                if (!seen_token_ids.insert(token_id).second) {
+                    continue;
+                }
+                cur.push_back(llama_token_data{token_id, logits[token_idx], 0.0f});
+            }
         }
 
         cur_p = { cur.data(), cur.size(), -1, false };

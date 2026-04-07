@@ -4,14 +4,15 @@ set(TARGET llama-spec-bench-qnn)
 if(NOT DEFINED QNN_SDK_ROOT)
   if(DEFINED ENV{QNN_SDK_ROOT})
     set(QNN_SDK_ROOT $ENV{QNN_SDK_ROOT})
+  elseif(EXISTS "/home/jongjip/qairt")
+    set(QNN_SDK_ROOT "/home/jongjip/qairt")
   else()
     set(QNN_SDK_ROOT "/home/chokwans99/QNN_SDK/qairt/2.37.1.250807")
   endif()
 endif()
 message(STATUS "Using QNN_SDK_ROOT=${QNN_SDK_ROOT}")
 
-add_executable(${TARGET} ../spec-bench/spec-bench.cpp)
-target_compile_definitions(${TARGET} PRIVATE SPEC_BENCH_USE_QNN)
+add_executable(${TARGET} spec-bench-qnn.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE
     common

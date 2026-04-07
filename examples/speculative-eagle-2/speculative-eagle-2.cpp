@@ -47,6 +47,24 @@ static bool cb_get_hidden(struct ggml_tensor * tensor, bool ask, void * user_dat
     return true;
 }
 
+static void append_hidden_state_slice(
+    std::vector<float> & dst,
+    const std::vector<float> & src,
+    int hidden_dim,
+    int index) {
+    if (hidden_dim <= 0 || index < 0) {
+        return;
+    }
+
+    const size_t begin = (size_t) hidden_dim * (size_t) index;
+    const size_t end   = begin + (size_t) hidden_dim;
+    if (end > src.size()) {
+        return;
+    }
+
+    dst.insert(dst.end(), src.begin() + begin, src.begin() + end);
+}
+
 std::vector<size_t> TopK(const std::vector<float>& data, size_t k) {
     size_t n = data.size();
 
@@ -1069,9 +1087,7 @@ int main(int argc, char ** argv) {
                 if (topk_indices.size() == 1) {
                     common_batch_add(batch_dft, id, n_past_cur, {s}, true);
                     LOG_DBG("Adding token %d ('%s') for sequence %d to draft batch\n", id, common_token_to_piece(ctx_dft, id).c_str(), s);
-                    temp.insert(temp.end(),
-                                cb_data.data.begin() + (hidden_dim * temp_i_batch_dft[s]),
-                                cb_data.data.begin() + (hidden_dim * (temp_i_batch_dft[s] + 1)));
+                    append_hidden_state_slice(temp, cb_data.data, hidden_dim, temp_i_batch_dft[s]);
                     LOG_DBG("s*hidden_dim=%d, (s+1)*hidden_dim=%d\n", (hidden_dim * temp_i_batch_dft[s]), (hidden_dim * (temp_i_batch_dft[s] + 1)));
                 }
                 else {
@@ -1079,9 +1095,7 @@ int main(int argc, char ** argv) {
                     if (it_last != topk_indices.end()) {
                         LOG_DBG("Adding token %d ('%s') for sequence %d to draft batch\n", id, common_token_to_piece(ctx_dft, id).c_str(), s);
                         common_batch_add(batch_dft, id, n_past_cur, {s}, true);
-                        temp.insert(temp.end(),
-                                    cb_data.data.begin() + (hidden_dim * temp_i_batch_dft[s]),
-                                    cb_data.data.begin() + (hidden_dim * (temp_i_batch_dft[s] + 1)));
+                        append_hidden_state_slice(temp, cb_data.data, hidden_dim, temp_i_batch_dft[s]);
                         LOG_DBG("s*hidden_dim=%d, (s+1)*hidden_dim=%d\n", (hidden_dim * temp_i_batch_dft[s]), (hidden_dim * (temp_i_batch_dft[s] + 1)));
                         LOG_DBG("\nbatch_dft.n_tokens: %d\n\n", batch_dft.n_tokens);
                     }
@@ -1152,6 +1166,7 @@ int main(int argc, char ** argv) {
 
             // evaluate the drafted tokens on the draft model
             const auto dft_model_decode_start = ggml_time_us(); //dft_model decode 시작 시간 기록 -ym-
+            cb_data.data.clear();
             llama_decode_eagle(ctx_dft, batch_dft, temp.data());
             ctx_dft->synchronize();
             const auto dft_model_decode_end = ggml_time_us(); //dft_model decode 종료 시간 기록 -ym-
@@ -1305,6 +1320,7 @@ int main(int argc, char ** argv) {
             total_target_kv_cache_us += (target_kv_end - step_target_forward_start);
 
             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
+            cb_data.data.clear();
             const auto t_dec_start = ggml_time_us(); //target model decode 시작 시간 기록 -ym-
             llama_decode(ctx_tgt, batch_tgt);
             ctx_tgt->synchronize();

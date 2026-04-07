@@ -17,6 +17,7 @@
 #include <numeric>
 #include <random>
 #include <unordered_map>
+#include <unordered_set>
 #include <stdexcept>
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
@@ -418,8 +419,22 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
     // TODO: do not allocate each time
     std::vector<llama_token_data> cur;
     cur.reserve(n_vocab);
-    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-        cur.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
+
+    if (model->vocab_map.empty()) {
+        for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+            cur.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
+        }
+    } else {
+        std::unordered_set<llama_token> seen_token_ids;
+        seen_token_ids.reserve(n_vocab);
+
+        for (int32_t token_idx = 0; token_idx < n_vocab; ++token_idx) {
+            const llama_token token_id = model->output_token_id(token_idx);
+            if (!seen_token_ids.insert(token_id).second) {
+                continue;
+            }
+            cur.emplace_back(llama_token_data{token_id, logits[token_idx], 0.0f});
+        }
     }
 
     llama_token_data_array cur_p = {

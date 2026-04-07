@@ -510,6 +510,14 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
 
+    // Returns the number of logits produced per token.
+    // This can be smaller than the tokenizer vocab size when output vocab trimming is enabled.
+    LLAMA_API uint32_t llama_model_n_vocab_out(const struct llama_model * model);
+
+    // Maps a logits index (< llama_model_n_vocab_out()) back to the original tokenizer token id.
+    // Returns -1 if the index is out of range.
+    LLAMA_API llama_token llama_model_output_token_id(const struct llama_model * model, int32_t i);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 

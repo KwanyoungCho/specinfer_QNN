@@ -35,36 +35,116 @@ struct results_log_softmax {
     float  prob;
 };
 
-static std::vector<float> softmax(const std::vector<float>& logits) {
-    std::vector<float> probs(logits.size());
-    float max_logit = logits[0];
-    for (float v : logits) {
-        max_logit = std::max(max_logit, v);
+struct output_vocab_lookup {
+    int32_t n_vocab = 0;
+    int32_t n_vocab_full = 0;
+    bool identity = true;
+    std::vector<int32_t> token_to_output;
+    std::vector<int32_t> active_output_indices;
+
+    int32_t output_index(const llama_token tok) const {
+        if (tok < 0 || tok >= n_vocab_full) {
+            return -1;
+        }
+
+        if (identity) {
+            return tok < n_vocab ? tok : -1;
+        }
+
+        return token_to_output[tok];
     }
-    double sum_exp = 0.0;
-    for (size_t i = 0; i < logits.size(); i++) {
-        // Subtract the maximum logit value from the current logit value for numerical stability
-        const float logit = logits[i] - max_logit;
-        const float exp_logit = expf(logit);
-        sum_exp += exp_logit;
-        probs[i] = exp_logit;
+
+    size_t active_size() const {
+        return identity ? (size_t) n_vocab : active_output_indices.size();
     }
-    for (size_t i = 0; i < probs.size(); i++) {
-        probs[i] /= sum_exp;
+};
+
+static output_vocab_lookup build_output_vocab_lookup(const llama_model * model, const llama_vocab * vocab) {
+    output_vocab_lookup lookup;
+    lookup.n_vocab = (int32_t) llama_model_n_vocab_out(model);
+    lookup.n_vocab_full = llama_vocab_n_tokens(vocab);
+    lookup.identity = lookup.n_vocab == lookup.n_vocab_full;
+
+    if (lookup.identity) {
+        for (int32_t i = 0; i < lookup.n_vocab; ++i) {
+            if (llama_model_output_token_id(model, i) != i) {
+                lookup.identity = false;
+                break;
+            }
+        }
     }
-    return probs;
+
+    if (lookup.identity) {
+        return lookup;
+    }
+
+    lookup.token_to_output.assign(lookup.n_vocab_full, -1);
+    lookup.active_output_indices.reserve(lookup.n_vocab);
+
+    for (int32_t i = 0; i < lookup.n_vocab; ++i) {
+        const llama_token token_id = llama_model_output_token_id(model, i);
+        if (token_id < 0 || token_id >= lookup.n_vocab_full) {
+            continue;
+        }
+        if (lookup.token_to_output[token_id] != -1) {
+            continue;
+        }
+
+        lookup.token_to_output[token_id] = i;
+        lookup.active_output_indices.push_back(i);
+    }
+
+    return lookup;
 }
 
-static results_log_softmax log_softmax(int n_vocab, const float * logits, int tok) {
-    float max_logit = logits[0];
-    for (int i = 1; i < n_vocab; ++i) {
-        max_logit = std::max(max_logit, logits[i]);
+static void log_output_vocab_lookup(const char * func, const output_vocab_lookup & lookup) {
+    if (lookup.identity) {
+        return;
     }
+
+    LOG_WRN("%s: output vocab remap enabled (%zu active outputs, %d logits, tokenizer vocab %d)\n",
+            func, lookup.active_size(), lookup.n_vocab, lookup.n_vocab_full);
+    if (lookup.active_size() < (size_t) lookup.n_vocab_full) {
+        LOG_WRN("%s: tokens outside the trimmed vocab_map receive zero probability and can produce infinite loss\n", func);
+    }
+}
+
+static void compute_logsumexp(const output_vocab_lookup & lookup, const float * logits, float & max_logit, double & sum_exp) {
+    if (lookup.identity) {
+        max_logit = logits[0];
+        for (int i = 1; i < lookup.n_vocab; ++i) {
+            max_logit = std::max(max_logit, logits[i]);
+        }
+        sum_exp = 0.0;
+        for (int i = 0; i < lookup.n_vocab; ++i) {
+            sum_exp += expf(logits[i] - max_logit);
+        }
+        return;
+    }
+
+    GGML_ASSERT(!lookup.active_output_indices.empty());
+    max_logit = logits[lookup.active_output_indices[0]];
+    for (size_t i = 1; i < lookup.active_output_indices.size(); ++i) {
+        max_logit = std::max(max_logit, logits[lookup.active_output_indices[i]]);
+    }
+    sum_exp = 0.0;
+    for (const int32_t idx : lookup.active_output_indices) {
+        sum_exp += expf(logits[idx] - max_logit);
+    }
+}
+
+static results_log_softmax log_softmax(const output_vocab_lookup & lookup, const float * logits, llama_token tok) {
+    float max_logit = -INFINITY;
     double sum_exp = 0.0;
-    for (int i = 0; i < n_vocab; ++i) {
-        sum_exp += expf(logits[i] - max_logit);
+    compute_logsumexp(lookup, logits, max_logit, sum_exp);
+
+    const int32_t tok_idx = lookup.output_index(tok);
+    if (tok_idx < 0) {
+        return {-INFINITY, -INFINITY, 0.0f};
     }
-    return {logits[tok] - max_logit - log(sum_exp), logits[tok], expf(logits[tok] - max_logit) / (float) sum_exp};
+
+    const float tok_logit = logits[tok_idx];
+    return {tok_logit - max_logit - log(sum_exp), tok_logit, expf(tok_logit - max_logit) / (float) sum_exp};
 }
 
 static inline int nearest_int(float fval) {
@@ -74,18 +154,26 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
-static double log_softmax(int n_vocab, const float * logits, uint16_t * log_prob, int tok) {
-    float max_logit = logits[0];
-    float min_logit = logits[0];
-    for (int i = 1; i < n_vocab; ++i) {
-        max_logit = std::max(max_logit, logits[i]);
-        min_logit = std::min(min_logit, logits[i]);
-    }
-    min_logit = std::max(min_logit, max_logit - 16);
+static double log_softmax(const output_vocab_lookup & lookup, const float * logits, uint16_t * log_prob, llama_token tok) {
+    float max_logit = 0.0f;
     double sum_exp = 0.0;
-    for (int i = 0; i < n_vocab; ++i) {
-        sum_exp += expf(logits[i] - max_logit);
+    compute_logsumexp(lookup, logits, max_logit, sum_exp);
+
+    float min_logit = max_logit;
+    if (lookup.identity) {
+        min_logit = logits[0];
+        for (int i = 1; i < lookup.n_vocab; ++i) {
+            min_logit = std::min(min_logit, logits[i]);
+        }
+    } else {
+        GGML_ASSERT(!lookup.active_output_indices.empty());
+        min_logit = logits[lookup.active_output_indices[0]];
+        for (size_t i = 1; i < lookup.active_output_indices.size(); ++i) {
+            min_logit = std::min(min_logit, logits[lookup.active_output_indices[i]]);
+        }
     }
+
+    min_logit = std::max(min_logit, max_logit - 16);
     const float log_sum_exp = log(sum_exp);
     const float min_log_prob = min_logit - max_logit - log_sum_exp;
     const float scale = (max_logit - min_logit)/65535.f;
@@ -93,24 +181,35 @@ static double log_softmax(int n_vocab, const float * logits, uint16_t * log_prob
     d[0] = scale;
     d[1] = min_log_prob;
     log_prob += 4;
+    std::memset(log_prob, 0, lookup.n_vocab*sizeof(uint16_t));
     if (scale) {
         const float inv_scale = 1/scale;
-        for (int i = 0; i < n_vocab; ++i) {
-            log_prob[i] = logits[i] > min_logit ? nearest_int(inv_scale*(logits[i] - min_logit)) : 0;
+        if (lookup.identity) {
+            for (int i = 0; i < lookup.n_vocab; ++i) {
+                log_prob[i] = logits[i] > min_logit ? nearest_int(inv_scale*(logits[i] - min_logit)) : 0;
+            }
+        } else {
+            for (const int32_t idx : lookup.active_output_indices) {
+                log_prob[idx] = logits[idx] > min_logit ? nearest_int(inv_scale*(logits[idx] - min_logit)) : 0;
+            }
         }
-    } else {
-        std::memset(log_prob, 0, n_vocab*sizeof(uint16_t));
     }
-    return max_logit + log_sum_exp - logits[tok];
+
+    const int32_t tok_idx = lookup.output_index(tok);
+    if (tok_idx < 0) {
+        return INFINITY;
+    }
+
+    return max_logit + log_sum_exp - logits[tok_idx];
 }
 
 static void process_logits(
-    int n_vocab, const float * logits, const int * tokens, int n_token, std::vector<std::thread> & workers,
+    const output_vocab_lookup & lookup, const float * logits, const int * tokens, int n_token, std::vector<std::thread> & workers,
     double & nll, double & nll2, float * logit_history, float * prob_history
 ) {
     std::mutex mutex;
     int counter = 0;
-    auto compute = [&mutex, &counter, &nll, &nll2, logit_history, prob_history, n_vocab, logits, tokens, n_token] () {
+    auto compute = [&mutex, &counter, &nll, &nll2, logit_history, prob_history, &lookup, logits, tokens, n_token] () {
         double local_nll  = 0;
         double local_nll2 = 0;
         while (true) {
@@ -121,7 +220,7 @@ static void process_logits(
                 break;
             }
             lock.unlock();
-            const results_log_softmax results = log_softmax(n_vocab, logits + size_t(i)*n_vocab, tokens[i+1]);
+            const results_log_softmax results = log_softmax(lookup, logits + size_t(i)*lookup.n_vocab, tokens[i+1]);
             const double v = -results.log_softmax;
             local_nll += v;
             local_nll2 += v*v;
@@ -139,12 +238,13 @@ static void process_logits(
     }
 }
 
-static void process_logits(std::ostream& out, int n_vocab, const float * logits, const int * tokens, int n_token,
+static void process_logits(std::ostream& out, const output_vocab_lookup & lookup, const float * logits, const int * tokens, int n_token,
         std::vector<std::thread> & workers, std::vector<uint16_t> & log_probs, double & nll, double & nll2) {
     std::mutex mutex;
+    const int n_vocab = lookup.n_vocab;
     const int nv = 2*((n_vocab + 1)/2) + 4;
     int counter = 0;
-    auto compute = [&mutex, &counter, &log_probs, &nll, &nll2, n_vocab, logits, tokens, n_token, nv] () {
+    auto compute = [&mutex, &counter, &log_probs, &nll, &nll2, &lookup, logits, tokens, n_token, nv] () {
         double local_nll  = 0;
         double local_nll2 = 0;
         while (true) {
@@ -155,7 +255,7 @@ static void process_logits(std::ostream& out, int n_vocab, const float * logits,
                 break;
             }
             lock.unlock();
-            const double v = log_softmax(n_vocab, logits + size_t(i)*n_vocab, log_probs.data() + i*nv, tokens[i+1]);
+            const double v = log_softmax(lookup, logits + size_t(i)*lookup.n_vocab, log_probs.data() + i*nv, tokens[i+1]);
             local_nll += v;
             local_nll2 += v*v;
         }
@@ -186,30 +286,45 @@ struct kl_divergence_result {
     size_t count            = 0.0;
 };
 
-static std::pair<double, float> log_softmax(int n_vocab, const float * logits, const uint16_t * base_log_prob, int tok, kl_divergence_result & kld) {
-    float max_logit = logits[0];
+static std::pair<double, float> log_softmax(const output_vocab_lookup & lookup, const float * logits, const uint16_t * base_log_prob, llama_token tok, kl_divergence_result & kld) {
+    float max_logit = 0.0f;
+    double sum_exp = 0.0;
+    compute_logsumexp(lookup, logits, max_logit, sum_exp);
+
     int imax = 0;
-    for (int i = 1; i < n_vocab; ++i) {
-        if (logits[i] > max_logit) {
-            max_logit = logits[i];
-            imax = i;
+    if (lookup.identity) {
+        max_logit = logits[0];
+        for (int i = 1; i < lookup.n_vocab; ++i) {
+            if (logits[i] > max_logit) {
+                max_logit = logits[i];
+                imax = i;
+            }
+        }
+    } else {
+        GGML_ASSERT(!lookup.active_output_indices.empty());
+        max_logit = logits[lookup.active_output_indices[0]];
+        imax = lookup.active_output_indices[0];
+        for (size_t i = 1; i < lookup.active_output_indices.size(); ++i) {
+            const int32_t idx = lookup.active_output_indices[i];
+            if (logits[idx] > max_logit) {
+                max_logit = logits[idx];
+                imax = idx;
+            }
         }
     }
-    double sum_exp = 0.0;
-    for (int i = 0; i < n_vocab; ++i) {
-        sum_exp += expf(logits[i] - max_logit);
-    }
+
     const float log_sum_exp = log(sum_exp);
     const float * d = (const float *)base_log_prob;
     const float scale = d[0];
     const float min_log_prob = d[1];
     base_log_prob += 4;
 
-    const float nll = max_logit + log_sum_exp - logits[tok];
+    const int32_t tok_idx = lookup.output_index(tok);
+    const float nll = tok_idx >= 0 ? max_logit + log_sum_exp - logits[tok_idx] : INFINITY;
     kld.sum_nll  += nll;
     kld.sum_nll2 += nll*nll;
 
-    const float nll_base = -(scale*base_log_prob[tok] + min_log_prob);
+    const float nll_base = tok_idx >= 0 ? -(scale*base_log_prob[tok_idx] + min_log_prob) : INFINITY;
     kld.sum_nll_base  += nll_base;
     kld.sum_nll_base2 += nll_base*nll_base;
 
@@ -219,15 +334,30 @@ static std::pair<double, float> log_softmax(int n_vocab, const float * logits, c
     double sum = 0;
     int imax_base = -1;
     float p_log_base_max = 0;
-    for (int i = 0; i < n_vocab; ++i) {
-        const float p_log_base = scale*base_log_prob[i] + min_log_prob;
-        if (i == 0 || p_log_base > p_log_base_max) {
-            p_log_base_max = p_log_base;
-            imax_base = i;
+    if (lookup.identity) {
+        for (int i = 0; i < lookup.n_vocab; ++i) {
+            const float p_log_base = scale*base_log_prob[i] + min_log_prob;
+            if (i == 0 || p_log_base > p_log_base_max) {
+                p_log_base_max = p_log_base;
+                imax_base = i;
+            }
+            if (p_log_base > -16.f) {
+                const float p_base = expf(p_log_base);
+                sum += p_base * (p_log_base - logits[i] + max_logit);
+            }
         }
-        if (p_log_base > -16.f) {
-            const float p_base = expf(p_log_base);
-            sum += p_base * (p_log_base - logits[i] + max_logit);
+    } else {
+        for (size_t i = 0; i < lookup.active_output_indices.size(); ++i) {
+            const int32_t idx = lookup.active_output_indices[i];
+            const float p_log_base = scale*base_log_prob[idx] + min_log_prob;
+            if (i == 0 || p_log_base > p_log_base_max) {
+                p_log_base_max = p_log_base;
+                imax_base = idx;
+            }
+            if (p_log_base > -16.f) {
+                const float p_base = expf(p_log_base);
+                sum += p_base * (p_log_base - logits[idx] + max_logit);
+            }
         }
     }
     kld.sum_kld  += sum;
@@ -249,13 +379,14 @@ static std::pair<double, float> log_softmax(int n_vocab, const float * logits, c
     return std::make_pair(sum, p_diff);
 }
 
-static void process_logits(int n_vocab, const float * logits, const int * tokens, int n_token,
+static void process_logits(const output_vocab_lookup & lookup, const float * logits, const int * tokens, int n_token,
         std::vector<std::thread> & workers, const std::vector<uint16_t> & base_log_probs, kl_divergence_result & kld,
         float * kld_values, float * p_diff_values) {
     std::mutex mutex;
+    const int n_vocab = lookup.n_vocab;
     const int nv = 2*((n_vocab + 1)/2) + 4;
     int counter = 0;
-    auto compute = [&mutex, &counter, &base_log_probs, &kld, n_vocab, logits, tokens, n_token, nv, kld_values, p_diff_values] () {
+    auto compute = [&mutex, &counter, &base_log_probs, &kld, &lookup, logits, tokens, n_token, nv, kld_values, p_diff_values] () {
         kl_divergence_result local_kld;
         while (true) {
             std::unique_lock<std::mutex> lock(mutex);
@@ -277,7 +408,7 @@ static void process_logits(int n_vocab, const float * logits, const int * tokens
                 break;
             }
             lock.unlock();
-            std::pair<double, float> v = log_softmax(n_vocab, logits + size_t(i)*n_vocab, base_log_probs.data() + i*nv, tokens[i+1], local_kld);
+            std::pair<double, float> v = log_softmax(lookup, logits + size_t(i)*lookup.n_vocab, base_log_probs.data() + i*nv, tokens[i+1], local_kld);
             kld_values[i]    = (float)v.first;
             p_diff_values[i] = v.second;
         }
@@ -299,9 +430,11 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
 
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    const output_vocab_lookup lookup = build_output_vocab_lookup(model, vocab);
 
     const bool add_bos = llama_vocab_get_add_bos(vocab);
     GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
+    log_output_vocab_lookup(__func__, lookup);
 
     LOG_INF("%s: tokenizing the input ..\n", __func__);
 
@@ -342,7 +475,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
     const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
     const int n_batch = params.n_batch;
 
-    const int n_vocab = llama_vocab_n_tokens(vocab);
+    const int n_vocab = lookup.n_vocab;
 
     int count = 0;
     double nll = 0.0;
@@ -419,11 +552,11 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
                 logits.begin() + size_t(j + 0) * n_vocab,
                 logits.begin() + size_t(j + 1) * n_vocab);
 
-            const float prob = softmax(tok_logits)[tokens[start + j + 1]];
-            logit_history[start + j + 1] = tok_logits[tokens[start + j + 1]];
-            prob_history[start + j + 1]  = prob;
+            const results_log_softmax results = log_softmax(lookup, tok_logits.data(), tokens[start + j + 1]);
+            logit_history[start + j + 1] = results.logit;
+            prob_history[start + j + 1]  = results.prob;
 
-            nll += -std::log(prob);
+            nll += -results.log_softmax;
             ++count;
         }
         // perplexity is e^(average negative log-likelihood)
@@ -450,9 +583,11 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
 
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    const output_vocab_lookup lookup = build_output_vocab_lookup(model, vocab);
 
     const bool add_bos = llama_vocab_get_add_bos(vocab);
     GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
+    log_output_vocab_lookup(__func__, lookup);
 
     std::ofstream logits_stream;
     if (!params.logits_file.empty()) {
@@ -492,7 +627,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
     const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
     const int n_batch = params.n_batch;
 
-    const int n_vocab = llama_vocab_n_tokens(vocab);
+    const int n_vocab = lookup.n_vocab;
 
     int count = 0;
     double nll = 0.0;
@@ -613,11 +748,11 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
 
             llama_token * tokens_data = tokens.data() + start + seq*n_ctx + first;
             if (!params.logits_file.empty()) {
-                process_logits(logits_stream, n_vocab, all_logits,
+                process_logits(logits_stream, lookup, all_logits,
                         tokens_data, n_ctx - 1 - first,
                         workers, log_probs, nll, nll2);
             } else {
-                process_logits(n_vocab, all_logits,
+                process_logits(lookup, all_logits,
                         tokens_data, n_ctx - 1 - first,
                         workers, nll, nll2,
                         logit_history.data() + start + seq*n_ctx + first,
@@ -694,7 +829,7 @@ static bool decode_helper(llama_context * ctx, llama_batch & batch, std::vector<
 
 #define K_TOKEN_CHUNK 4
 
-static void compute_logprobs(const float * batch_logits, int n_vocab, std::vector<std::thread>& workers,
+static void compute_logprobs(const float * batch_logits, const output_vocab_lookup & lookup, std::vector<std::thread>& workers,
         const std::vector<std::pair<size_t, llama_token>>& eval_pairs, std::vector<float>& eval_results) {
     if (eval_results.size() != eval_pairs.size()) {
         eval_results.resize(eval_pairs.size());
@@ -706,7 +841,7 @@ static void compute_logprobs(const float * batch_logits, int n_vocab, std::vecto
     size_t max_threads = std::min((eval_pairs.size() + K_TOKEN_CHUNK - 1)/K_TOKEN_CHUNK, workers.size());
 
     std::atomic<int> counter(0);
-    auto compute = [&counter, &eval_pairs, &eval_results, batch_logits, n_vocab] () {
+    auto compute = [&counter, &eval_pairs, &eval_results, batch_logits, &lookup] () {
         float local_logprobs[K_TOKEN_CHUNK];
         while (true) {
             const size_t first = counter.fetch_add(K_TOKEN_CHUNK, std::memory_order_relaxed);
@@ -715,16 +850,8 @@ static void compute_logprobs(const float * batch_logits, int n_vocab, std::vecto
             }
             const size_t last = std::min(first + K_TOKEN_CHUNK, eval_results.size());
             for (size_t i = first; i < last; ++i) {
-                const auto * logits = batch_logits + eval_pairs[i].first * n_vocab;
-                float max_logit = logits[0];
-                for (int j = 1; j < n_vocab; ++j) {
-                    max_logit = std::max(max_logit, logits[j]);
-                }
-                float sum_p = 0.f;
-                for (int j = 0; j < n_vocab; ++j) {
-                    sum_p += expf(logits[j] - max_logit);
-                }
-                local_logprobs[i - first] = logits[eval_pairs[i].second] - max_logit - std::log(sum_p);
+                const auto * logits = batch_logits + eval_pairs[i].first * lookup.n_vocab;
+                local_logprobs[i - first] = (float) log_softmax(lookup, logits, eval_pairs[i].second).log_softmax;
             }
             std::memcpy(eval_results.data() + first, local_logprobs, (last - first)*sizeof(float));
         }
@@ -741,6 +868,8 @@ static void compute_logprobs(const float * batch_logits, int n_vocab, std::vecto
 static void hellaswag_score(llama_context * ctx, const common_params & params) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    const output_vocab_lookup lookup = build_output_vocab_lookup(model, vocab);
+    log_output_vocab_lookup(__func__, lookup);
 
     // Calculates hellaswag score (acc_norm) from prompt
     //
@@ -858,7 +987,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
     const int n_ctx   = llama_n_ctx(ctx);
     const int n_batch = params.n_batch;
 
-    const int n_vocab = llama_vocab_n_tokens(vocab);
+    const int n_vocab = lookup.n_vocab;
 
     const int max_tasks_per_batch = 32;
     const int max_seq = std::min(4*max_tasks_per_batch, (int) llama_n_seq_max(ctx));
@@ -945,7 +1074,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
             }
         }
         // Then we do the actual calculation
-        compute_logprobs(batch_logits.data(), n_vocab, workers, eval_pairs, eval_results);
+        compute_logprobs(batch_logits.data(), lookup, workers, eval_pairs, eval_results);
 
         size_t ir = 0;
 
@@ -956,11 +1085,9 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
             // get the logits of the last token of the common prefix
             std::memcpy(tok_logits.data(), batch_logits.data() + hs_cur.i_logits*n_vocab, n_vocab*sizeof(float));
 
-            const auto first_probs = softmax(tok_logits);
-
             for (int s = 0; s < 4; ++s) {
                 hs_cur.ending_logprob_count[s] = 1;
-                hs_cur.ending_logprob[s] = std::log(first_probs[hs_cur.seq_tokens[s][hs_cur.common_prefix]]);
+                hs_cur.ending_logprob[s] = (double) log_softmax(lookup, tok_logits.data(), hs_cur.seq_tokens[s][hs_cur.common_prefix]).log_softmax;
                 for (size_t j = hs_cur.common_prefix; j < hs_cur.seq_tokens[s].size() - 1; j++) {
                     hs_cur.ending_logprob[s] += eval_results[ir++];
                     hs_cur.ending_logprob_count[s]++;
@@ -1098,6 +1225,8 @@ static std::vector<winogrande_entry> load_winogrande_from_csv(const std::string 
 static void winogrande_score(llama_context * ctx, const common_params & params) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    const output_vocab_lookup lookup = build_output_vocab_lookup(model, vocab);
+    log_output_vocab_lookup(__func__, lookup);
 
     constexpr int k_min_trailing_ctx = 3;
 
@@ -1156,7 +1285,7 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
     const int n_ctx   = llama_n_ctx(ctx);
     const int n_batch = params.n_batch;
 
-    const int n_vocab = llama_vocab_n_tokens(vocab);
+    const int n_vocab = lookup.n_vocab;
 
     const int max_tasks_per_batch = 128;
     const int max_seq = std::min(2*max_tasks_per_batch, (int) llama_n_seq_max(ctx));
@@ -1247,7 +1376,7 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
                 eval_pairs.emplace_back(task.i_logits + li++, task.seq_tokens[1][j+1]);
             }
         }
-        compute_logprobs(batch_logits.data(), n_vocab, workers, eval_pairs, eval_results);
+        compute_logprobs(batch_logits.data(), lookup, workers, eval_pairs, eval_results);
 
         size_t ir = 0;
         for (size_t i = i0; i < i1; ++i) {
@@ -1402,6 +1531,8 @@ static bool multiple_choice_prepare_one_task(llama_context * ctx, multiple_choic
 static void multiple_choice_score(llama_context * ctx, const common_params & params) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    const output_vocab_lookup lookup = build_output_vocab_lookup(model, vocab);
+    log_output_vocab_lookup(__func__, lookup);
 
     std::istringstream strstream(params.prompt);
     uint32_t n_task;
@@ -1510,7 +1641,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
     const int n_ctx   = llama_n_ctx(ctx);
     const int n_batch = params.n_batch;
 
-    const int n_vocab = llama_vocab_n_tokens(vocab);
+    const int n_vocab = lookup.n_vocab;
 
     const int max_tasks_per_batch = 32;
     const int max_seq = std::min(4*max_tasks_per_batch, (int) llama_n_seq_max(ctx));
@@ -1617,7 +1748,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
             }
         }
         // Then we do the actual calculation
-        compute_logprobs(batch_logits.data(), n_vocab, workers, eval_pairs, eval_results);
+        compute_logprobs(batch_logits.data(), lookup, workers, eval_pairs, eval_results);
 
         size_t ir = 0;
 
@@ -1635,12 +1766,10 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
             // get the logits of the last token of the common prefix
             std::memcpy(tok_logits.data(), batch_logits.data() + cur_task.i_logits*n_vocab, n_vocab*sizeof(float));
 
-            const auto first_probs = softmax(tok_logits);
-
             cur_task.log_probs.resize(cur_task.seq_tokens.size());
             for (int s = 0; s < int(cur_task.seq_tokens.size()); ++s) {
                 size_t count = 1;
-                float  log_prob  = std::log(first_probs[cur_task.seq_tokens[s][cur_task.common_prefix]]);
+                float  log_prob  = (float) log_softmax(lookup, tok_logits.data(), cur_task.seq_tokens[s][cur_task.common_prefix]).log_softmax;
                 for (size_t j = cur_task.common_prefix; j < cur_task.seq_tokens[s].size() - 1; j++) {
                     //LOG("        %zu  %g\n", ir, eval_results[ir]);
                     ++count;
@@ -1692,6 +1821,8 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
 static void kl_divergence(llama_context * ctx, const common_params & params) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    const output_vocab_lookup lookup = build_output_vocab_lookup(model, vocab);
+    log_output_vocab_lookup(__func__, lookup);
 
     if (params.logits_file.empty()) {
         LOG_ERR("%s: you must provide a name of a file containing the log probabilities of the base model\n", __func__);
@@ -1726,8 +1857,9 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
         LOG_ERR("%s: failed reading n_vocab, n_chunk from %s\n", __func__, params.logits_file.c_str());
         return;
     }
-    if (n_vocab != llama_vocab_n_tokens(vocab)) {
-        LOG_ERR("%s: inconsistent vocabulary (%d vs %d)\n", __func__, n_vocab, llama_vocab_n_tokens(vocab));
+    if (n_vocab != lookup.n_vocab) {
+        LOG_ERR("%s: inconsistent output vocabulary (%d vs %d)\n", __func__, n_vocab, lookup.n_vocab);
+        return;
     }
 
     std::vector<llama_token> tokens(size_t(n_ctx) * n_chunk);
@@ -1841,7 +1973,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 
         const int first = n_ctx/2;
         const float * all_logits = num_batches > 1 ? logits.data() : llama_get_logits(ctx);
-        process_logits(n_vocab, all_logits + size_t(first)*n_vocab, tokens.data() + start + first, n_ctx - 1 - first,
+        process_logits(lookup, all_logits + size_t(first)*n_vocab, tokens.data() + start + first, n_ctx - 1 - first,
                 workers, log_probs_uint16, kld, kld_ptr, p_diff_ptr);
         p_diff_ptr += n_ctx - 1 - first;
         kld_ptr    += n_ctx - 1 - first;

@@ -12,12 +12,14 @@
 #include "../src/llama-model.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <random>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 #include <iostream>
 #include <fstream>
@@ -95,6 +97,8 @@ int main(int argc, char ** argv) {
     int expand_k = 10;
     bool rerank = true;
     int rerank_k = 59;
+    int draft_target_delay_ms = 0;
+    int target_draft_delay_ms = 0;
 
     std::vector<char *> new_argv;
     new_argv.push_back(argv[0]);
@@ -109,6 +113,14 @@ int main(int argc, char ** argv) {
             expand_k = std::stoi(argv[++i]);
         } else if (arg == "--rerank-k" && i + 1 < argc) {
             rerank_k = std::stoi(argv[++i]);
+        } else if (arg == "--handoff-delay-ms" && i + 1 < argc) {
+            const int delay_ms = std::max(0, std::stoi(argv[++i]));
+            draft_target_delay_ms = delay_ms;
+            target_draft_delay_ms = delay_ms;
+        } else if (arg == "--draft-target-delay-ms" && i + 1 < argc) {
+            draft_target_delay_ms = std::max(0, std::stoi(argv[++i]));
+        } else if (arg == "--target-draft-delay-ms" && i + 1 < argc) {
+            target_draft_delay_ms = std::max(0, std::stoi(argv[++i]));
         } else if (arg == "--no-rerank") {
             rerank = false;
         } else if (arg == "--rerank") {
@@ -119,6 +131,9 @@ int main(int argc, char ** argv) {
             printf("  --top-k N          Draft tree Top-K (default: 10)\n");
             printf("  --expand-k N       Draft tree Expand-K (default: 10)\n");
             printf("  --rerank-k N       Token-level Reranking K (default: 59)\n");
+            printf("  --handoff-delay-ms N      Sleep N ms on both draft<->target handoffs (default: 0)\n");
+            printf("  --draft-target-delay-ms N Sleep N ms after GPU draft before NPU verify (default: 0)\n");
+            printf("  --target-draft-delay-ms N Sleep N ms after NPU verify before next GPU draft (default: 0)\n");
             printf("  --no-rerank        Disable token-level reranking\n\n");
             new_argv.push_back(argv[i]); // pass to base parser
         } else {
@@ -207,6 +222,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
     LOG_INF("[QNN] Target model runner initialized successfully\n");
+    if (draft_target_delay_ms > 0 || target_draft_delay_ms > 0) {
+        LOG_INF("[DIAG] Inter-device handoff delay enabled: draft->target=%d ms, target->draft=%d ms\n",
+                draft_target_delay_ms, target_draft_delay_ms);
+    }
 
     // load the draft model
     params.devices = params.speculative.devices;
@@ -427,6 +446,8 @@ int main(int argc, char ** argv) {
     int64_t total_target_kv_cache_us = 0;
     int64_t total_verify_logic_us = 0;
     int64_t total_fallback_sampling_us = 0;
+    int64_t total_draft_target_delay_us = 0;
+    int64_t total_target_draft_delay_us = 0;
     int num_steps = 0;
 
     while (true) {
@@ -653,6 +674,12 @@ int main(int argc, char ** argv) {
 
         int verification_latency = (verification_end - verification_start) / 1000; //ms 단위로 변환 -ym-
         verification_latencies.push_back(verification_latency);
+
+        if (target_draft_delay_ms > 0) {
+            const auto delay_start = ggml_time_us();
+            std::this_thread::sleep_for(std::chrono::milliseconds(target_draft_delay_ms));
+            total_target_draft_delay_us += (ggml_time_us() - delay_start);
+        }
 
         for (auto& row : scores) {
             std::fill(row.begin(), row.end(), 0.0f);
@@ -1163,6 +1190,12 @@ int main(int argc, char ** argv) {
 
         total_draft_tokens += batch_tgt.n_tokens - 1;
 
+        if (draft_target_delay_ms > 0) {
+            const auto delay_start = ggml_time_us();
+            std::this_thread::sleep_for(std::chrono::milliseconds(draft_target_delay_ms));
+            total_draft_target_delay_us += (ggml_time_us() - delay_start);
+        }
+
         verification_start = ggml_time_us(); //verification 시작 시간 기록 -ym-
 
         // evaluate the target model on the drafted tokens using QNN
@@ -1261,6 +1294,9 @@ int main(int argc, char ** argv) {
         LOG_INF("  - Target KV Cache Management  : %8.3f ms\n", total_target_kv_cache_us / 1000.0f);
         LOG_INF("  - Tree Verification Logic     : %8.3f ms\n", total_verify_logic_us / 1000.0f);
         LOG_INF("  - Fallback Sampling           : %8.3f ms\n", total_fallback_sampling_us / 1000.0f);
+        LOG_INF("[3] Injected Handoff Delay\n");
+        LOG_INF("  - Draft -> Target Delay       : %8.3f ms\n", total_draft_target_delay_us / 1000.0f);
+        LOG_INF("  - Target -> Draft Delay       : %8.3f ms\n", total_target_draft_delay_us / 1000.0f);
         LOG_INF("-----------------------------------------------------\n");
         if (num_steps > 0) {
             auto total_expansion_split_us = total_split_kv_copy_us + total_split_history_update_us + total_split_draft_state_alloc_us;
@@ -1280,6 +1316,8 @@ int main(int argc, char ** argv) {
             LOG_INF("Avg Target KV Cache/Step        : %8.3f ms\n", (total_target_kv_cache_us / 1000.0f) / num_steps);
             LOG_INF("Avg Tree Verify Logic/Step      : %8.3f ms\n", (total_verify_logic_us / 1000.0f) / num_steps);
             LOG_INF("Avg Fallback Sampling/Step      : %8.3f ms\n", (total_fallback_sampling_us / 1000.0f) / num_steps);
+            LOG_INF("Avg Draft -> Target Delay/Step  : %8.3f ms\n", (total_draft_target_delay_us / 1000.0f) / num_steps);
+            LOG_INF("Avg Target -> Draft Delay/Step  : %8.3f ms\n", (total_target_draft_delay_us / 1000.0f) / num_steps);
         }
         LOG_INF("=====================================================\n");
         
@@ -1304,6 +1342,8 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  Avg verification      : %9.3f ms\n", avg_verify_lat);
         fprintf(stderr, "  Avg T_d (1-tok dft)   : %9.3f ms\n", avg_td);
         fprintf(stderr, "  Avg (draft+verify)    : %9.3f ms\n", avg_step_ms);
+        fprintf(stderr, "  Gap draft->target     : %9.3f ms total\n", total_draft_target_delay_us / 1000.0f);
+        fprintf(stderr, "  Gap target->draft     : %9.3f ms total\n", total_target_draft_delay_us / 1000.0f);
         fprintf(stderr, "------------------------------------------------------------\n");
     }
 
