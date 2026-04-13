@@ -228,7 +228,9 @@ int main(int argc, char ** argv) {
     model_dft = llama_init_dft.model.get();
     ctx_dft   = llama_init_dft.context.get();
 
+    const auto & tgt_vocab_map = model_tgt->vocab_map;
     const auto & dft_vocab_map = model_dft->vocab_map;
+    const bool target_has_vocab_trim = !tgt_vocab_map.empty();
     const bool has_vocab_trim = !dft_vocab_map.empty();
 
     // ================================================================================================
@@ -238,6 +240,10 @@ int main(int argc, char ** argv) {
         LOG_INF("[EAGLE] Vocab trimming active: %zu entries in vocab_map (output_vocab_size=%u)\n",
                 dft_vocab_map.size(), model_dft->hparams.n_vocab_output);
         LOG_INF("[EAGLE] LM head sharing disabled because draft vocab is trimmed\n");
+    } else if (target_has_vocab_trim) {
+        LOG_INF("[EAGLE] Target vocab trimming active: %zu entries in vocab_map (output_vocab_size=%u)\n",
+                tgt_vocab_map.size(), model_tgt->hparams.n_vocab_output);
+        LOG_INF("[EAGLE] LM head sharing disabled because target output vocab is trimmed but draft output vocab is full\n");
     } else {
         struct ggml_tensor * tgt_output = llama_get_model(ctx_tgt)->output;
         struct ggml_tensor * dft_output = llama_get_model(ctx_dft)->output;
@@ -249,44 +255,52 @@ int main(int argc, char ** argv) {
             LOG_ERR("Target model output tensor is NULL - cannot perform LM Head Sharing\n");
             return 1;
         }
-        
-        printf("🎯 LM HEAD SHARING: Assigning target output tensor to draft model\n");
-        const_cast<struct llama_model *>(llama_get_model(ctx_dft))->output = tgt_output;
-        auto * mem_dft = llama_get_memory(ctx_dft);
-        llama_memory_clear(mem_dft, false);
-        
-        struct ggml_tensor * dft_output_after = llama_get_model(ctx_dft)->output;
-        printf("✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: %p\n", (void*)dft_output_after);
-        
-        if (dft_output_after == tgt_output) {
-            printf("✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!\n");
-            
-            if (llama_get_model(ctx_tgt)->output_norm && !llama_get_model(ctx_dft)->output_norm) {
-                const_cast<struct llama_model *>(llama_get_model(ctx_dft))->output_norm = llama_get_model(ctx_tgt)->output_norm;
-                printf("📋 LM HEAD SHARING: Also shared output_norm tensor\n");
-            }
-        } else {
-            LOG_ERR("LM HEAD SHARING FAILED: Pointers don't match after assignment\n");
-
+        if (!dft_output) {
+            LOG_ERR("Draft model output tensor is NULL - cannot perform LM Head Sharing\n");
             return 1;
         }
-        
-        printf("\n🔍 FINAL VERIFICATION:\n");
-        printf("🔍 Target model output: %p\n", (void*)llama_get_model(ctx_tgt)->output);
-        printf("🔍 Draft model output:  %p\n", (void*)llama_get_model(ctx_dft)->output);
-        
-        if (llama_get_model(ctx_tgt)->output == llama_get_model(ctx_dft)->output) {
-            printf("✅ FINAL: Output tensors are properly shared!\n");
-            
-            printf("🔍 SHARED TENSOR INFO:\n");
-            printf("  - Dimensions: [%ld, %ld]\n", tgt_output->ne[0], tgt_output->ne[1]);
-            printf("  - Type: %d\n", tgt_output->type);
-            printf("  - Data pointer: %p\n", tgt_output->data);
-            printf("  - Buffer: %p\n", (void*)tgt_output->buffer);
+        if (tgt_output->ne[0] != dft_output->ne[0] || tgt_output->ne[1] != dft_output->ne[1]) {
+            LOG_INF("[EAGLE] LM head sharing disabled because output tensor shapes differ: target=[%ld,%ld], draft=[%ld,%ld]\n",
+                    tgt_output->ne[0], tgt_output->ne[1], dft_output->ne[0], dft_output->ne[1]);
         } else {
-            LOG_ERR("FINAL: Output tensors are NOT shared!\n");
+            printf("🎯 LM HEAD SHARING: Assigning target output tensor to draft model\n");
+            const_cast<struct llama_model *>(llama_get_model(ctx_dft))->output = tgt_output;
+            auto * mem_dft = llama_get_memory(ctx_dft);
+            llama_memory_clear(mem_dft, false);
+        
+            struct ggml_tensor * dft_output_after = llama_get_model(ctx_dft)->output;
+            printf("✅ LM HEAD SHARING: Draft model output tensor AFTER sharing: %p\n", (void*)dft_output_after);
+        
+            if (dft_output_after == tgt_output) {
+                printf("✅ LM HEAD SHARING: SUCCESS - Draft model now shares target output tensor!\n");
+            
+                if (llama_get_model(ctx_tgt)->output_norm && !llama_get_model(ctx_dft)->output_norm) {
+                    const_cast<struct llama_model *>(llama_get_model(ctx_dft))->output_norm = llama_get_model(ctx_tgt)->output_norm;
+                    printf("📋 LM HEAD SHARING: Also shared output_norm tensor\n");
+                }
+            } else {
+                LOG_ERR("LM HEAD SHARING FAILED: Pointers don't match after assignment\n");
 
-            return 1;
+                return 1;
+            }
+        
+            printf("\n🔍 FINAL VERIFICATION:\n");
+            printf("🔍 Target model output: %p\n", (void*)llama_get_model(ctx_tgt)->output);
+            printf("🔍 Draft model output:  %p\n", (void*)llama_get_model(ctx_dft)->output);
+        
+            if (llama_get_model(ctx_tgt)->output == llama_get_model(ctx_dft)->output) {
+                printf("✅ FINAL: Output tensors are properly shared!\n");
+            
+                printf("🔍 SHARED TENSOR INFO:\n");
+                printf("  - Dimensions: [%ld, %ld]\n", tgt_output->ne[0], tgt_output->ne[1]);
+                printf("  - Type: %d\n", tgt_output->type);
+                printf("  - Data pointer: %p\n", tgt_output->data);
+                printf("  - Buffer: %p\n", (void*)tgt_output->buffer);
+            } else {
+                LOG_ERR("FINAL: Output tensors are NOT shared!\n");
+
+                return 1;
+            }
         }
     }
     // ================================================================================================

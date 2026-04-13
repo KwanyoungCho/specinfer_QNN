@@ -42,7 +42,7 @@
 #define SPEC_BENCH_RESULTS_SUFFIX "_results"
 
 #define n_depth 5
-#define expand_k 2
+#define expand_k 4
 #define rerank_k 10
 
 // ============================================================
@@ -104,6 +104,8 @@ struct bench_result {
     double decode_lat;
     double draft_len;
     double avg_accept_len;
+    double avg_accepted_prefix_len;
+    double avg_step_output_len;
     double accept_ratio;
     double avg_draft_lat;
     double avg_verify_lat;
@@ -121,6 +123,62 @@ struct token_freq_stats {
     std::unordered_map<llama_token, int64_t> draft_freq;
     std::unordered_map<llama_token, int64_t> draft_accepted;
     std::unordered_map<llama_token, int64_t> bonus_freq;
+};
+
+using length_hist = std::map<int, int64_t>;
+using token_total_map = std::map<llama_token, int64_t>;
+using token_pos_count_map = std::map<llama_token, std::map<int, int64_t>>;
+
+struct token_position_stats {
+    token_pos_count_map verified_pos_count;
+    token_pos_count_map accepted_pos_count;
+    token_pos_count_map bonus_pos_count;
+    token_pos_count_map proposed_pos_count;
+
+    length_hist accepted_prefix_hist;
+    length_hist step_output_hist;
+
+    token_total_map verified_total;
+    token_total_map accepted_total;
+    token_total_map bonus_total;
+    token_total_map proposed_total;
+};
+
+struct shortlist_coverage_row {
+    int64_t verified_total = 0;
+    int64_t verified_hit   = 0;
+    int64_t verified_miss  = 0;
+    int64_t accepted_total = 0;
+    int64_t accepted_hit   = 0;
+    int64_t accepted_miss  = 0;
+    int64_t bonus_total    = 0;
+    int64_t bonus_hit      = 0;
+    int64_t bonus_miss     = 0;
+};
+
+struct shortlist_coverage_stats {
+    std::map<int, shortlist_coverage_row> by_position;
+};
+
+struct analysis_stats {
+    token_position_stats overall;
+    std::map<std::string, token_position_stats> by_category;
+
+    shortlist_coverage_stats coverage_overall;
+    std::map<std::string, shortlist_coverage_stats> coverage_by_category;
+
+    token_total_map target_generated_freq;
+    std::map<std::string, token_total_map> target_generated_freq_by_category;
+};
+
+struct shortlist_config {
+    std::string global_path;
+    std::string category_dir;
+    bool enabled = false;
+    bool save_trace = false;
+
+    std::set<llama_token> global_tokens;
+    std::map<std::string, std::set<llama_token>> category_tokens;
 };
 
 // ============================================================
@@ -149,6 +207,8 @@ struct bench_summary {
     double avg_decode_lat = 0.0;
     double avg_draft_len = 0.0;
     double avg_accept_len = 0.0;
+    double avg_accepted_prefix_len = 0.0;
+    double avg_step_output_len = 0.0;
     double avg_accept_ratio = 0.0;
     double avg_draft_lat = 0.0;
     double avg_verify_lat = 0.0;
@@ -442,6 +502,12 @@ static std::string csv_escape(const std::string & text) {
     for (char c : text) {
         if (c == '"') {
             escaped += "\"\"";
+        } else if (c == '\n') {
+            escaped += "\\n";
+        } else if (c == '\r') {
+            escaped += "\\r";
+        } else if (c == '\t') {
+            escaped += "\\t";
         } else {
             escaped += c;
         }
@@ -461,6 +527,467 @@ static std::string json_escape(const std::string & text) {
         else escaped += c;
     }
     return escaped;
+}
+
+static std::string normalize_category_key(const std::string & category) {
+    return category.empty() ? "UNCATEGORIZED" : category;
+}
+
+static std::string normalize_shortlist_category_name(const std::filesystem::path & path) {
+    std::string stem = path.stem().string();
+    static const std::string suffix = "_topK";
+    if (stem.size() > suffix.size() &&
+        stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        stem.resize(stem.size() - suffix.size());
+    }
+    return normalize_category_key(stem);
+}
+
+static int64_t lookup_total_count(const token_total_map & counts, llama_token token_id) {
+    const auto it = counts.find(token_id);
+    return it == counts.end() ? 0 : it->second;
+}
+
+static int64_t lookup_pos_count(
+    const token_pos_count_map & counts,
+    llama_token token_id,
+    int position) {
+    const auto tok_it = counts.find(token_id);
+    if (tok_it == counts.end()) {
+        return 0;
+    }
+    const auto pos_it = tok_it->second.find(position);
+    return pos_it == tok_it->second.end() ? 0 : pos_it->second;
+}
+
+static void add_total_count(token_total_map & counts, llama_token token_id, int64_t delta = 1) {
+    counts[token_id] += delta;
+}
+
+static void add_pos_count(
+    token_pos_count_map & counts,
+    llama_token token_id,
+    int position,
+    int64_t delta = 1) {
+    counts[token_id][position] += delta;
+}
+
+static void add_hist_count(length_hist & hist, int value, int64_t delta = 1) {
+    hist[value] += delta;
+}
+
+static token_position_stats & get_category_stats(analysis_stats & stats, const std::string & category) {
+    return stats.by_category[normalize_category_key(category)];
+}
+
+static shortlist_coverage_stats & get_category_coverage(
+    analysis_stats & stats,
+    const std::string & category) {
+    return stats.coverage_by_category[normalize_category_key(category)];
+}
+
+static token_total_map & get_category_target_generated_freq(
+    analysis_stats & stats,
+    const std::string & category) {
+    return stats.target_generated_freq_by_category[normalize_category_key(category)];
+}
+
+static void record_verified_step_stats(
+    token_position_stats & stats,
+    const std::vector<llama_token> & verified_tokens,
+    int accepted_prefix_len) {
+    const int step_output_len = (int) verified_tokens.size();
+    add_hist_count(stats.accepted_prefix_hist, accepted_prefix_len);
+    add_hist_count(stats.step_output_hist, step_output_len);
+
+    for (int i = 0; i < step_output_len; ++i) {
+        const int position = i + 1;
+        const llama_token token_id = verified_tokens[i];
+
+        add_pos_count(stats.verified_pos_count, token_id, position);
+        add_total_count(stats.verified_total, token_id);
+
+        if (i < accepted_prefix_len) {
+            add_pos_count(stats.accepted_pos_count, token_id, position);
+            add_total_count(stats.accepted_total, token_id);
+        } else {
+            add_pos_count(stats.bonus_pos_count, token_id, position);
+            add_total_count(stats.bonus_total, token_id);
+        }
+    }
+}
+
+static void record_verified_step_stats(
+    analysis_stats & stats,
+    const std::string & category,
+    const std::vector<llama_token> & verified_tokens,
+    int accepted_prefix_len) {
+    record_verified_step_stats(stats.overall, verified_tokens, accepted_prefix_len);
+    record_verified_step_stats(get_category_stats(stats, category), verified_tokens, accepted_prefix_len);
+}
+
+static void record_proposed_token_stats(
+    token_position_stats & stats,
+    llama_token token_id,
+    int position) {
+    add_pos_count(stats.proposed_pos_count, token_id, position);
+    add_total_count(stats.proposed_total, token_id);
+}
+
+static void record_proposed_token_stats(
+    analysis_stats & stats,
+    const std::string & category,
+    llama_token token_id,
+    int position) {
+    record_proposed_token_stats(stats.overall, token_id, position);
+    record_proposed_token_stats(get_category_stats(stats, category), token_id, position);
+}
+
+static void record_target_generated_token(
+    analysis_stats & stats,
+    const std::string & category,
+    llama_token token_id) {
+    add_total_count(stats.target_generated_freq, token_id);
+    add_total_count(get_category_target_generated_freq(stats, category), token_id);
+}
+
+static bool load_shortlist_tokens_from_file(
+    const std::string & path,
+    std::set<llama_token> & tokens) {
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(ifs, line)) {
+        const size_t comment = line.find('#');
+        if (comment != std::string::npos) {
+            line.resize(comment);
+        }
+        for (char & c : line) {
+            if (c == ',' || c == ';' || c == '\t') {
+                c = ' ';
+            }
+        }
+
+        std::stringstream ss(line);
+        long long token_id = 0;
+        while (ss >> token_id) {
+            tokens.insert((llama_token) token_id);
+        }
+    }
+
+    return true;
+}
+
+static bool load_shortlist_config(shortlist_config & cfg) {
+    cfg.enabled = false;
+    cfg.global_tokens.clear();
+    cfg.category_tokens.clear();
+
+    if (!cfg.global_path.empty()) {
+        if (!load_shortlist_tokens_from_file(cfg.global_path, cfg.global_tokens)) {
+            fprintf(stderr, "Error: failed to load analysis shortlist: %s\n", cfg.global_path.c_str());
+            return false;
+        }
+        cfg.enabled = true;
+        fprintf(stderr, "[Spec-Bench] Loaded global analysis shortlist: %zu tokens from %s\n",
+                cfg.global_tokens.size(), cfg.global_path.c_str());
+    }
+
+    if (!cfg.category_dir.empty()) {
+        std::error_code ec;
+        if (!std::filesystem::exists(cfg.category_dir, ec)) {
+            fprintf(stderr, "Error: analysis shortlist directory does not exist: %s\n", cfg.category_dir.c_str());
+            return false;
+        }
+
+        for (const auto & entry : std::filesystem::directory_iterator(cfg.category_dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+
+            std::set<llama_token> tokens;
+            const std::string path = entry.path().string();
+            if (!load_shortlist_tokens_from_file(path, tokens)) {
+                fprintf(stderr, "Warning: failed to load category shortlist: %s\n", path.c_str());
+                continue;
+            }
+            if (tokens.empty()) {
+                continue;
+            }
+
+            const std::string category = normalize_shortlist_category_name(entry.path());
+            cfg.category_tokens[category] = std::move(tokens);
+            cfg.enabled = true;
+        }
+
+        fprintf(stderr, "[Spec-Bench] Loaded %zu category shortlists from %s\n",
+                cfg.category_tokens.size(), cfg.category_dir.c_str());
+    }
+
+    return true;
+}
+
+static const std::set<llama_token> * resolve_shortlist_tokens(
+    const shortlist_config & cfg,
+    const std::string & category) {
+    const std::string key = normalize_category_key(category);
+    const auto cat_it = cfg.category_tokens.find(key);
+    if (cat_it != cfg.category_tokens.end()) {
+        return &cat_it->second;
+    }
+    if (!cfg.global_tokens.empty()) {
+        return &cfg.global_tokens;
+    }
+    return nullptr;
+}
+
+static void update_hit_miss(
+    int64_t & total,
+    int64_t & hit,
+    int64_t & miss,
+    bool covered) {
+    ++total;
+    if (covered) {
+        ++hit;
+    } else {
+        ++miss;
+    }
+}
+
+static void record_coverage_step(
+    shortlist_coverage_stats & stats,
+    const std::vector<llama_token> & verified_tokens,
+    int accepted_prefix_len,
+    const std::set<llama_token> & shortlist) {
+    for (int i = 0; i < (int) verified_tokens.size(); ++i) {
+        const int position = i + 1;
+        const bool covered = shortlist.find(verified_tokens[i]) != shortlist.end();
+        auto & row = stats.by_position[position];
+
+        update_hit_miss(row.verified_total, row.verified_hit, row.verified_miss, covered);
+        if (i < accepted_prefix_len) {
+            update_hit_miss(row.accepted_total, row.accepted_hit, row.accepted_miss, covered);
+        } else {
+            update_hit_miss(row.bonus_total, row.bonus_hit, row.bonus_miss, covered);
+        }
+    }
+}
+
+static void record_coverage_step(
+    analysis_stats & stats,
+    const std::string & category,
+    const std::vector<llama_token> & verified_tokens,
+    int accepted_prefix_len,
+    const shortlist_config & cfg) {
+    const auto * shortlist = resolve_shortlist_tokens(cfg, category);
+    if (!shortlist) {
+        return;
+    }
+
+    record_coverage_step(stats.coverage_overall, verified_tokens, accepted_prefix_len, *shortlist);
+    record_coverage_step(get_category_coverage(stats, category), verified_tokens, accepted_prefix_len, *shortlist);
+}
+
+static std::vector<bool> compute_shortlist_hit_flags(
+    const std::vector<llama_token> & verified_tokens,
+    const shortlist_config & cfg,
+    const std::string & category) {
+    std::vector<bool> hits(verified_tokens.size(), false);
+    const auto * shortlist = resolve_shortlist_tokens(cfg, category);
+    if (!shortlist) {
+        return hits;
+    }
+
+    for (size_t i = 0; i < verified_tokens.size(); ++i) {
+        hits[i] = shortlist->find(verified_tokens[i]) != shortlist->end();
+    }
+    return hits;
+}
+
+static void write_accept_hist_rows(
+    std::ofstream & csv,
+    const std::string & category,
+    const char * kind,
+    const length_hist & hist) {
+    for (const auto & [length, count] : hist) {
+        csv << "\"" << csv_escape(kind) << "\","
+            << length << ","
+            << count << ","
+            << "\"" << csv_escape(category) << "\"\n";
+    }
+}
+
+static void write_accept_hist_csv(
+    const std::string & results_dir,
+    const analysis_stats & stats) {
+    const std::string path = (std::filesystem::path(results_dir) / "accept_hist.csv").string();
+    std::ofstream csv(path);
+    if (!csv.is_open()) {
+        fprintf(stderr, "Warning: failed to write accept histogram CSV: %s\n", path.c_str());
+        return;
+    }
+
+    csv << "kind,length,count,category\n";
+    write_accept_hist_rows(csv, "OVERALL", "accepted_prefix", stats.overall.accepted_prefix_hist);
+    write_accept_hist_rows(csv, "OVERALL", "step_output",     stats.overall.step_output_hist);
+    for (const auto & [category, cat_stats] : stats.by_category) {
+        write_accept_hist_rows(csv, category, "accepted_prefix", cat_stats.accepted_prefix_hist);
+        write_accept_hist_rows(csv, category, "step_output",     cat_stats.step_output_hist);
+    }
+
+    fprintf(stderr, "Accept hist saved to: %s\n", path.c_str());
+}
+
+static void write_token_pos_rows(
+    std::ofstream & csv,
+    llama_context * ctx_tgt,
+    const std::string & category,
+    const token_position_stats & stats) {
+    std::set<llama_token> token_ids;
+    for (const auto & [token_id, _] : stats.verified_pos_count) token_ids.insert(token_id);
+    for (const auto & [token_id, _] : stats.accepted_pos_count) token_ids.insert(token_id);
+    for (const auto & [token_id, _] : stats.bonus_pos_count)    token_ids.insert(token_id);
+    for (const auto & [token_id, _] : stats.proposed_pos_count) token_ids.insert(token_id);
+
+    for (const auto & token_id : token_ids) {
+        std::set<int> positions;
+        const auto gather_positions = [&](const token_pos_count_map & map) {
+            const auto tok_it = map.find(token_id);
+            if (tok_it == map.end()) {
+                return;
+            }
+            for (const auto & [position, _] : tok_it->second) {
+                positions.insert(position);
+            }
+        };
+
+        gather_positions(stats.verified_pos_count);
+        gather_positions(stats.accepted_pos_count);
+        gather_positions(stats.bonus_pos_count);
+        gather_positions(stats.proposed_pos_count);
+
+        const std::string token_text = common_token_to_piece(ctx_tgt, token_id);
+        for (const int position : positions) {
+            csv << "\"" << csv_escape(category) << "\","
+                << token_id << ","
+                << "\"" << csv_escape(token_text) << "\","
+                << position << ","
+                << lookup_pos_count(stats.verified_pos_count, token_id, position) << ","
+                << lookup_pos_count(stats.accepted_pos_count, token_id, position) << ","
+                << lookup_pos_count(stats.bonus_pos_count, token_id, position) << ","
+                << lookup_pos_count(stats.proposed_pos_count, token_id, position) << "\n";
+        }
+    }
+}
+
+static void write_token_pos_stats_csv(
+    const std::string & results_dir,
+    llama_context * ctx_tgt,
+    const analysis_stats & stats) {
+    const std::string path = (std::filesystem::path(results_dir) / "token_pos_stats.csv").string();
+    std::ofstream csv(path);
+    if (!csv.is_open()) {
+        fprintf(stderr, "Warning: failed to write token position stats CSV: %s\n", path.c_str());
+        return;
+    }
+
+    csv << "category,token_id,token_text,position,verified_count,accepted_count,bonus_count,proposed_count\n";
+    write_token_pos_rows(csv, ctx_tgt, "OVERALL", stats.overall);
+    for (const auto & [category, cat_stats] : stats.by_category) {
+        write_token_pos_rows(csv, ctx_tgt, category, cat_stats);
+    }
+
+    fprintf(stderr, "Token position stats saved to: %s\n", path.c_str());
+}
+
+static void write_shortlist_coverage_rows(
+    std::ofstream & csv,
+    const std::string & category,
+    const shortlist_coverage_stats & stats) {
+    for (const auto & [position, row] : stats.by_position) {
+        const double miss_rate_verified = row.verified_total > 0 ? (double) row.verified_miss / row.verified_total : 0.0;
+        const double miss_rate_accepted = row.accepted_total > 0 ? (double) row.accepted_miss / row.accepted_total : 0.0;
+        const double miss_rate_bonus    = row.bonus_total    > 0 ? (double) row.bonus_miss    / row.bonus_total    : 0.0;
+
+        csv << "\"" << csv_escape(category) << "\","
+            << position << ","
+            << row.verified_total << ","
+            << row.verified_hit << ","
+            << row.verified_miss << ","
+            << row.accepted_total << ","
+            << row.accepted_hit << ","
+            << row.accepted_miss << ","
+            << row.bonus_total << ","
+            << row.bonus_hit << ","
+            << row.bonus_miss << ","
+            << miss_rate_verified << ","
+            << miss_rate_accepted << ","
+            << miss_rate_bonus << "\n";
+    }
+}
+
+static void write_shortlist_coverage_csv(
+    const std::string & results_dir,
+    const analysis_stats & stats,
+    const shortlist_config & cfg) {
+    if (!cfg.enabled) {
+        return;
+    }
+
+    const std::string path = (std::filesystem::path(results_dir) / "shortlist_coverage.csv").string();
+    std::ofstream csv(path);
+    if (!csv.is_open()) {
+        fprintf(stderr, "Warning: failed to write shortlist coverage CSV: %s\n", path.c_str());
+        return;
+    }
+
+    csv << "category,position,verified_total,verified_hit,verified_miss,"
+        << "accepted_total,accepted_hit,accepted_miss,"
+        << "bonus_total,bonus_hit,bonus_miss,"
+        << "miss_rate_verified,miss_rate_accepted,miss_rate_bonus\n";
+
+    write_shortlist_coverage_rows(csv, "OVERALL", stats.coverage_overall);
+    for (const auto & [category, cat_stats] : stats.coverage_by_category) {
+        write_shortlist_coverage_rows(csv, category, cat_stats);
+    }
+
+    fprintf(stderr, "Shortlist coverage saved to: %s\n", path.c_str());
+}
+
+static void write_target_generated_freq_rows(
+    std::ofstream & csv,
+    llama_context * ctx_tgt,
+    const std::string & category,
+    const token_total_map & counts) {
+    for (const auto & [token_id, count] : counts) {
+        csv << "\"" << csv_escape(category) << "\","
+            << token_id << ","
+            << "\"" << csv_escape(common_token_to_piece(ctx_tgt, token_id)) << "\","
+            << count << "\n";
+    }
+}
+
+static void write_target_generated_freq_csv(
+    const std::string & results_dir,
+    llama_context * ctx_tgt,
+    const analysis_stats & stats) {
+    const std::string path = (std::filesystem::path(results_dir) / "target_generated_freq.csv").string();
+    std::ofstream csv(path);
+    if (!csv.is_open()) {
+        fprintf(stderr, "Warning: failed to write target-generated frequency CSV: %s\n", path.c_str());
+        return;
+    }
+
+    csv << "category,token_id,token_text,count\n";
+    write_target_generated_freq_rows(csv, ctx_tgt, "OVERALL", stats.target_generated_freq);
+    for (const auto & [category, counts] : stats.target_generated_freq_by_category) {
+        write_target_generated_freq_rows(csv, ctx_tgt, category, counts);
+    }
+
+    fprintf(stderr, "Target-generated frequency saved to: %s\n", path.c_str());
 }
 
 static bench_summary summarize_results(
@@ -492,6 +1019,8 @@ static bench_summary summarize_results(
         summary.avg_decode_lat += result->decode_lat;
         summary.avg_draft_len += result->draft_len;
         summary.avg_accept_len += result->avg_accept_len;
+        summary.avg_accepted_prefix_len += result->avg_accepted_prefix_len;
+        summary.avg_step_output_len += result->avg_step_output_len;
         summary.avg_accept_ratio += result->accept_ratio;
         summary.avg_draft_lat += result->avg_draft_lat;
         summary.avg_verify_lat += result->avg_verify_lat;
@@ -509,6 +1038,8 @@ static bench_summary summarize_results(
         summary.avg_decode_lat /= denom;
         summary.avg_draft_len /= denom;
         summary.avg_accept_len /= denom;
+        summary.avg_accepted_prefix_len /= denom;
+        summary.avg_step_output_len /= denom;
         summary.avg_accept_ratio /= denom;
         summary.avg_draft_lat /= denom;
         summary.avg_verify_lat /= denom;
@@ -550,7 +1081,8 @@ static void write_summary_csv(
     summary_csv
         << "group,total_prompts,successful_prompts,skipped_prompts,total_input_tokens,total_decode_tokens,"
         << "total_drafted_tokens,total_accepted_tokens,avg_prefill_ms,avg_decode_ms,avg_prefill_tps,"
-        << "avg_decode_tps,avg_decode_lat_ms,avg_draft_len,avg_accept_len,avg_accept_ratio,"
+        << "avg_decode_tps,avg_decode_lat_ms,avg_draft_len,avg_accept_len,avg_accepted_prefix_len,"
+        << "avg_step_output_len,avg_accept_ratio,"
         << "avg_draft_ms,avg_verify_ms,avg_td_ms\n";
 
     for (const auto & summary : summaries) {
@@ -570,6 +1102,8 @@ static void write_summary_csv(
             << summary.avg_decode_lat << ","
             << summary.avg_draft_len << ","
             << summary.avg_accept_len << ","
+            << summary.avg_accepted_prefix_len << ","
+            << summary.avg_step_output_len << ","
             << summary.avg_accept_ratio << ","
             << summary.avg_draft_lat << ","
             << summary.avg_verify_lat << ","
@@ -676,12 +1210,146 @@ static void write_prompt_result_file(
     ofs << "  Decode latency    :              | " << res.decode_lat << " ms/tok\n";
     ofs << "------------------------------------------------------------\n";
     ofs << "  Draft length      : " << res.draft_len << "\n";
-    ofs << "  Avg accept length : " << res.avg_accept_len << "\n";
+    ofs << "  Avg accept length (legacy step_output) : " << res.avg_accept_len << "\n";
+    ofs << "  Avg accepted prefix len               : " << res.avg_accepted_prefix_len << "\n";
+    ofs << "  Avg step output len                   : " << res.avg_step_output_len << "\n";
     ofs << "  Accept ratio      : " << res.accept_ratio << "%\n";
     ofs << "------------------------------------------------------------\n";
     ofs << "  Avg draft phase   : " << res.avg_draft_lat << " ms\n";
     ofs << "  Avg verification  : " << res.avg_verify_lat << " ms\n";
     ofs << "  Avg T_d (1-tok dft) : " << res.avg_td << " ms\n";
+}
+
+static void write_json_token_array(std::ostream & os, const std::vector<llama_token> & tokens) {
+    os << "[";
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (i > 0) {
+            os << ",";
+        }
+        os << tokens[i];
+    }
+    os << "]";
+}
+
+static void write_json_bool_array(std::ostream & os, const std::vector<bool> & values) {
+    os << "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
+            os << ",";
+        }
+        os << (values[i] ? "true" : "false");
+    }
+    os << "]";
+}
+
+static int run_target_generate_calibration(
+    const std::vector<bench_prompt> & prompts,
+    size_t idx_start,
+    size_t idx_end,
+    const std::string & chat_template,
+    const std::string & results_dir,
+    const common_params & params,
+    llama_model * model_tgt,
+    llama_context * ctx_tgt,
+    analysis_stats & analysis) {
+    const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
+    auto * mem_tgt = llama_get_memory(ctx_tgt);
+    const int max_context_size = llama_n_ctx(ctx_tgt);
+    const int max_tokens_list_size = max_context_size - 4;
+    const int n_batch_tgt = (int) llama_n_batch(ctx_tgt);
+
+    fprintf(stderr, "[Spec-Bench] Calibration mode: target-generate\n");
+
+    for (size_t prompt_idx = idx_start; prompt_idx < idx_end; ++prompt_idx) {
+        const auto & bp = prompts[prompt_idx];
+        const std::string prompt_text = apply_template(chat_template, bp.text);
+
+        fprintf(stderr, "[Calibration %zu/%zu] id=%d category=%s\n",
+                prompt_idx + 1, prompts.size(), bp.question_id, bp.category.c_str());
+
+        llama_memory_clear(mem_tgt, true);
+
+        std::vector<llama_token> inp = common_tokenize(ctx_tgt, prompt_text, true, true);
+        if ((int) inp.size() > max_tokens_list_size) {
+            fprintf(stderr, "  SKIP: prompt too long (%d tokens, max %d)\n",
+                    (int) inp.size(), max_tokens_list_size);
+            continue;
+        }
+
+        struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
+        llama_batch batch = llama_batch_init(n_batch_tgt, 0, 1);
+
+        bool ok = true;
+        int n_past = 0;
+        for (int chunk_start = 0; chunk_start < (int) inp.size(); chunk_start += n_batch_tgt) {
+            const int chunk_size = std::min(n_batch_tgt, (int) inp.size() - chunk_start);
+            common_batch_clear(batch);
+            for (int j = 0; j < chunk_size; ++j) {
+                const bool logits = (chunk_start + j == (int) inp.size() - 1);
+                common_batch_add(batch, inp[chunk_start + j], n_past++, { 0 }, logits);
+            }
+            if (llama_decode(ctx_tgt, batch) != 0) {
+                fprintf(stderr, "  SKIP: target calibration prefill failed\n");
+                ok = false;
+                break;
+            }
+        }
+
+        if (ok) {
+            ctx_tgt->synchronize();
+        }
+
+        int n_generated = 0;
+        bool has_eos = false;
+        std::string output_text;
+
+        while (ok && !has_eos && (params.n_predict < 0 || n_generated < params.n_predict)) {
+            llama_token token_id = common_sampler_sample(smpl, ctx_tgt, -1);
+            common_sampler_accept(smpl, token_id, true);
+
+            if (llama_vocab_is_eog(vocab_tgt, token_id)) {
+                has_eos = true;
+                break;
+            }
+
+            record_target_generated_token(analysis, bp.category, token_id);
+            output_text += common_token_to_piece(ctx_tgt, token_id);
+            ++n_generated;
+
+            if (llama_decode(ctx_tgt, llama_batch_get_one(&token_id, 1)) != 0) {
+                fprintf(stderr, "  SKIP: target calibration decode failed\n");
+                ok = false;
+                break;
+            }
+            ctx_tgt->synchronize();
+        }
+
+        common_sampler_free(smpl);
+        llama_batch_free(batch);
+
+        if (!ok) {
+            continue;
+        }
+
+        const std::string output_path = make_prompt_output_path(results_dir, (int) prompt_idx + 1);
+        std::ofstream ofs(output_path);
+        if (ofs.is_open()) {
+            ofs << "============================================================\n";
+            ofs << "  " << SPEC_BENCH_BACKEND_LABEL << " Calibration Result\n";
+            ofs << "============================================================\n";
+            ofs << "Sample index       : " << ((int) prompt_idx + 1) << "\n";
+            ofs << "Question ID        : " << bp.question_id << "\n";
+            ofs << "Category           : " << bp.category << "\n";
+            ofs << "Generated tokens   : " << n_generated << "\n";
+            ofs << "------------------------------------------------------------\n";
+            ofs << "Prompt:\n" << bp.text << "\n";
+            ofs << "------------------------------------------------------------\n";
+            ofs << "Output:\n" << output_text << "\n";
+        }
+    }
+
+    write_target_generated_freq_csv(results_dir, ctx_tgt, analysis);
+    return 0;
 }
 
 // ============================================================
@@ -695,6 +1363,9 @@ int main(int argc, char ** argv) {
     std::string results_dir;
     std::string chat_template = "llama3";  // default
     std::string dataset_type  = "auto";    // auto, specbench, sharegpt
+    std::string calibration_mode = "none";
+    bool collect_vocab_stats = false;
+    shortlist_config shortlist_cfg;
     int bench_start = 0;
     int bench_count = -1;
     std::vector<char *> filtered_argv;
@@ -713,6 +1384,16 @@ int main(int argc, char ** argv) {
             bench_count = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--results-dir" && i + 1 < argc) {
             results_dir = argv[++i];
+        } else if (std::string(argv[i]) == "--analysis-shortlist" && i + 1 < argc) {
+            shortlist_cfg.global_path = argv[++i];
+        } else if (std::string(argv[i]) == "--analysis-shortlist-dir" && i + 1 < argc) {
+            shortlist_cfg.category_dir = argv[++i];
+        } else if (std::string(argv[i]) == "--save-trace") {
+            shortlist_cfg.save_trace = true;
+        } else if (std::string(argv[i]) == "--collect-vocab-stats") {
+            collect_vocab_stats = true;
+        } else if (std::string(argv[i]) == "--calibration-mode" && i + 1 < argc) {
+            calibration_mode = argv[++i];
         } else {
             filtered_argv.push_back(argv[i]);
         }
@@ -726,6 +1407,11 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  --no-chat-template       Same as --chat-template none\n");
         fprintf(stderr, "  --dataset-type TYPE      Dataset format: auto (default), specbench, sharegpt\n");
         fprintf(stderr, "  --results-dir DIR        Directory for per-prompt outputs and aggregate files\n");
+        fprintf(stderr, "  --analysis-shortlist F   Global shortlist token ids for analysis-only coverage\n");
+        fprintf(stderr, "  --analysis-shortlist-dir D  Category shortlist directory (category filename stem)\n");
+        fprintf(stderr, "  --collect-vocab-stats    Enable raw acceptance/prefix/proposal stat collection\n");
+        fprintf(stderr, "  --save-trace             Save per-step verification trace to step_trace.jsonl\n");
+        fprintf(stderr, "  --calibration-mode MODE  none (default) or target-generate\n");
         return 1;
     }
 
@@ -736,6 +1422,11 @@ int main(int argc, char ** argv) {
 
     if (chat_template != "llama3" && chat_template != "vicuna" && chat_template != "none") {
         fprintf(stderr, "Error: unknown chat template '%s'. Use: llama3, vicuna, none\n", chat_template.c_str());
+        return 1;
+    }
+
+    if (calibration_mode != "none" && calibration_mode != "target-generate") {
+        fprintf(stderr, "Error: unknown calibration mode '%s'. Use: none, target-generate\n", calibration_mode.c_str());
         return 1;
     }
 
@@ -756,7 +1447,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.speculative.model.path.empty()) {
+    if (calibration_mode == "none" && params.speculative.model.path.empty()) {
         fprintf(stderr, "Error: --model-draft is required\n");
         return 1;
     }
@@ -797,6 +1488,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    if (!load_shortlist_config(shortlist_cfg)) {
+        return 1;
+    }
+
     fprintf(stderr, "[Spec-Bench] Loaded %zu prompts from %s (type: %s, template: %s)\n",
             prompts.size(), bench_file.c_str(), dataset_type.c_str(), chat_template.c_str());
     fprintf(stderr, "[Spec-Bench] Per-prompt results will be saved under %s\n", results_dir.c_str());
@@ -829,6 +1524,25 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Error: failed to load target model from '%s'\n", params.model.path.c_str());
         llama_backend_free();
         return 1;
+    }
+
+    analysis_stats analysis;
+    const size_t idx_start = std::max(0, bench_start);
+    const size_t idx_end   = bench_count < 0 ? prompts.size() : std::min(prompts.size(), (size_t) (bench_start + bench_count));
+
+    if (calibration_mode == "target-generate") {
+        const int rc = run_target_generate_calibration(
+            prompts,
+            idx_start,
+            idx_end,
+            chat_template,
+            results_dir,
+            params,
+            model_tgt,
+            ctx_tgt,
+            analysis);
+        llama_backend_free();
+        return rc;
     }
 
     params.devices = params.speculative.devices;
@@ -942,9 +1656,17 @@ int main(int argc, char ** argv) {
     // ====================================================================
     std::vector<bench_result> results;
     token_freq_stats token_stats;
+    std::ofstream step_trace_ofs;
+    if (shortlist_cfg.save_trace) {
+        const std::string trace_path = (std::filesystem::path(results_dir) / "step_trace.jsonl").string();
+        step_trace_ofs.open(trace_path);
+        if (!step_trace_ofs.is_open()) {
+            fprintf(stderr, "Warning: failed to open step trace file: %s\n", trace_path.c_str());
+        } else {
+            fprintf(stderr, "Step trace will be saved to: %s\n", trace_path.c_str());
+        }
+    }
 
-    const size_t idx_start = std::max(0, bench_start);
-    const size_t idx_end   = bench_count < 0 ? prompts.size() : std::min(prompts.size(), (size_t)(bench_start + bench_count));
     auto persist_result = [&](const bench_result & res, const bench_prompt & bp) {
         write_prompt_result_file(make_prompt_output_path(results_dir, res.sample_index), res, bp.text);
     };
@@ -1075,10 +1797,12 @@ int main(int argc, char ** argv) {
         bool prompt_failed = false;
 
         std::vector<seq_draft> drafts(n_seq_dft);
-        std::vector<int> acceptance_lengths;
+        std::vector<int> accepted_prefix_lengths;
+        std::vector<int> step_output_lengths;
         std::vector<int> decoding_latencies;
         std::vector<int> verification_latencies;
         std::vector<float> T_d;
+        int decode_step_index = 0;
 
         int cur_depth = 0;
         int third_depth[4] = { 0, 1, 4, 5 };
@@ -1228,7 +1952,43 @@ int main(int argc, char ** argv) {
 
             const auto verification_end = ggml_time_us();
             verification_latencies.push_back((int)((verification_end - verification_start) / 1000));
-            acceptance_lengths.push_back(i_dft + 1);
+            const int accepted_prefix_len = i_dft;
+            const int step_output_len = (int) recompute.size();
+            accepted_prefix_lengths.push_back(accepted_prefix_len);
+            step_output_lengths.push_back(step_output_len);
+
+            if (collect_vocab_stats) {
+                record_verified_step_stats(analysis, bp.category, recompute, accepted_prefix_len);
+            }
+            if (shortlist_cfg.enabled) {
+                record_coverage_step(analysis, bp.category, recompute, accepted_prefix_len, shortlist_cfg);
+            }
+            if (step_trace_ofs.is_open()) {
+                const std::vector<bool> shortlist_hits = compute_shortlist_hit_flags(recompute, shortlist_cfg, bp.category);
+                step_trace_ofs
+                    << "{\"sample_index\":" << res.sample_index
+                    << ",\"question_id\":" << bp.question_id
+                    << ",\"category\":\"" << json_escape(normalize_category_key(bp.category)) << "\""
+                    << ",\"decode_step_index\":" << decode_step_index
+                    << ",\"accepted_prefix_len\":" << accepted_prefix_len
+                    << ",\"step_output_len\":" << step_output_len
+                    << ",\"verified_tokens\":";
+                write_json_token_array(step_trace_ofs, recompute);
+                step_trace_ofs << ",\"accepted_flags\":[";
+                for (int idx = 0; idx < step_output_len; ++idx) {
+                    if (idx > 0) {
+                        step_trace_ofs << ",";
+                    }
+                    step_trace_ofs << (idx < accepted_prefix_len ? "true" : "false");
+                }
+                step_trace_ofs << "]";
+                step_trace_ofs << ",\"bonus_index\":" << step_output_len
+                               << ",\"bonus_token_id\":" << (step_output_len > 0 ? recompute.back() : LLAMA_TOKEN_NULL)
+                               << ",\"shortlist_hit_flags\":";
+                write_json_bool_array(step_trace_ofs, shortlist_hits);
+                step_trace_ofs << ",\"eos\":" << (has_eos ? "true" : "false") << "}\n";
+            }
+            ++decode_step_index;
 
             for (int i = 0; i < n_seq_dft; i++)
                 for (int j = 0; j < n_depth; j++)
@@ -1429,7 +2189,11 @@ int main(int argc, char ** argv) {
                     for (int is = 0; is < (int)sa.size(); ++is) {
                         const llama_token id = cur_p->data[is].id;
                         const int ss = sa[is];
+                        const int proposed_position = (int) drafts[ss].tokens.size();
                         token_stats.draft_freq[id]++;
+                        if (collect_vocab_stats) {
+                            record_proposed_token_stats(analysis, bp.category, id, proposed_position);
+                        }
                         common_sampler_accept(drafts[ss].smpl, id, true);
                         drafts[ss].tokens.push_back(id);
                         drafts[ss].dists.push_back({cur_p->data, cur_p->data + cur_p->size});
@@ -1526,7 +2290,9 @@ int main(int argc, char ** argv) {
         res.accept_ratio = n_drafted > 0 ? 100.0 * n_accept / n_drafted : 0;
 
         int n_steps = (int)decoding_latencies.size();
-        res.avg_accept_len = n_steps > 0 ? std::accumulate(acceptance_lengths.begin(), acceptance_lengths.end(), 0.0) / n_steps : 0;
+        res.avg_accepted_prefix_len = n_steps > 0 ? std::accumulate(accepted_prefix_lengths.begin(), accepted_prefix_lengths.end(), 0.0) / n_steps : 0;
+        res.avg_step_output_len = n_steps > 0 ? std::accumulate(step_output_lengths.begin(), step_output_lengths.end(), 0.0) / n_steps : 0;
+        res.avg_accept_len = res.avg_step_output_len;
         res.avg_draft_lat = !decoding_latencies.empty() ? std::accumulate(decoding_latencies.begin(), decoding_latencies.end(), 0.0) / decoding_latencies.size() : 0;
         res.avg_verify_lat = !verification_latencies.empty() ? std::accumulate(verification_latencies.begin(), verification_latencies.end(), 0.0) / verification_latencies.size() : 0;
         res.avg_td = !T_d.empty() ? std::accumulate(T_d.begin(), T_d.end(), 0.0) / T_d.size() : 0;
@@ -1593,7 +2359,8 @@ int main(int argc, char ** argv) {
         std::ofstream csv(csv_path);
         if (csv.is_open()) {
             csv << "sample_index,question_id,category,status,error_message,n_input,n_predict,n_drafted,n_accept,"
-                   "prefill_ms,prefill_tps,decode_ms,decode_tps,decode_lat_ms,draft_len,accept_len,accept_ratio,"
+                   "prefill_ms,prefill_tps,decode_ms,decode_tps,decode_lat_ms,draft_len,accept_len,"
+                   "accepted_prefix_len,step_output_len,accept_ratio,"
                    "avg_draft_ms,avg_verify_ms,avg_td_ms\n";
             for (const auto & r : results) {
                 csv << r.sample_index << ","
@@ -1612,6 +2379,8 @@ int main(int argc, char ** argv) {
                     << r.decode_lat << ","
                     << r.draft_len << ","
                     << r.avg_accept_len << ","
+                    << r.avg_accepted_prefix_len << ","
+                    << r.avg_step_output_len << ","
                     << r.accept_ratio << ","
                     << r.avg_draft_lat << ","
                     << r.avg_verify_lat << ","
@@ -1636,6 +2405,8 @@ int main(int argc, char ** argv) {
                     << ",\"decode_tps\":" << r.decode_tps
                     << ",\"draft_len\":" << r.draft_len
                     << ",\"accept_len\":" << r.avg_accept_len
+                    << ",\"accepted_prefix_len\":" << r.avg_accepted_prefix_len
+                    << ",\"step_output_len\":" << r.avg_step_output_len
                     << ",\"accept_ratio\":" << r.accept_ratio
                     << ",\"output\":\"" << json_escape(r.output_text) << "\""
                     << ",\"error_message\":\"" << json_escape(r.error_message) << "\"}\n";
@@ -1675,7 +2446,8 @@ int main(int argc, char ** argv) {
         std::string freq_path = (std::filesystem::path(results_dir) / "token_freq.csv").string();
         std::ofstream freq_csv(freq_path);
         if (freq_csv.is_open()) {
-            freq_csv << "token_id,token_text,draft_count,accepted_count,rejected_count,bonus_count,accept_rate\n";
+            freq_csv << "token_id,token_text,draft_count,accepted_count,rejected_count,bonus_count,"
+                     << "verified_total,accepted_total,bonus_total,proposed_total,accept_rate\n";
 
             struct token_row {
                 llama_token id;
@@ -1708,11 +2480,21 @@ int main(int argc, char ** argv) {
                 double accept_rate = r.draft > 0 ? 100.0 * r.accepted / r.draft : 0.0;
                 freq_csv << r.id << ",\"" << escaped << "\"," << r.draft << ","
                          << r.accepted << "," << rejected << "," << r.bonus << ","
+                         << lookup_total_count(analysis.overall.verified_total, r.id) << ","
+                         << lookup_total_count(analysis.overall.accepted_total, r.id) << ","
+                         << lookup_total_count(analysis.overall.bonus_total, r.id) << ","
+                         << lookup_total_count(analysis.overall.proposed_total, r.id) << ","
                          << accept_rate << "\n";
             }
             fprintf(stderr, "\nToken frequency stats saved to: %s\n", freq_path.c_str());
         }
     }
+
+    if (collect_vocab_stats) {
+        write_accept_hist_csv(results_dir, analysis);
+        write_token_pos_stats_csv(results_dir, ctx_tgt, analysis);
+    }
+    write_shortlist_coverage_csv(results_dir, analysis, shortlist_cfg);
 
     // ====================================================================
     // Cleanup
