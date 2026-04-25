@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -1232,6 +1233,7 @@ static void write_prompt_result_file(
 struct selector_data_config {
     bool collect = false;
     std::string data_dir;
+    std::string source = "generated";
     int lookahead_depth = 5;
     int top_k = 2048;
     int64_t max_samples = -1;
@@ -1242,6 +1244,12 @@ struct selector_data_config {
 struct selector_topk_row {
     std::vector<int32_t> ids;
     std::vector<float> logits;
+};
+
+struct selector_cached_row {
+    std::vector<float> hidden;
+    std::vector<int32_t> top_ids;
+    std::vector<float> top_logits;
 };
 
 static bool write_float_record(
@@ -1478,7 +1486,7 @@ private:
     std::vector<ggml_fp16_t> fp16_scratch_;
 };
 
-static int collect_selector_data(
+static int collect_selector_prompt_data(
     const selector_data_config & cfg,
     const std::vector<bench_prompt> & prompts,
     size_t idx_start,
@@ -1710,6 +1718,286 @@ static int collect_selector_data(
     return 0;
 }
 
+static bool selector_try_emit_generated_samples(
+    const selector_data_config & cfg,
+    SelectorDataWriter & writer,
+    std::deque<selector_cached_row> & rows,
+    std::deque<llama_token> & tokens,
+    int hidden_dim,
+    int vocab_size,
+    int64_t & token_positions_processed) {
+    while ((int) rows.size() >= cfg.lookahead_depth &&
+           (int) tokens.size() >= cfg.lookahead_depth + 1) {
+        if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
+            return true;
+        }
+
+        std::vector<int32_t> sample_top_ids;
+        std::vector<float> sample_top_logits;
+        std::vector<int32_t> sample_gold_ids;
+        sample_top_ids.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
+        sample_top_logits.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
+        sample_gold_ids.reserve(cfg.lookahead_depth);
+
+        for (int d = 0; d < cfg.lookahead_depth; ++d) {
+            sample_top_ids.insert(sample_top_ids.end(), rows[d].top_ids.begin(), rows[d].top_ids.end());
+            sample_top_logits.insert(sample_top_logits.end(), rows[d].top_logits.begin(), rows[d].top_logits.end());
+            sample_gold_ids.push_back((int32_t) tokens[d + 1]);
+        }
+
+        if (!writer.write_sample(rows.front().hidden.data(), hidden_dim, vocab_size,
+                                 sample_top_ids, sample_top_logits, sample_gold_ids)) {
+            return false;
+        }
+
+        ++token_positions_processed;
+        rows.pop_front();
+        tokens.pop_front();
+    }
+
+    return true;
+}
+
+static int collect_selector_generated_data(
+    const selector_data_config & cfg,
+    const std::vector<bench_prompt> & prompts,
+    size_t idx_start,
+    size_t idx_end,
+    const std::string & bench_file,
+    const std::string & dataset_type,
+    const std::string & chat_template,
+    const common_params & params,
+    llama_context * ctx_tgt,
+    llama_model * model_tgt,
+    callback_data & cb_data) {
+    if (!ctx_tgt || !model_tgt) {
+        fprintf(stderr, "Error: selector collector received null model/context\n");
+        return 1;
+    }
+
+    const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
+    int vocab_size = (int) llama_model_n_vocab_out(model_tgt);
+    if (vocab_size <= 0 && vocab) {
+        vocab_size = llama_vocab_n_tokens(vocab);
+    }
+    if (vocab_size <= 0) {
+        fprintf(stderr, "Error: failed to infer selector vocab size from target model\n");
+        return 1;
+    }
+    if (cfg.top_k > vocab_size) {
+        fprintf(stderr, "Error: --selector-top-k (%d) exceeds vocab size (%d)\n",
+                cfg.top_k, vocab_size);
+        return 1;
+    }
+
+    SelectorDataWriter writer;
+    if (!writer.open(cfg)) {
+        return 1;
+    }
+    writer.set_vocab_size(vocab_size);
+
+    auto * mem_tgt = llama_get_memory(ctx_tgt);
+    const int max_context_size = (int) llama_n_ctx(ctx_tgt);
+    const int max_tokens_list_size = max_context_size - 4;
+    const int n_batch_tgt = (int) llama_n_batch(ctx_tgt);
+    const int hidden_dim = llama_model_n_embd(model_tgt);
+    if (hidden_dim <= 0) {
+        fprintf(stderr, "Error: failed to infer selector hidden_dim from target model\n");
+        return 1;
+    }
+
+    int64_t token_positions_processed = 0;
+    int prompts_processed = 0;
+    int prompts_with_samples = 0;
+
+    fprintf(stderr,
+            "[%s] Selector generated-output collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64 "\n",
+            SPEC_BENCH_BACKEND_LABEL,
+            cfg.data_dir.c_str(),
+            cfg.lookahead_depth,
+            cfg.top_k,
+            cfg.max_samples);
+
+    for (size_t prompt_idx = idx_start; prompt_idx < idx_end; ++prompt_idx) {
+        if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
+            break;
+        }
+
+        const auto & bp = prompts[prompt_idx];
+        const std::string prompt_text = apply_template(chat_template, bp.text);
+        std::vector<llama_token> inp = common_tokenize(ctx_tgt, prompt_text, true, true);
+
+        ++prompts_processed;
+
+        fprintf(stderr, "============================================================\n");
+        fprintf(stderr, "[Selector %zu/%zu] id=%d category=%s\n",
+                prompt_idx + 1, prompts.size(), bp.question_id, bp.category.c_str());
+        fprintf(stderr, "  prompt: %.80s%s\n", bp.text.c_str(), bp.text.size() > 80 ? "..." : "");
+        fprintf(stderr, "  --- output start ---\n");
+
+        if ((int) inp.size() > max_tokens_list_size) {
+            fprintf(stderr, "\n  SKIP: prompt too long (%d tokens, max %d)\n",
+                    (int) inp.size(), max_tokens_list_size);
+            continue;
+        }
+
+        llama_memory_clear(mem_tgt, true);
+        cb_data.data.clear();
+
+        struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
+        llama_batch batch = llama_batch_init(n_batch_tgt, 0, 1);
+
+        bool ok = true;
+        int n_past = 0;
+
+        for (int chunk_start = 0; chunk_start < (int) inp.size(); chunk_start += n_batch_tgt) {
+            const int chunk_size = std::min(n_batch_tgt, (int) inp.size() - chunk_start);
+            common_batch_clear(batch);
+            for (int j = 0; j < chunk_size; ++j) {
+                const bool logits = (chunk_start + j == (int) inp.size() - 1);
+                common_batch_add(batch, inp[chunk_start + j], n_past++, { 0 }, logits);
+            }
+
+            if (llama_decode(ctx_tgt, batch) != 0) {
+                fprintf(stderr, "\n  SKIP: target prompt prefill failed at chunk start=%d\n", chunk_start);
+                ok = false;
+                break;
+            }
+        }
+
+        if (ok) {
+            ctx_tgt->synchronize();
+        }
+
+        cb_data.data.clear();
+
+        llama_token cur_token = LLAMA_TOKEN_NULL;
+        bool has_eos = false;
+        if (ok) {
+            cur_token = common_sampler_sample(smpl, ctx_tgt, -1);
+            common_sampler_accept(smpl, cur_token, true);
+            has_eos = llama_vocab_is_eog(vocab, cur_token);
+        }
+
+        std::deque<selector_cached_row> pending_rows;
+        std::deque<llama_token> token_window;
+        int n_generated = 0;
+        bool prompt_wrote_sample = false;
+
+        if (ok && !has_eos) {
+            token_window.push_back(cur_token);
+        }
+
+        while (ok && !has_eos && (params.n_predict < 0 || n_generated < params.n_predict)) {
+            const std::string token_str = common_token_to_piece(ctx_tgt, cur_token);
+            printf("%s", token_str.c_str());
+            fflush(stdout);
+            ++n_generated;
+
+            cb_data.data.clear();
+            llama_token decode_token = cur_token;
+            if (llama_decode(ctx_tgt, llama_batch_get_one(&decode_token, 1)) != 0) {
+                fprintf(stderr, "\n  SKIP: target decode failed after %d generated tokens\n", n_generated);
+                ok = false;
+                break;
+            }
+            ctx_tgt->synchronize();
+
+            if (cb_data.data.size() < (size_t) hidden_dim) {
+                fprintf(stderr,
+                        "\n  SKIP: result_norm hidden state unavailable after %d generated tokens (floats=%zu, hidden_dim=%d)\n",
+                        n_generated, cb_data.data.size(), hidden_dim);
+                ok = false;
+                break;
+            }
+
+            const float * logits = llama_get_logits_ith(ctx_tgt, -1);
+            if (!logits) {
+                fprintf(stderr,
+                        "\n  SKIP: logits unavailable after %d generated tokens\n",
+                        n_generated);
+                ok = false;
+                break;
+            }
+
+            selector_cached_row row;
+            row.hidden.assign(cb_data.data.begin(), cb_data.data.begin() + hidden_dim);
+            topk_logits(logits, vocab_size, cfg.top_k, row.top_ids, row.top_logits);
+            pending_rows.push_back(std::move(row));
+
+            llama_token next_token = common_sampler_sample(smpl, ctx_tgt, -1);
+            common_sampler_accept(smpl, next_token, true);
+            token_window.push_back(next_token);
+
+            const int64_t before = writer.num_samples();
+            if (!selector_try_emit_generated_samples(cfg, writer, pending_rows, token_window,
+                                                     hidden_dim, vocab_size,
+                                                     token_positions_processed)) {
+                ok = false;
+                break;
+            }
+            if (writer.num_samples() > before) {
+                prompt_wrote_sample = true;
+            }
+
+            if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
+                break;
+            }
+
+            if (llama_vocab_is_eog(vocab, next_token)) {
+                has_eos = true;
+                break;
+            }
+
+            cur_token = next_token;
+        }
+
+        printf("\n");
+        fprintf(stderr, "  --- output end ---\n");
+
+        common_sampler_free(smpl);
+        llama_batch_free(batch);
+
+        if (prompt_wrote_sample) {
+            ++prompts_with_samples;
+        }
+
+        if (!ok) {
+            continue;
+        }
+
+        if (prompts_processed % 10 == 0 ||
+            prompt_idx + 1 == idx_end ||
+            (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples)) {
+            fprintf(stderr,
+                    "[%s] selector progress: prompts=%d generated_tokens=%d token_positions=%" PRId64 " samples=%" PRId64 "\n",
+                    SPEC_BENCH_BACKEND_LABEL,
+                    prompts_processed,
+                    n_generated,
+                    token_positions_processed,
+                    writer.num_samples());
+        }
+    }
+
+    writer.close();
+
+    if (!writer.write_meta(bench_file, dataset_type, chat_template,
+                           prompts_processed, token_positions_processed)) {
+        return 1;
+    }
+
+    fprintf(stderr,
+            "[%s] selector collection complete: samples=%" PRId64 " prompts=%d prompts_with_samples=%d hidden_dim=%d vocab_size=%d\n",
+            SPEC_BENCH_BACKEND_LABEL,
+            writer.num_samples(),
+            prompts_processed,
+            prompts_with_samples,
+            writer.hidden_dim(),
+            writer.vocab_size());
+
+    return 0;
+}
+
 static void write_json_token_array(std::ostream & os, const std::vector<llama_token> & tokens) {
     os << "[";
     for (size_t i = 0; i < tokens.size(); ++i) {
@@ -1890,6 +2178,8 @@ int main(int argc, char ** argv) {
             selector_cfg.collect = true;
         } else if (arg == "--selector-data-dir" && i + 1 < argc) {
             selector_cfg.data_dir = argv[++i];
+        } else if (arg == "--selector-source" && i + 1 < argc) {
+            selector_cfg.source = argv[++i];
         } else if (arg == "--selector-lookahead-depth" && i + 1 < argc) {
             selector_cfg.lookahead_depth = std::atoi(argv[++i]);
         } else if (arg == "--selector-top-k" && i + 1 < argc) {
@@ -1920,6 +2210,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  --calibration-mode MODE  none (default) or target-generate\n");
         fprintf(stderr, "  --collect-selector-data  Collect dynamic vocab selector training data\n");
         fprintf(stderr, "  --selector-data-dir DIR  Output directory for selector data\n");
+        fprintf(stderr, "  --selector-source MODE   generated (default) or prompt\n");
         fprintf(stderr, "  --selector-lookahead-depth N  Future target distributions per hidden (default: 5)\n");
         fprintf(stderr, "  --selector-top-k N       Top target logits/token ids per future step (default: 2048)\n");
         fprintf(stderr, "  --selector-max-samples N Optional sample limit (-1 = no limit)\n");
@@ -1956,6 +2247,10 @@ int main(int argc, char ** argv) {
         }
         if (selector_cfg.max_samples < -1) {
             fprintf(stderr, "Error: --selector-max-samples must be -1 or >= 0\n");
+            return 1;
+        }
+        if (selector_cfg.source != "generated" && selector_cfg.source != "prompt") {
+            fprintf(stderr, "Error: unknown selector source '%s'. Use: generated, prompt\n", selector_cfg.source.c_str());
             return 1;
         }
         if (calibration_mode != "none") {
@@ -2069,17 +2364,30 @@ int main(int argc, char ** argv) {
     const size_t idx_end   = bench_count < 0 ? prompts.size() : std::min(prompts.size(), (size_t) (bench_start + bench_count));
 
     if (selector_cfg.collect) {
-        const int rc = collect_selector_data(
-            selector_cfg,
-            prompts,
-            idx_start,
-            idx_end,
-            bench_file,
-            dataset_type,
-            chat_template,
-            ctx_tgt,
-            model_tgt,
-            cb_data);
+        const int rc = selector_cfg.source == "prompt" ?
+            collect_selector_prompt_data(
+                selector_cfg,
+                prompts,
+                idx_start,
+                idx_end,
+                bench_file,
+                dataset_type,
+                chat_template,
+                ctx_tgt,
+                model_tgt,
+                cb_data) :
+            collect_selector_generated_data(
+                selector_cfg,
+                prompts,
+                idx_start,
+                idx_end,
+                bench_file,
+                dataset_type,
+                chat_template,
+                params,
+                ctx_tgt,
+                model_tgt,
+                cb_data);
         llama_backend_free();
         return rc;
     }
