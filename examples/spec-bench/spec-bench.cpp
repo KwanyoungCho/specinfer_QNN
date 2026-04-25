@@ -1869,6 +1869,30 @@ static int collect_selector_generated_data(
             ctx_tgt->synchronize();
         }
 
+        selector_cached_row prompt_boundary_row;
+        bool has_prompt_boundary_row = false;
+        if (ok) {
+            if (cb_data.data.size() < (size_t) hidden_dim) {
+                fprintf(stderr,
+                        "\n  SKIP: prompt-final result_norm hidden state unavailable (floats=%zu, hidden_dim=%d)\n",
+                        cb_data.data.size(), hidden_dim);
+                ok = false;
+            } else {
+                const float * prompt_logits = llama_get_logits_ith(ctx_tgt, -1);
+                if (!prompt_logits) {
+                    fprintf(stderr, "\n  SKIP: prompt-final logits unavailable\n");
+                    ok = false;
+                } else {
+                    const float * last_prompt_hidden = cb_data.data.data() + cb_data.data.size() - (size_t) hidden_dim;
+                    prompt_boundary_row.hidden.assign(last_prompt_hidden, last_prompt_hidden + hidden_dim);
+                    topk_logits(prompt_logits, vocab_size, cfg.top_k,
+                                prompt_boundary_row.top_ids,
+                                prompt_boundary_row.top_logits);
+                    has_prompt_boundary_row = true;
+                }
+            }
+        }
+
         cb_data.data.clear();
 
         llama_token cur_token = LLAMA_TOKEN_NULL;
@@ -1884,7 +1908,9 @@ static int collect_selector_generated_data(
         int n_generated = 0;
         bool prompt_wrote_sample = false;
 
-        if (ok && !has_eos) {
+        if (ok && has_prompt_boundary_row && !has_eos) {
+            pending_rows.push_back(std::move(prompt_boundary_row));
+            token_window.push_back(inp.back());
             token_window.push_back(cur_token);
         }
 
