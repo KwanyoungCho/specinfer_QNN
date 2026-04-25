@@ -1,6 +1,11 @@
 #include "qnn_qnnjson.h"
 
+#include <System/QnnSystemContext.h>
+#include <System/QnnSystemInterface.h>
+
+#include <dlfcn.h>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 namespace llama_qnn {
@@ -85,6 +90,157 @@ static uint32_t elem_size_from_code(uint32_t code) {
     case 0x0432: return 4; // ufix32
     case 0x0508: return 1; // bool8
     default: return 1;
+  }
+}
+
+static uint32_t elem_size_from_qnn_dtype(Qnn_DataType_t data_type) {
+  return elem_size_from_code(static_cast<uint32_t>(data_type));
+}
+
+static std::string qnn_dtype_to_string(Qnn_DataType_t data_type) {
+  switch (data_type) {
+    case QNN_DATATYPE_FLOAT_32: return "QNN_DATATYPE_FLOAT_32";
+    case QNN_DATATYPE_FLOAT_16: return "QNN_DATATYPE_FLOAT_16";
+    case QNN_DATATYPE_INT_8: return "QNN_DATATYPE_INT_8";
+    case QNN_DATATYPE_INT_16: return "QNN_DATATYPE_INT_16";
+    case QNN_DATATYPE_INT_32: return "QNN_DATATYPE_INT_32";
+    case QNN_DATATYPE_INT_64: return "QNN_DATATYPE_INT_64";
+    case QNN_DATATYPE_UINT_8: return "QNN_DATATYPE_UINT_8";
+    case QNN_DATATYPE_UINT_16: return "QNN_DATATYPE_UINT_16";
+    case QNN_DATATYPE_UINT_32: return "QNN_DATATYPE_UINT_32";
+    case QNN_DATATYPE_UINT_64: return "QNN_DATATYPE_UINT_64";
+    case QNN_DATATYPE_SFIXED_POINT_8: return "QNN_DATATYPE_SFIXED_POINT_8";
+    case QNN_DATATYPE_SFIXED_POINT_16: return "QNN_DATATYPE_SFIXED_POINT_16";
+    case QNN_DATATYPE_SFIXED_POINT_32: return "QNN_DATATYPE_SFIXED_POINT_32";
+    case QNN_DATATYPE_UFIXED_POINT_8: return "QNN_DATATYPE_UFIXED_POINT_8";
+    case QNN_DATATYPE_UFIXED_POINT_16: return "QNN_DATATYPE_UFIXED_POINT_16";
+    case QNN_DATATYPE_UFIXED_POINT_32: return "QNN_DATATYPE_UFIXED_POINT_32";
+    case QNN_DATATYPE_BOOL_8: return "QNN_DATATYPE_BOOL_8";
+    default: return "QNN_DATATYPE_UNDEFINED";
+  }
+}
+
+static std::string qnn_quant_encoding_to_string(Qnn_QuantizationEncoding_t encoding) {
+  switch (encoding) {
+    case QNN_QUANTIZATION_ENCODING_SCALE_OFFSET:
+      return "QNN_QUANTIZATION_ENCODING_SCALE_OFFSET";
+    case QNN_QUANTIZATION_ENCODING_AXIS_SCALE_OFFSET:
+      return "QNN_QUANTIZATION_ENCODING_AXIS_SCALE_OFFSET";
+    case QNN_QUANTIZATION_ENCODING_BW_SCALE_OFFSET:
+      return "QNN_QUANTIZATION_ENCODING_BW_SCALE_OFFSET";
+    case QNN_QUANTIZATION_ENCODING_BW_AXIS_SCALE_OFFSET:
+      return "QNN_QUANTIZATION_ENCODING_BW_AXIS_SCALE_OFFSET";
+    case QNN_QUANTIZATION_ENCODING_BLOCK:
+      return "QNN_QUANTIZATION_ENCODING_BLOCK";
+    case QNN_QUANTIZATION_ENCODING_BLOCKWISE_EXPANSION:
+      return "QNN_QUANTIZATION_ENCODING_BLOCKWISE_EXPANSION";
+    case QNN_QUANTIZATION_ENCODING_VECTOR:
+      return "QNN_QUANTIZATION_ENCODING_VECTOR";
+    default:
+      return "QNN_QUANTIZATION_ENCODING_UNDEFINED";
+  }
+}
+
+static bool tensor_desc_from_qnn_tensor(const Qnn_Tensor_t& tensor, QnnJsonTensorDesc& desc) {
+  const Qnn_TensorV1_t* tensor_v1 = nullptr;
+  const Qnn_TensorV2_t* tensor_v2 = nullptr;
+
+  if (tensor.version == QNN_TENSOR_VERSION_2) {
+    tensor_v2 = &tensor.v2;
+  } else if (tensor.version == QNN_TENSOR_VERSION_1) {
+    tensor_v1 = &tensor.v1;
+  } else {
+    return false;
+  }
+
+  const uint32_t id = tensor_v2 ? tensor_v2->id : tensor_v1->id;
+  const char* name = tensor_v2 ? tensor_v2->name : tensor_v1->name;
+  const Qnn_DataType_t data_type = tensor_v2 ? tensor_v2->dataType : tensor_v1->dataType;
+  const Qnn_QuantizeParams_t& quant = tensor_v2 ? tensor_v2->quantizeParams : tensor_v1->quantizeParams;
+  const uint32_t rank = tensor_v2 ? tensor_v2->rank : tensor_v1->rank;
+  const uint32_t* dims = tensor_v2 ? tensor_v2->dimensions : tensor_v1->dimensions;
+
+  desc = {};
+  desc.id = id;
+  desc.name = name ? name : "";
+  desc.data_type_code = static_cast<uint32_t>(data_type);
+  desc.data_type = qnn_dtype_to_string(data_type);
+  desc.bytes_per_element = elem_size_from_qnn_dtype(data_type);
+
+  if (dims != nullptr && rank > 0) {
+    desc.dims.assign(dims, dims + rank);
+  }
+
+  uint64_t numel = 1;
+  for (uint32_t dim : desc.dims) {
+    numel *= dim;
+  }
+  desc.nbytes = numel * static_cast<uint64_t>(desc.bytes_per_element);
+
+  desc.quant_encoding = qnn_quant_encoding_to_string(quant.quantizationEncoding);
+  switch (quant.quantizationEncoding) {
+    case QNN_QUANTIZATION_ENCODING_SCALE_OFFSET:
+      desc.quant_scale = quant.scaleOffsetEncoding.scale;
+      desc.quant_offset = quant.scaleOffsetEncoding.offset;
+      break;
+    case QNN_QUANTIZATION_ENCODING_AXIS_SCALE_OFFSET:
+      desc.quant_axis = quant.axisScaleOffsetEncoding.axis;
+      if (quant.axisScaleOffsetEncoding.scaleOffset != nullptr) {
+        for (uint32_t i = 0; i < quant.axisScaleOffsetEncoding.numScaleOffsets; ++i) {
+          desc.quant_scales.push_back(quant.axisScaleOffsetEncoding.scaleOffset[i].scale);
+          desc.quant_offsets.push_back(quant.axisScaleOffsetEncoding.scaleOffset[i].offset);
+        }
+      }
+      break;
+    case QNN_QUANTIZATION_ENCODING_BW_SCALE_OFFSET:
+      desc.quant_bitwidth = quant.bwScaleOffsetEncoding.bitwidth;
+      desc.quant_scale = quant.bwScaleOffsetEncoding.scale;
+      desc.quant_offset = quant.bwScaleOffsetEncoding.offset;
+      break;
+    case QNN_QUANTIZATION_ENCODING_BW_AXIS_SCALE_OFFSET:
+      desc.quant_bitwidth = quant.bwAxisScaleOffsetEncoding.bitwidth;
+      desc.quant_axis = quant.bwAxisScaleOffsetEncoding.axis;
+      if (quant.bwAxisScaleOffsetEncoding.scales != nullptr) {
+        for (uint32_t i = 0; i < quant.bwAxisScaleOffsetEncoding.numElements; ++i) {
+          desc.quant_scales.push_back(quant.bwAxisScaleOffsetEncoding.scales[i]);
+          const int32_t offset =
+              quant.bwAxisScaleOffsetEncoding.offsets != nullptr
+                  ? quant.bwAxisScaleOffsetEncoding.offsets[i]
+                  : 0;
+          desc.quant_offsets.push_back(offset);
+        }
+      }
+      break;
+    default:
+      break;
+  }
+
+  return !desc.name.empty();
+}
+
+template <typename GraphInfoT>
+static void fill_graph_desc_from_system_info(
+    const GraphInfoT& graph_info,
+    std::map<std::string, QnnJsonGraphDesc>& out_graphs) {
+  QnnJsonGraphDesc graph_desc;
+  graph_desc.graph_name = graph_info.graphName ? graph_info.graphName : "";
+
+  for (uint32_t i = 0; i < graph_info.numGraphInputs; ++i) {
+    QnnJsonTensorDesc tensor_desc;
+    if (tensor_desc_from_qnn_tensor(graph_info.graphInputs[i], tensor_desc)) {
+      graph_desc.inputs.push_back(std::move(tensor_desc));
+    }
+  }
+
+  for (uint32_t i = 0; i < graph_info.numGraphOutputs; ++i) {
+    QnnJsonTensorDesc tensor_desc;
+    if (tensor_desc_from_qnn_tensor(graph_info.graphOutputs[i], tensor_desc)) {
+      graph_desc.outputs.push_back(std::move(tensor_desc));
+    }
+  }
+
+  if (!graph_desc.graph_name.empty()) {
+    out_graphs[graph_desc.graph_name] = std::move(graph_desc);
   }
 }
 
@@ -309,6 +465,147 @@ bool parse_qnn_json(const std::string& json_path,
   return !out_graphs.empty();
 }
 
+bool parse_qnn_binary_info(void* system_so_handle,
+                           const void* binary,
+                           size_t binary_size,
+                           std::map<std::string, QnnJsonGraphDesc>& out_graphs) {
+  out_graphs.clear();
+
+  if (system_so_handle == nullptr || binary == nullptr || binary_size == 0) {
+    return false;
+  }
+
+  using GetProvidersFn = decltype(QnnSystemInterface_getProviders);
+  using CreateFn = decltype(&QnnSystemContext_create);
+  using GetBinaryInfoFn = decltype(&QnnSystemContext_getBinaryInfo);
+  using GetMetadataFn = decltype(&QnnSystemContext_getMetadata);
+  using FreeFn = decltype(&QnnSystemContext_free);
+
+  auto get_providers_sym = dlsym(system_so_handle, "QnnSystemInterface_getProviders");
+
+  CreateFn create_fn = nullptr;
+  GetBinaryInfoFn get_binary_info_fn = nullptr;
+  GetMetadataFn get_metadata_fn = nullptr;
+  FreeFn free_fn = nullptr;
+
+  if (get_providers_sym != nullptr) {
+    auto get_providers = reinterpret_cast<GetProvidersFn*>(get_providers_sym);
+
+    const QnnSystemInterface_t** providers = nullptr;
+    uint32_t num_providers = 0;
+    if (get_providers(&providers, &num_providers) == QNN_SUCCESS &&
+        providers != nullptr &&
+        num_providers > 0 &&
+        providers[0] != nullptr) {
+      const QnnSystemInterface_t* system_interface = providers[0];
+      const auto& api = system_interface->QNN_SYSTEM_INTERFACE_VER_NAME;
+      create_fn = api.systemContextCreate;
+      get_binary_info_fn = api.systemContextGetBinaryInfo;
+      get_metadata_fn = api.systemContextGetMetaData;
+      free_fn = api.systemContextFree;
+    }
+  }
+
+  if (create_fn == nullptr) {
+    create_fn = reinterpret_cast<CreateFn>(dlsym(system_so_handle, "QnnSystemContext_create"));
+  }
+  if (get_binary_info_fn == nullptr) {
+    get_binary_info_fn =
+        reinterpret_cast<GetBinaryInfoFn>(dlsym(system_so_handle, "QnnSystemContext_getBinaryInfo"));
+  }
+  if (get_metadata_fn == nullptr) {
+    get_metadata_fn =
+        reinterpret_cast<GetMetadataFn>(dlsym(system_so_handle, "QnnSystemContext_getMetadata"));
+  }
+  if (free_fn == nullptr) {
+    free_fn = reinterpret_cast<FreeFn>(dlsym(system_so_handle, "QnnSystemContext_free"));
+  }
+
+  if (create_fn == nullptr || free_fn == nullptr ||
+      (get_metadata_fn == nullptr && get_binary_info_fn == nullptr)) {
+    std::cerr << "[QNN BinaryInfo] Missing system metadata symbols, falling back to JSON\n";
+    return false;
+  }
+
+  QnnSystemContext_Handle_t system_context = nullptr;
+  const Qnn_ErrorHandle_t create_status = create_fn(&system_context);
+  if (create_status != QNN_SUCCESS || system_context == nullptr) {
+    std::cerr << "[QNN BinaryInfo] Failed to create QNN system context, status="
+              << static_cast<unsigned long long>(create_status)
+              << ", falling back to JSON\n";
+    return false;
+  }
+
+  const QnnSystemContext_BinaryInfo_t* binary_info = nullptr;
+  Qnn_ErrorHandle_t info_status = QNN_SUCCESS;
+
+  if (get_metadata_fn != nullptr) {
+    info_status = get_metadata_fn(
+        system_context,
+        binary,
+        static_cast<Qnn_ContextBinarySize_t>(binary_size),
+        &binary_info);
+  }
+
+  if ((info_status != QNN_SUCCESS || binary_info == nullptr) && get_binary_info_fn != nullptr) {
+    Qnn_ContextBinarySize_t binary_info_size = 0;
+    info_status = get_binary_info_fn(
+        system_context,
+        const_cast<void*>(binary),
+        static_cast<Qnn_ContextBinarySize_t>(binary_size),
+        &binary_info,
+        &binary_info_size);
+  }
+
+  if (info_status != QNN_SUCCESS || binary_info == nullptr) {
+    free_fn(system_context);
+    std::cerr << "[QNN BinaryInfo] Failed to query context metadata, status="
+              << static_cast<unsigned long long>(info_status)
+              << ", falling back to JSON\n";
+    return false;
+  }
+
+  uint32_t num_graphs = 0;
+  QnnSystemContext_GraphInfo_t* graphs = nullptr;
+  if (binary_info->version == QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_1) {
+    num_graphs = binary_info->contextBinaryInfoV1.numGraphs;
+    graphs = binary_info->contextBinaryInfoV1.graphs;
+  } else if (binary_info->version == QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_2) {
+    num_graphs = binary_info->contextBinaryInfoV2.numGraphs;
+    graphs = binary_info->contextBinaryInfoV2.graphs;
+#if (QNN_API_VERSION_MAJOR >= 2 && QNN_API_VERSION_MINOR >= 21)
+  } else if (binary_info->version == QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_3) {
+    num_graphs = binary_info->contextBinaryInfoV3.numGraphs;
+    graphs = binary_info->contextBinaryInfoV3.graphs;
+#endif
+  } else {
+    free_fn(system_context);
+    std::cerr << "[QNN BinaryInfo] Unsupported binary info version "
+              << static_cast<int>(binary_info->version)
+              << ", falling back to JSON\n";
+    return false;
+  }
+
+  if (graphs == nullptr || num_graphs == 0) {
+    free_fn(system_context);
+    std::cerr << "[QNN BinaryInfo] Binary metadata had no graphs, falling back to JSON\n";
+    return false;
+  }
+
+  for (uint32_t i = 0; i < num_graphs; ++i) {
+    if (graphs[i].version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1) {
+      fill_graph_desc_from_system_info(graphs[i].graphInfoV1, out_graphs);
+    } else if (graphs[i].version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_2) {
+      fill_graph_desc_from_system_info(graphs[i].graphInfoV2, out_graphs);
+#if (QNN_API_VERSION_MAJOR >= 2 && QNN_API_VERSION_MINOR >= 21)
+    } else if (graphs[i].version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_3) {
+      fill_graph_desc_from_system_info(graphs[i].graphInfoV3, out_graphs);
+#endif
+    }
+  }
+
+  free_fn(system_context);
+  return !out_graphs.empty();
+}
+
 } // namespace llama_qnn
-
-

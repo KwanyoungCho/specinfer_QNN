@@ -54,7 +54,7 @@ bool LLMDecodeRunner::load_multi_context_graphs() { // [spagetti] blob 고려 / 
                   << "json=" << (json_exists ? "✓" : "✗");
       }
       
-      if (!ctx_exists || !json_exists) {
+      if (!ctx_exists) {
         // std::cout << " → stopping\n";
         if (i == 0) {
           std::cout << "[Multi-Context] ⚠ No shards found! Tried:\n"
@@ -84,10 +84,9 @@ bool LLMDecodeRunner::load_multi_context_graphs() { // [spagetti] blob 고려 / 
       std::string json_file = config_.ctx_dir + "/forward_" + std::to_string(i) + "_json.json";
       
       std::ifstream ctx_test(ctx_file);
-      std::ifstream json_test(json_file);
       
-      if (!ctx_test || !json_test) {
-        error_msg_ = "Missing context or JSON file for shard " + std::to_string(i);
+      if (!ctx_test) {
+        error_msg_ = "Missing context file for shard " + std::to_string(i);
         return false;
       }
       
@@ -100,6 +99,9 @@ bool LLMDecodeRunner::load_multi_context_graphs() { // [spagetti] blob 고려 / 
     std::cout << "[Multi-Context] Found " << config_.num_shards << " shards\n";
   }
   
+  shards_.clear();
+  shards_.resize(config_.num_shards);
+
   // Load each shard ONE BY ONE (메모리 절약: 읽기→생성→해제 반복)
   for (int i = 0; i < config_.num_shards; ++i) {
     if (config_.log_level >= 2) {
@@ -122,6 +124,19 @@ bool LLMDecodeRunner::load_multi_context_graphs() { // [spagetti] blob 고려 / 
       return false;
     }
     ifs.close();
+
+    const bool has_json_metadata =
+        !json_files[i].empty() && parse_qnn_json(json_files[i], shards_[i].graphs);
+    if (!has_json_metadata) {
+      if (!parse_qnn_binary_info(loader_->handles().system_so_handle, buffer.data(), size, shards_[i].graphs)) {
+        error_msg_ = "Failed to parse graph metadata from binary or JSON for shard " +
+                     std::to_string(i);
+        return false;
+      }
+      if (config_.log_level >= 1) {
+        std::cout << "[Shard " << i << "] Metadata loaded from binary (JSON optional)\n";
+      }
+    }
     
     // Create context from binary (하나만 생성)
     if (!loader_->create_context_from_binary(buffer.data(), size)) {
@@ -140,15 +155,7 @@ bool LLMDecodeRunner::load_multi_context_graphs() { // [spagetti] blob 고려 / 
     std::cout << "[Multi-Context] All " << loader_->num_contexts() << " contexts created\n";
   }
   
-  // Parse JSON and retrieve graphs for each shard
-  shards_.resize(config_.num_shards);
-  
   for (int i = 0; i < config_.num_shards; ++i) {
-    if (!parse_qnn_json(json_files[i], shards_[i].graphs)) {
-      error_msg_ = "Failed to parse JSON: " + json_files[i];
-      return false;
-    }
-    
     if (shards_[i].graphs.find("prefill_forward") == shards_[i].graphs.end() ||
         shards_[i].graphs.find("kv_forward") == shards_[i].graphs.end()) {
       error_msg_ = "Required graphs not found in shard " + std::to_string(i);
@@ -407,6 +414,9 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
   for (int i = 0; i < batch.n_tokens; ++i) {
     tokens[i] = batch.token[i];
   }
+
+  last_multi_context_prefill_profile_ = {};
+  last_multi_context_prefill_profile_.n_tokens = batch.n_tokens;
   
   if (config_.log_level >= 2) {
     std::cout << "[Multi-Context Prefill] Starting with " << tokens.size() << " tokens\n";
@@ -454,6 +464,8 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
 
   int n_iterations = (num_tokens + prefill_ar_len_ - 1) / prefill_ar_len_;
   bool is_initial_prefill = (n_past_ == 0);  // Initial prefill: all tokens accepted
+  last_multi_context_prefill_profile_.is_initial_prefill = is_initial_prefill;
+  last_multi_context_prefill_profile_.vocab_size = vocab_size;
   bool use_deferred = config_.deferred_kv_writeback && 
                       (n_iterations == 1) && 
                       !is_initial_prefill;  // Only defer for verification prefill
@@ -474,6 +486,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
   // Multiple iteration prefill
   while (processed < num_tokens) {
     int32_t chunk_size = std::min(prefill_ar_len_, num_tokens - processed);
+    last_multi_context_prefill_profile_.chunk_count++;
     
     // std::cout << "[Debug Spec] Iteration: num_tokens=" << num_tokens 
     //           << ", processed=" << processed 
@@ -497,7 +510,9 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     }
       
     // 1. Find slot for KV storage
+    const int64_t t_slot_search_start = ggml_time_us();
     int32_t slot = kv_manager_->find_slot(chunk_size, 0);
+    last_multi_context_prefill_profile_.slot_search_us += ggml_time_us() - t_slot_search_start;
     if (config_.log_level >= 2) {
       std::cout << "[Multi-Context Prefill] Found slot: " << slot << std::endl;
     }
@@ -507,6 +522,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     }
     
     // 2. Generate attention mask BEFORE cell_meta_ update (QNN model has separate KV I/O)
+    const int64_t t_attn_mask_start = ggml_time_us();
     kv_manager_->build_prefill_attn_mask(
         attn_mask,
         prefill_ar_len_,
@@ -515,6 +531,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
         batch.pos                          ? batch.pos       + processed : nullptr,
         (batch.n_seq_id && batch.seq_id)   ? batch.n_seq_id  + processed : nullptr,
         batch.seq_id                       ? batch.seq_id    + processed : nullptr);
+    last_multi_context_prefill_profile_.attn_mask_us += ggml_time_us() - t_attn_mask_start;
     
     // Build positions array (use batch.pos or generate sequential)
     // Pad to prefill_ar_len_ to match chunk_tokens padding
@@ -524,11 +541,13 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     }
     
     // Run prefill through all shards sequentially
+    const int64_t t_shard_prefill_start = ggml_time_us();
     for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
       if (!run_shard_prefill(shard_idx, chunk_tokens, chunk_positions.data(), chunk_size)) {
         return false;
       }
     }
+    last_multi_context_prefill_profile_.shard_prefill_us += ggml_time_us() - t_shard_prefill_start;
     
     // Update KV cache: copy prefill outputs to KV inputs at found slot
     if (config_.log_level >= 2) {
@@ -537,6 +556,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     }
 
     if (use_deferred) {
+      const int64_t t_kv_writeback_start = ggml_time_us();
       for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
         std::vector<void*> v_outputs, k_outputs;
         collect_kv_outputs(shard_idx, v_outputs, k_outputs);
@@ -548,7 +568,9 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
       }
       pending_write_.slot = slot;
       pending_write_.chunk_size = chunk_size;
+      last_multi_context_prefill_profile_.kv_writeback_us += ggml_time_us() - t_kv_writeback_start;
     } else {
+      const int64_t t_kv_writeback_start = ggml_time_us();
       for (int shard_idx = 0; shard_idx < config_.num_shards; ++shard_idx) {
         std::vector<void*> v_outputs, k_outputs;
         collect_kv_outputs(shard_idx, v_outputs, k_outputs);
@@ -558,9 +580,11 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
                                     prefill_cache_len_, prefill_ar_len_,
                                     shard_idx * layers_per_shard_);
       }
+      last_multi_context_prefill_profile_.kv_writeback_us += ggml_time_us() - t_kv_writeback_start;
     }
     
     // 4. Update cell_meta_ AFTER KV cache update (QNN model has separate KV I/O)
+    const int64_t t_cell_meta_start = ggml_time_us();
     for (int i = 0; i < chunk_size; ++i) {
       int batch_idx = processed + i;
       int32_t cell_idx = slot + i;
@@ -574,9 +598,11 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
         kv_manager_->add_cell_seq(cell_idx, seq_id);
       }
     }
+    last_multi_context_prefill_profile_.cell_meta_us += ggml_time_us() - t_cell_meta_start;
     
     // 5. Accumulate this chunk's logits for later injection
     if (ctx != nullptr && logits_desc && vocab_size > 0) {
+      const int64_t t_logits_dequant_start = ggml_time_us();
       auto& bindings = shards_[final_shard].prefill_alloc->bindings();
       auto it = bindings.find(logits_desc->name);
       if (it != bindings.end() && it->second) {
@@ -596,6 +622,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
           }
         }
       }
+      last_multi_context_prefill_profile_.logits_dequant_us += ggml_time_us() - t_logits_dequant_start;
     }
 
     auto& bindings_iter = shards_[final_shard].prefill_alloc->bindings();
@@ -611,6 +638,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
     if (hidden_state_desc) {
       auto hs_it = bindings_iter.find(hidden_state_desc->name);
       if (hs_it != bindings_iter.end() && hs_it->second) {
+        const int64_t t_hidden_copy_start = ggml_time_us();
         // Parse dimensions: [batch, seq_len, hidden_dim]
         size_t hidden_dim = hidden_state_desc->dims.size() >= 3 ? hidden_state_desc->dims[2] : 4096;
         
@@ -620,6 +648,7 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
         // Float32 tensor
         const float* float_data = reinterpret_cast<const float*>(hs_it->second);
         ctx->final_hiddens.insert(ctx->final_hiddens.end(), float_data, float_data + elements_to_save); 
+        last_multi_context_prefill_profile_.hidden_copy_us += ggml_time_us() - t_hidden_copy_start;
       }
     }
 
@@ -650,7 +679,9 @@ bool LLMDecodeRunner::run_multi_context_prefill(llama_context * ctx, llama_batch
   // Inject ALL accumulated logits into llama_context for external sampling/verification
   if (ctx != nullptr && !accumulated_logits.empty()) {
     int32_t n_total = (int32_t)(accumulated_logits.size() / (size_t)vocab_size);
+    const int64_t t_logits_inject_start = ggml_time_us();
     llama_set_logits_external(ctx, accumulated_logits.data(), n_total);
+    last_multi_context_prefill_profile_.logits_inject_us += ggml_time_us() - t_logits_inject_start;
     
     if (config_.log_level >= 2) {
       std::cout << "[Multi-Context Prefill] Injected logits for " << n_total 
@@ -966,6 +997,7 @@ bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
   auto& bindings = shard.prefill_alloc->bindings();
   
   // Setup KV cache override for this shard's layers
+  const int64_t t_kv_override_start = ggml_time_us();
   std::map<std::string, void*> kv_override;
   int shard_layer_start = shard_idx * layers_per_shard_;
   int shard_layer_end = shard_layer_start + layers_per_shard_;
@@ -1007,12 +1039,14 @@ bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
       }
     }
   }
+  last_multi_context_prefill_profile_.shard_kv_override_us += ggml_time_us() - t_kv_override_start;
   
   if (config_.log_level >= 2) {
     std::cout << "[Shard " << shard_idx << "] KV cache bound: " << kv_override.size() << " tensors\n";
   }
   
   // 1. Fill input buffers
+  const int64_t t_input_fill_start = ggml_time_us();
   if (shard_idx == 0) {
     if (config_.log_level >= 2) {
       std::cout << "[Shard 0] Filling inputs: " << tokens.size() << " tokens\n";
@@ -1106,8 +1140,10 @@ bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
       }
     }
   }
+  last_multi_context_prefill_profile_.shard_input_fill_us += ggml_time_us() - t_input_fill_start;
   
   // 2. Build tensor lists and execute
+  const int64_t t_tensor_build_start = ggml_time_us();
   std::vector<Qnn_Tensor_t> inputs, outputs;
   
   for (size_t i = 0; i < shard.prefill_graph->inputs.size() && i < shard.prefill_input_holders.size(); ++i) { // [spagetti] tensor_t 만드는 방식이 이런식으로 하는게 맞나?
@@ -1139,22 +1175,26 @@ bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
     shard.prefill_output_holders[i]->update_buffer(it->second, t.nbytes);
     outputs.push_back(shard.prefill_output_holders[i]->tensor());
   }
+  last_multi_context_prefill_profile_.shard_tensor_build_us += ggml_time_us() - t_tensor_build_start;
   
   if (config_.log_level >= 2) {
     std::cout << "[Shard " << shard_idx << "] Executing with " << inputs.size() 
               << " inputs, " << outputs.size() << " outputs...\n";
   }
   
+  const int64_t t_execute_start = ggml_time_us();
   if (!loader_->execute_graph(shard_idx, "prefill_forward", inputs, outputs)) {
     error_msg_ = "Shard " + std::to_string(shard_idx) + " prefill execution failed";
     return false;
   }
+  last_multi_context_prefill_profile_.shard_execute_us += ggml_time_us() - t_execute_start;
   
   if (config_.log_level >= 2) {
     std::cout << "[Shard " << shard_idx << "] Execute completed\n";
   }
   
   // Copy outputs to shared buffers for next shard
+  const int64_t t_output_copy_start = ggml_time_us();
   if (config_.log_level >= 2) {
     std::cout << "[Shard " << shard_idx << "] Copying outputs...\n";
     if (shard_idx == 7) {
@@ -1209,6 +1249,7 @@ bool LLMDecodeRunner::run_shard_prefill(int shard_idx,
   if (config_.log_level >= 2) {
     std::cout << "[Shard " << shard_idx << "] Output copy completed\n";
   }
+  last_multi_context_prefill_profile_.shard_output_copy_us += ggml_time_us() - t_output_copy_start;
   
   if (config_.log_level >= 2) {
     std::cout << "[Shard " << shard_idx << " Prefill] ✓\n";

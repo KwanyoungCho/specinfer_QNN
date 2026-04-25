@@ -35,6 +35,7 @@ struct llama_cparams {
     bool op_offload;
     bool kv_unified;
     bool snapkv;
+    bool eagle_hidden_only;
 
     uint32_t snapkv_obs_window;
     uint32_t snapkv_budget;

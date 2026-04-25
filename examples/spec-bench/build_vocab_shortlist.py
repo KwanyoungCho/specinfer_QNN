@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -256,8 +257,8 @@ def iter_categories(
 def write_shortlist(path: Path, token_ids: list[int]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
-        for token_id in token_ids:
-            f.write(f"{token_id}\n")
+        json.dump(sorted(token_ids), f, ensure_ascii=False)
+        f.write("\n")
 
 
 def parse_args() -> argparse.Namespace:
@@ -346,9 +347,9 @@ def main() -> int:
 
         shortlist_token_ids = [int(row["token_id"]) for row in scored_rows[: args.top_k]]
         if category == OVERALL:
-            write_shortlist(output_dir / "shortlist_global_topK.txt", shortlist_token_ids)
+            write_shortlist(output_dir / "shortlist_global_topK.json", shortlist_token_ids)
         else:
-            filename = f"{sanitize_category_filename(category)}_topK.txt"
+            filename = f"{sanitize_category_filename(category)}_topK.json"
             write_shortlist(shortlist_by_category_dir / filename, shortlist_token_ids)
 
     score_path = output_dir / "shortlist_scores.csv"
@@ -373,7 +374,7 @@ def main() -> int:
             writer.writerow(row)
 
     print(f"Saved shortlist scores to {score_path}")
-    print(f"Saved global shortlist to {output_dir / 'shortlist_global_topK.txt'}")
+    print(f"Saved global shortlist to {output_dir / 'shortlist_global_topK.json'}")
     if len(categories) > 1:
         print(f"Saved category shortlists under {shortlist_by_category_dir}")
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -36,6 +37,13 @@ struct QnnJsonGraphDesc {
 bool parse_qnn_json(const std::string& json_path,
                     std::map<std::string, QnnJsonGraphDesc>& out_graphs);
 
-} // namespace llama_qnn
+// QNN SystemContext binary info에서 그래프 I/O를 직접 파싱한다.
+// - system_so_handle: dlopen()으로 연 libQnnSystem.so 핸들
+// - binary/binary_size: forward_<i>.bin 메모리 버퍼
+bool parse_qnn_binary_info(void* system_so_handle,
+                           const void* binary,
+                           size_t binary_size,
+                           std::map<std::string, QnnJsonGraphDesc>& out_graphs);
 
+} // namespace llama_qnn
 

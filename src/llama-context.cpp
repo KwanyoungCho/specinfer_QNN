@@ -59,6 +59,7 @@ llama_context::llama_context(
     cparams.no_perf          = params.no_perf;
     cparams.pooling_type     = params.pooling_type;
     cparams.warmup           = false;
+    cparams.eagle_hidden_only = false;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
     cparams.rope_freq_base   = params.rope_freq_base  == 0.0f ? hparams.rope_freq_base_train  : params.rope_freq_base;
@@ -278,6 +279,9 @@ llama_context::llama_context(
 
         gf_res_prev.reset(new llm_graph_result(max_nodes));
         gf_res_reserve.reset(new llm_graph_result(max_nodes));
+        if (model.arch == LLM_ARCH_EAGLE) {
+            gf_res_prev_eagle_hidden.reset(new llm_graph_result(max_nodes));
+        }
 
         // TODO: move these checks to ggml_backend_sched
         // enabling pipeline parallelism in the scheduler increases memory usage, so it is only done when necessary
@@ -308,6 +312,15 @@ llama_context::llama_context(
         }
 
         sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, pipeline_parallel, cparams.op_offload));
+        if (model.arch == LLM_ARCH_EAGLE) {
+            sched_eagle_hidden.reset(ggml_backend_sched_new(
+                    backend_ptrs.data(),
+                    backend_buft.data(),
+                    backend_ptrs.size(),
+                    max_nodes,
+                    pipeline_parallel,
+                    cparams.op_offload));
+        }
 
         if (pipeline_parallel) {
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(sched.get()));
@@ -465,6 +478,9 @@ void llama_context::synchronize() {
     }
 
     ggml_backend_sched_synchronize(sched.get());
+    if (sched_eagle_hidden) {
+        ggml_backend_sched_synchronize(sched_eagle_hidden.get());
+    }
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
@@ -503,6 +519,45 @@ const llama_cparams & llama_context::get_cparams() const {
 
 ggml_backend_sched_t llama_context::get_sched() const {
     return sched.get();
+}
+
+ggml_backend_sched_t llama_context::graph_sched_for_mode(bool eagle_hidden_only) const {
+    if (model.arch == LLM_ARCH_EAGLE && eagle_hidden_only && sched_eagle_hidden) {
+        return sched_eagle_hidden.get();
+    }
+
+    return sched.get();
+}
+
+ggml_backend_sched_t llama_context::graph_sched_for_current_mode() const {
+    return graph_sched_for_mode(cparams.eagle_hidden_only);
+}
+
+llm_graph_result * llama_context::eagle_graph_result_for_mode(bool eagle_hidden_only) const {
+    if (model.arch == LLM_ARCH_EAGLE && eagle_hidden_only && gf_res_prev_eagle_hidden) {
+        return gf_res_prev_eagle_hidden.get();
+    }
+
+    return gf_res_prev.get();
+}
+
+llm_graph_result * llama_context::eagle_graph_result_for_current_mode() const {
+    return eagle_graph_result_for_mode(cparams.eagle_hidden_only);
+}
+
+void llama_context::reset_eagle_graph_cache() {
+    if (gf_res_prev) {
+        gf_res_prev->reset();
+    }
+    if (gf_res_prev_eagle_hidden) {
+        gf_res_prev_eagle_hidden->reset();
+    }
+}
+
+void llama_context::reset_eagle_runtime_output_graph_cache() {
+    if (gf_res_prev) {
+        gf_res_prev->reset();
+    }
 }
 
 uint32_t llama_context::n_ctx() const {
@@ -565,7 +620,10 @@ bool llama_context::memory_update(bool optimize) {
         // reset the previous graph result to make sure that it won't be reused
         // TODO: change the mctx->apply() to return information if a graph reserve is needed
         //       reset the graph result only if the memory module did reset the scheduler
-        gf_res_prev->reset();
+        reset_eagle_graph_cache();
+        if (sched_eagle_hidden) {
+            ggml_backend_sched_reset(sched_eagle_hidden.get());
+        }
 
         if (!mctx->apply()) {
             LLAMA_LOG_ERROR("%s: failed to apply memory update\n", __func__);
@@ -631,7 +689,7 @@ float * llama_context::get_logits_ith(int32_t i) {
         }
 
         // return logits + j*model.vocab.n_tokens();
-        return logits + j*model.n_vocab_out(); // by jongjip
+        return logits + j*output_n_vocab(); // by jongjip
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -715,8 +773,7 @@ void llama_set_logits_external(
         return;
     }
 
-    const llama_model & model = ctx->get_model();
-    const uint32_t n_vocab = model.n_vocab_out();
+    const uint32_t n_vocab = ctx->output_n_vocab();
 
     std::memcpy(dst, logits, sizeof(float) * (size_t) n_outputs * n_vocab);
 
@@ -783,6 +840,228 @@ void llama_context::set_warmup(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
     cparams.warmup = value;
+}
+
+void llama_context::set_eagle_hidden_only(bool value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    cparams.eagle_hidden_only = value;
+}
+
+bool llama_context::set_eagle_runtime_output(const void * weights, size_t n_bytes, int32_t n_rows) {
+    if (weights == nullptr || n_rows <= 0) {
+        LLAMA_LOG_ERROR("%s: invalid runtime output payload\n", __func__);
+        return false;
+    }
+    if (model.arch != LLM_ARCH_EAGLE) {
+        LLAMA_LOG_ERROR("%s: runtime EAGLE output is only supported for EAGLE models\n", __func__);
+        return false;
+    }
+    if (model.output == nullptr) {
+        LLAMA_LOG_ERROR("%s: model output tensor is null\n", __func__);
+        return false;
+    }
+
+    const size_t row_bytes = model.output->nb[1];
+    const size_t expected_nbytes = row_bytes * (size_t) n_rows;
+    if (row_bytes == 0 || n_bytes != expected_nbytes) {
+        LLAMA_LOG_ERROR("%s: invalid runtime output size: got %zu bytes, expected %zu\n",
+                __func__, n_bytes, expected_nbytes);
+        return false;
+    }
+
+    ggml_backend_t output_backend = resolve_output_backend();
+    if (output_backend == nullptr) {
+        LLAMA_LOG_ERROR("%s: failed to resolve output backend for runtime EAGLE head\n", __func__);
+        return false;
+    }
+
+    const bool need_realloc =
+            t_eagle_runtime_output == nullptr ||
+            eagle_runtime_output_borrowed ||
+            n_eagle_runtime_output != (uint32_t) n_rows ||
+            t_eagle_runtime_output->type != model.output->type ||
+            t_eagle_runtime_output->ne[0] != model.output->ne[0];
+
+    if (need_realloc) {
+        clear_eagle_runtime_output();
+
+        ggml_init_params params = {
+            /* .mem_size   = */ ggml_tensor_overhead() * 8,
+            /* .mem_buffer = */ nullptr,
+            /* .no_alloc   = */ true,
+        };
+        ctx_eagle_runtime_output.reset(ggml_init(params));
+        if (!ctx_eagle_runtime_output) {
+            LLAMA_LOG_ERROR("%s: ggml_init failed for runtime EAGLE output tensor\n", __func__);
+            return false;
+        }
+
+        t_eagle_runtime_output = ggml_new_tensor_2d(
+                ctx_eagle_runtime_output.get(),
+                model.output->type,
+                model.output->ne[0],
+                n_rows);
+        if (t_eagle_runtime_output == nullptr) {
+            LLAMA_LOG_ERROR("%s: failed to create runtime EAGLE output tensor\n", __func__);
+            clear_eagle_runtime_output();
+            return false;
+        }
+        ggml_set_name(t_eagle_runtime_output, "eagle_runtime_output");
+
+        buf_eagle_runtime_output.reset(ggml_backend_alloc_ctx_tensors(ctx_eagle_runtime_output.get(), output_backend));
+        if (!buf_eagle_runtime_output) {
+            LLAMA_LOG_ERROR("%s: failed to allocate runtime EAGLE output buffer\n", __func__);
+            clear_eagle_runtime_output();
+            return false;
+        }
+        ggml_backend_buffer_set_usage(buf_eagle_runtime_output.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        n_eagle_runtime_output = (uint32_t) n_rows;
+        eagle_runtime_output_borrowed = false;
+        eagle_runtime_output_owner.reset();
+    }
+
+    GGML_ASSERT(t_eagle_runtime_output != nullptr);
+    ggml_backend_tensor_set(t_eagle_runtime_output, weights, 0, expected_nbytes);
+    return true;
+}
+
+bool llama_context::set_eagle_runtime_output_copy(ggml_tensor * src, int32_t n_rows) {
+    if (src == nullptr || n_rows <= 0) {
+        LLAMA_LOG_ERROR("%s: invalid runtime output source tensor\n", __func__);
+        return false;
+    }
+    if (model.arch != LLM_ARCH_EAGLE) {
+        LLAMA_LOG_ERROR("%s: runtime EAGLE output is only supported for EAGLE models\n", __func__);
+        return false;
+    }
+    if (model.output == nullptr) {
+        LLAMA_LOG_ERROR("%s: model output tensor is null\n", __func__);
+        return false;
+    }
+
+    if (src->type != model.output->type || src->ne[0] != model.output->ne[0] || src->ne[1] != n_rows) {
+        LLAMA_LOG_ERROR("%s: runtime output source layout mismatch\n", __func__);
+        return false;
+    }
+
+    const size_t expected_nbytes = model.output->nb[1] * (size_t) n_rows;
+    if (ggml_nbytes(src) != expected_nbytes) {
+        LLAMA_LOG_ERROR("%s: runtime output source bytes mismatch: got %zu expected %zu\n",
+                __func__, ggml_nbytes(src), expected_nbytes);
+        return false;
+    }
+
+    ggml_backend_t output_backend = resolve_output_backend();
+    if (output_backend == nullptr) {
+        LLAMA_LOG_ERROR("%s: failed to resolve output backend for runtime EAGLE head\n", __func__);
+        return false;
+    }
+
+    const bool need_realloc =
+            t_eagle_runtime_output == nullptr ||
+            eagle_runtime_output_borrowed ||
+            n_eagle_runtime_output != (uint32_t) n_rows ||
+            t_eagle_runtime_output->type != model.output->type ||
+            t_eagle_runtime_output->ne[0] != model.output->ne[0];
+
+    if (need_realloc) {
+        clear_eagle_runtime_output();
+
+        ggml_init_params params = {
+            /* .mem_size   = */ ggml_tensor_overhead() * 8,
+            /* .mem_buffer = */ nullptr,
+            /* .no_alloc   = */ true,
+        };
+        ctx_eagle_runtime_output.reset(ggml_init(params));
+        if (!ctx_eagle_runtime_output) {
+            LLAMA_LOG_ERROR("%s: ggml_init failed for runtime EAGLE output tensor\n", __func__);
+            return false;
+        }
+
+        t_eagle_runtime_output = ggml_new_tensor_2d(
+                ctx_eagle_runtime_output.get(),
+                model.output->type,
+                model.output->ne[0],
+                n_rows);
+        if (t_eagle_runtime_output == nullptr) {
+            LLAMA_LOG_ERROR("%s: failed to create runtime EAGLE output tensor\n", __func__);
+            clear_eagle_runtime_output();
+            return false;
+        }
+        ggml_set_name(t_eagle_runtime_output, "eagle_runtime_output");
+
+        buf_eagle_runtime_output.reset(ggml_backend_alloc_ctx_tensors(ctx_eagle_runtime_output.get(), output_backend));
+        if (!buf_eagle_runtime_output) {
+            LLAMA_LOG_ERROR("%s: failed to allocate runtime EAGLE output buffer\n", __func__);
+            clear_eagle_runtime_output();
+            return false;
+        }
+        ggml_backend_buffer_set_usage(buf_eagle_runtime_output.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        n_eagle_runtime_output = (uint32_t) n_rows;
+        eagle_runtime_output_borrowed = false;
+        eagle_runtime_output_owner.reset();
+    }
+
+    GGML_ASSERT(t_eagle_runtime_output != nullptr);
+    ggml_backend_tensor_copy(src, t_eagle_runtime_output);
+    return true;
+}
+
+bool llama_context::set_eagle_runtime_output_borrowed(ggml_tensor * src, int32_t n_rows, std::shared_ptr<void> owner) {
+    if (src == nullptr || n_rows <= 0) {
+        LLAMA_LOG_ERROR("%s: invalid borrowed runtime output tensor\n", __func__);
+        return false;
+    }
+    if (model.arch != LLM_ARCH_EAGLE) {
+        LLAMA_LOG_ERROR("%s: runtime EAGLE output is only supported for EAGLE models\n", __func__);
+        return false;
+    }
+    if (model.output == nullptr) {
+        LLAMA_LOG_ERROR("%s: model output tensor is null\n", __func__);
+        return false;
+    }
+    if (src->type != model.output->type || src->ne[0] != model.output->ne[0] || src->ne[1] != n_rows) {
+        LLAMA_LOG_ERROR("%s: borrowed runtime output source layout mismatch\n", __func__);
+        return false;
+    }
+    if (src->buffer == nullptr) {
+        LLAMA_LOG_ERROR("%s: borrowed runtime output tensor has no backend buffer\n", __func__);
+        return false;
+    }
+
+    const bool replacing_borrowed =
+            eagle_runtime_output_borrowed &&
+            (t_eagle_runtime_output != src || n_eagle_runtime_output != (uint32_t) n_rows);
+    if (replacing_borrowed) {
+        // Drop graphs that may still reference the previous borrowed tensor before
+        // releasing its owner. This keeps the zero-copy runtime head path from
+        // dangling across rounds. The hidden-only EAGLE recompute graph does not
+        // consume the runtime output, so keep that cache intact across bucket
+        // switches.
+        reset_eagle_runtime_output_graph_cache();
+    }
+
+    if (!eagle_runtime_output_borrowed) {
+        buf_eagle_runtime_output.reset();
+        ctx_eagle_runtime_output.reset();
+    }
+
+    t_eagle_runtime_output = src;
+    n_eagle_runtime_output = (uint32_t) n_rows;
+    eagle_runtime_output_borrowed = true;
+    eagle_runtime_output_owner = std::move(owner);
+    return true;
+}
+
+void llama_context::clear_eagle_runtime_output() {
+    reset_eagle_runtime_output_graph_cache();
+    t_eagle_runtime_output = nullptr;
+    n_eagle_runtime_output = 0;
+    eagle_runtime_output_borrowed = false;
+    eagle_runtime_output_owner.reset();
+    buf_eagle_runtime_output.reset();
+    ctx_eagle_runtime_output.reset();
 }
 
 void llama_context::set_adapter_lora(
@@ -888,34 +1167,38 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 }
 
 llm_graph_result * llama_context::process_ubatch_eagle(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret, void * data) {
+    const int64_t t_call_begin_us = ggml_time_us();
+    ggml_backend_sched_t sched_cur = graph_sched_for_current_mode();
+
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
 
-    auto * res = gf_res_prev.get();
+    const int64_t t_after_apply_us = ggml_time_us();
+    t_eagle_apply_mctx_us += (t_after_apply_us - t_call_begin_us);
+
+    auto * res = eagle_graph_result_for_current_mode();
     auto * gf  = res->get_gf();
 
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
+    const int64_t t_before_build_us = ggml_time_us();
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
         n_reused++;
+        n_eagle_graph_reused++;
     } else {
         res->reset();
 
-        ggml_backend_sched_reset(sched.get());
-        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
-
-        //const auto t_start_us = ggml_time_us();
+        ggml_backend_sched_reset(sched_cur);
+        ggml_backend_sched_set_eval_callback(sched_cur, cparams.cb_eval, cparams.cb_eval_user_data);
 
         gf = model.build_graph(gparams);
-
-        //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
 
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
@@ -923,24 +1206,30 @@ llm_graph_result * llama_context::process_ubatch_eagle(const llama_ubatch & ubat
             return nullptr;
         }
 
-        if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+        if (!ggml_backend_sched_alloc_graph(sched_cur, gf)) {
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
         }
+
+        n_eagle_graph_rebuilt++;
     }
+    const int64_t t_after_build_us = ggml_time_us();
+    t_eagle_graph_build_us += (t_after_build_us - t_before_build_us);
 
     // set the input data for the input tensors
     {
-        //const auto t_start_us = ggml_time_us();
-
         res->set_inputs(&ubatch);
         ggml_backend_tensor_set(res->get_hidden_states(), data, 0, ggml_element_size(res->get_hidden_states()) * model.hparams.n_embd * ubatch.n_tokens);
-
-        //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
+    const int64_t t_after_set_inputs_us = ggml_time_us();
+    t_eagle_set_inputs_us += (t_after_set_inputs_us - t_after_build_us);
 
-    const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    const auto status = graph_compute_with_sched(sched_cur, res->get_gf(), ubatch.n_tokens > 1);
+    const int64_t t_after_compute_us = ggml_time_us();
+    t_eagle_graph_compute_us += (t_after_compute_us - t_after_set_inputs_us);
+    n_eagle_decode_calls++;
+
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
@@ -963,7 +1252,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_embd  = hparams.n_embd_inp();
-    const int64_t n_vocab = model.n_vocab_out();
+    const int64_t n_vocab = output_n_vocab();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
     if (!balloc->init(batch_inp, model.vocab, nullptr, n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
@@ -1130,7 +1419,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & vocab   = model.vocab;
     const auto & hparams = model.hparams;
 
-    const int64_t n_vocab = model.n_vocab_out();
+    const int64_t n_vocab = output_n_vocab();
     const int64_t n_embd  = hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
@@ -1298,6 +1587,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         auto * t_logits = res->get_logits();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
+        ggml_backend_sched_t sched_cur = graph_sched_for_current_mode();
 
         if (t_embd && res->get_embd_pooled()) {
             t_embd = res->get_embd_pooled();
@@ -1305,9 +1595,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         // extract logits
         if (t_logits && n_outputs > 0) {
-            ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
+            ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched_cur, t_logits);
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits != nullptr);
+            GGML_ASSERT(t_logits->ne[0] == n_vocab);
 
             float * logits_out = logits + n_outputs_prev*n_vocab;
 
@@ -1320,7 +1611,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         // extract embeddings
         if (t_embd && n_outputs > 0) {
-            ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
+            ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched_cur, t_embd);
             GGML_ASSERT(backend_embd != nullptr);
 
             switch (cparams.pooling_type) {
@@ -1448,7 +1739,7 @@ int llama_context::decode_eagle(llama_batch & batch_inp, void * data) {
     const auto & vocab   = model.vocab;
     const auto & hparams = model.hparams;
 
-    const int64_t n_vocab = model.n_vocab_out();
+    const int64_t n_vocab = output_n_vocab();
     const int64_t n_embd  = hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
@@ -1566,6 +1857,8 @@ int llama_context::decode_eagle(llama_batch & batch_inp, void * data) {
 
         ggml_status status;
         const auto * res = process_ubatch_eagle(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status, ubatch_data);
+        // Tag: eagle decode path — the logits extract below must honor t_logits->ne[0]
+        // (may differ from model.n_vocab_out() when a fused reduced LM head is active).
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -1615,6 +1908,8 @@ int llama_context::decode_eagle(llama_batch & batch_inp, void * data) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits != nullptr);
+            GGML_ASSERT(t_logits->ne[0] == n_vocab);
+            GGML_ASSERT(t_logits->type == GGML_TYPE_F32);
 
             float * logits_out = logits + n_outputs_prev*n_vocab;
 
@@ -1746,12 +2041,11 @@ int llama_context::decode_eagle(llama_batch & batch_inp, void * data) {
 
 uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto & hparams = model.hparams;
-    const auto & vocab   = model.vocab;
 
     const int64_t n_outputs_max = std::max<int64_t>(n_outputs, n_seq_max());
 
     const auto n_batch = cparams.n_batch;
-    const auto n_vocab = model.n_vocab_out();
+    const auto n_vocab = output_n_vocab();
     const auto n_embd  = hparams.n_embd;
 
     bool has_logits = true;
@@ -1815,7 +2109,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 }
 
 void llama_context::output_reorder() {
-    const uint64_t n_vocab = model.n_vocab_out();
+    const uint64_t n_vocab = output_n_vocab();
     const uint64_t n_embd  = model.hparams.n_embd;
 
     for (size_t s = 0; s < output_swaps.size(); ++s) {
@@ -1853,6 +2147,7 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
 ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
+    ggml_backend_sched_t sched_cur = graph_sched_for_current_mode();
 
     if (n_tokens % n_seqs != 0) {
         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
@@ -1861,10 +2156,13 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
         LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
     }
 
-    ggml_backend_sched_reset(sched.get());
+    ggml_backend_sched_reset(sched_cur);
 
     // when the scheduler is reset, we cannnot reuse the old graph, so we reset the previous graph result to prevent that
-    gf_res_prev->reset();
+    reset_eagle_graph_cache();
+    if (sched_eagle_hidden) {
+        ggml_backend_sched_reset(sched_eagle_hidden.get());
+    }
 
     // store the n_outputs as it is, and restore it afterwards
     // TODO: not sure if needed, might simplify in the future by removing this
@@ -1887,8 +2185,8 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
 
     // initialize scheduler with the specified graph
     if (split_only) {
-        ggml_backend_sched_split_graph(sched.get(), gf);
-    } else if (!ggml_backend_sched_reserve(sched.get(), gf)) {
+        ggml_backend_sched_split_graph(sched_cur, gf);
+    } else if (!ggml_backend_sched_reserve(sched_cur, gf)) {
         LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
         return nullptr;
     }
@@ -1901,27 +2199,34 @@ llm_graph_params llama_context::graph_params(
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
             llm_graph_type   gtype) const {
+    ggml_backend_sched_t sched_cur = graph_sched_for_current_mode();
     return {
         /*.arch        =*/ model.arch,
         /*.hparams     =*/ model.hparams,
         /*.cparams     =*/ cparams,
         /*.ubatch      =*/ ubatch,
         /*.gtype       =*/ gtype,
-        /*.sched       =*/ sched.get(),
+        /*.sched       =*/ sched_cur,
         /*.backend_cpu =*/ backend_cpu,
         /*.cvec        =*/ &cvec,
         /*.loras       =*/ &loras,
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        // When EAGLE runs in hidden-only mode, the runtime output tensor is not used by the graph.
+        // Passing it through here would unnecessarily perturb the graph-cache key and increase
+        // rebuild cost during recompute, even though the output path is disabled.
+        /*.eagle_runtime_output      =*/ (model.arch == LLM_ARCH_EAGLE && !cparams.eagle_hidden_only) ? t_eagle_runtime_output : nullptr,
+        /*.eagle_runtime_output_rows =*/ (model.arch == LLM_ARCH_EAGLE && !cparams.eagle_hidden_only) ? n_eagle_runtime_output : 0,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
     };
 }
 
-ggml_status llama_context::graph_compute(
-            ggml_cgraph * gf,
-                   bool   batched) {
+ggml_status llama_context::graph_compute_with_sched(
+        ggml_backend_sched_t sched_cur,
+                  ggml_cgraph * gf,
+                         bool   batched) {
     int n_threads        = batched ? cparams.n_threads_batch : cparams.n_threads;
     ggml_threadpool_t tp = batched ? threadpool_batch        : threadpool;
 
@@ -1938,7 +2243,7 @@ ggml_status llama_context::graph_compute(
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
     }
 
-    auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+    auto status = ggml_backend_sched_graph_compute_async(sched_cur, gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
     }
@@ -1948,8 +2253,16 @@ ggml_status llama_context::graph_compute(
     return status;
 }
 
+ggml_status llama_context::graph_compute(
+            ggml_cgraph * gf,
+                   bool   batched) {
+    return graph_compute_with_sched(graph_sched_for_current_mode(), gf, batched);
+}
+
 llm_graph_cb llama_context::graph_get_cb() const {
     return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
+        ggml_backend_sched_t sched_cur = graph_sched_for_current_mode();
+
         if (il >= 0) {
             ggml_format_name(cur, "%s-%d", name, il);
         } else {
@@ -1959,7 +2272,7 @@ llm_graph_cb llama_context::graph_get_cb() const {
         if (!cparams.offload_kqv) {
             if (strcmp(name, "kqv_merged_cont") == 0) {
                 // all nodes between the KV store and the attention output are run on the CPU
-                ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend_cpu);
+                ggml_backend_sched_set_tensor_backend(sched_cur, cur, backend_cpu);
             }
         }
 
@@ -1972,13 +2285,48 @@ llm_graph_cb llama_context::graph_get_cb() const {
                 for (const auto & backend : backends) {
                     if (ggml_backend_get_device(backend.get()) == dev_layer) {
                         if (ggml_backend_supports_op(backend.get(), cur)) {
-                            ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend.get());
+                            ggml_backend_sched_set_tensor_backend(sched_cur, cur, backend.get());
                         }
                     }
                 }
             }
         }
+
+        if (!cparams.eagle_hidden_only &&
+            t_eagle_runtime_output != nullptr &&
+            strcmp(name, "result_output") == 0) {
+            ggml_backend_t output_backend = resolve_output_backend();
+            if (output_backend != nullptr && ggml_backend_supports_op(output_backend, cur)) {
+                ggml_backend_sched_set_tensor_backend(sched_cur, cur, output_backend);
+            }
+        }
     };
+}
+
+uint32_t llama_context::output_n_vocab() const {
+    if (model.arch == LLM_ARCH_EAGLE &&
+        !cparams.eagle_hidden_only &&
+        t_eagle_runtime_output != nullptr &&
+        n_eagle_runtime_output > 0) {
+        return n_eagle_runtime_output;
+    }
+
+    return model.n_vocab_out();
+}
+
+ggml_backend_t llama_context::resolve_output_backend() const {
+    ggml_backend_dev_t output_dev = model.dev_output();
+    if (output_dev == nullptr) {
+        return backend_cpu;
+    }
+
+    for (const auto & backend : backends) {
+        if (backend != nullptr && ggml_backend_get_device(backend.get()) == output_dev) {
+            return backend.get();
+        }
+    }
+
+    return backend_cpu;
 }
 
 //
@@ -2519,6 +2867,10 @@ std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> llama_context:
     for (const auto & backend_ptr : backends) {
         ggml_backend_t backend = backend_ptr.get();
         ret[ggml_backend_sched_get_buffer_type(sched.get(), backend)].compute += ggml_backend_sched_get_buffer_size(sched.get(), backend);
+        if (sched_eagle_hidden) {
+            ret[ggml_backend_sched_get_buffer_type(sched_eagle_hidden.get(), backend)].compute +=
+                    ggml_backend_sched_get_buffer_size(sched_eagle_hidden.get(), backend);
+        }
     }
     return ret;
 }
@@ -2943,6 +3295,22 @@ void llama_set_warmup(llama_context * ctx, bool warmup) {
     ctx->set_warmup(warmup);
 }
 
+void llama_set_eagle_hidden_only(llama_context * ctx, bool eagle_hidden_only) {
+    ctx->set_eagle_hidden_only(eagle_hidden_only);
+}
+
+bool llama_set_eagle_runtime_output(
+        llama_context * ctx,
+        const void    * weights,
+               size_t   n_bytes,
+               int32_t  n_rows) {
+    return ctx->set_eagle_runtime_output(weights, n_bytes, n_rows);
+}
+
+void llama_clear_eagle_runtime_output(llama_context * ctx) {
+    ctx->clear_eagle_runtime_output();
+}
+
 void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
 }
@@ -3303,6 +3671,34 @@ void llama_perf_context_print(const llama_context * ctx) {
 
 void llama_perf_context_reset(llama_context * ctx) {
     ctx->perf_reset();
+}
+
+struct llama_perf_eagle_draft_data llama_perf_eagle_draft(const struct llama_context * ctx) {
+    llama_perf_eagle_draft_data data = {};
+    if (ctx == nullptr) {
+        return data;
+    }
+    data.t_apply_mctx_us    = ctx->t_eagle_apply_mctx_us;
+    data.t_graph_build_us   = ctx->t_eagle_graph_build_us;
+    data.t_set_inputs_us    = ctx->t_eagle_set_inputs_us;
+    data.t_graph_compute_us = ctx->t_eagle_graph_compute_us;
+    data.n_decode_calls     = ctx->n_eagle_decode_calls;
+    data.n_graph_reused     = ctx->n_eagle_graph_reused;
+    data.n_graph_rebuilt    = ctx->n_eagle_graph_rebuilt;
+    return data;
+}
+
+void llama_perf_eagle_draft_reset(struct llama_context * ctx) {
+    if (ctx == nullptr) {
+        return;
+    }
+    ctx->t_eagle_apply_mctx_us    = 0;
+    ctx->t_eagle_graph_build_us   = 0;
+    ctx->t_eagle_set_inputs_us    = 0;
+    ctx->t_eagle_graph_compute_us = 0;
+    ctx->n_eagle_decode_calls     = 0;
+    ctx->n_eagle_graph_reused     = 0;
+    ctx->n_eagle_graph_rebuilt    = 0;
 }
 
 void llama_memory_breakdown_print(const struct llama_context * ctx) {

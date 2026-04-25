@@ -4,6 +4,7 @@
 
 #include "common.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,69 @@
 
 struct common_sampler;
 
+struct common_sampler_profile_snapshot {
+    int64_t sample_calls = 0;
+    int64_t sample_total_us = 0;
+    int64_t sync_us = 0;
+    int64_t set_logits_us = 0;
+    int64_t get_logits_us = 0;
+    int64_t build_candidates_us = 0;
+    int64_t grammar_apply_us = 0;
+    int64_t chain_apply_us = 0;
+    int64_t grammar_check_us = 0;
+    int64_t resample_count = 0;
+    int64_t resample_set_logits_us = 0;
+    int64_t resample_get_logits_us = 0;
+    int64_t resample_build_candidates_us = 0;
+    int64_t resample_grammar_apply_us = 0;
+    int64_t resample_chain_apply_us = 0;
+};
+
+inline common_sampler_profile_snapshot common_sampler_profile_diff(
+        const common_sampler_profile_snapshot & end,
+        const common_sampler_profile_snapshot & begin) {
+    common_sampler_profile_snapshot diff;
+    diff.sample_calls                 = end.sample_calls                 - begin.sample_calls;
+    diff.sample_total_us              = end.sample_total_us              - begin.sample_total_us;
+    diff.sync_us                      = end.sync_us                      - begin.sync_us;
+    diff.set_logits_us                = end.set_logits_us                - begin.set_logits_us;
+    diff.get_logits_us                = end.get_logits_us                - begin.get_logits_us;
+    diff.build_candidates_us          = end.build_candidates_us          - begin.build_candidates_us;
+    diff.grammar_apply_us             = end.grammar_apply_us             - begin.grammar_apply_us;
+    diff.chain_apply_us               = end.chain_apply_us               - begin.chain_apply_us;
+    diff.grammar_check_us             = end.grammar_check_us             - begin.grammar_check_us;
+    diff.resample_count               = end.resample_count               - begin.resample_count;
+    diff.resample_set_logits_us       = end.resample_set_logits_us       - begin.resample_set_logits_us;
+    diff.resample_get_logits_us       = end.resample_get_logits_us       - begin.resample_get_logits_us;
+    diff.resample_build_candidates_us = end.resample_build_candidates_us - begin.resample_build_candidates_us;
+    diff.resample_grammar_apply_us    = end.resample_grammar_apply_us    - begin.resample_grammar_apply_us;
+    diff.resample_chain_apply_us      = end.resample_chain_apply_us      - begin.resample_chain_apply_us;
+    return diff;
+}
+
+inline void common_sampler_profile_accumulate(
+        common_sampler_profile_snapshot & dst,
+        const common_sampler_profile_snapshot & src) {
+    dst.sample_calls                 += src.sample_calls;
+    dst.sample_total_us              += src.sample_total_us;
+    dst.sync_us                      += src.sync_us;
+    dst.set_logits_us                += src.set_logits_us;
+    dst.get_logits_us                += src.get_logits_us;
+    dst.build_candidates_us          += src.build_candidates_us;
+    dst.grammar_apply_us             += src.grammar_apply_us;
+    dst.chain_apply_us               += src.chain_apply_us;
+    dst.grammar_check_us             += src.grammar_check_us;
+    dst.resample_count               += src.resample_count;
+    dst.resample_set_logits_us       += src.resample_set_logits_us;
+    dst.resample_get_logits_us       += src.resample_get_logits_us;
+    dst.resample_build_candidates_us += src.resample_build_candidates_us;
+    dst.resample_grammar_apply_us    += src.resample_grammar_apply_us;
+    dst.resample_chain_apply_us      += src.resample_chain_apply_us;
+}
+
+void common_sampler_profile_reset();
+common_sampler_profile_snapshot common_sampler_profile_get();
+
 // llama_sampler API overloads
 
 struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params);
@@ -59,6 +123,27 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
 // useful in cases where all the resulting candidates (not just the sampled one) must fit the grammar
 //
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first = false);
+
+// apply the configured sampler chain to an externally supplied candidate set
+// candidates should contain token ids in the model token-id space and raw logits
+// when grammar_first is true, grammar constraints are applied before the sampler chain
+// if do_sort == true, the returned candidates are sorted by probability in descending order
+llama_token_data_array * common_sampler_apply_candidates(
+        struct common_sampler * gsmpl,
+        const llama_token_data * candidates,
+        size_t size,
+        bool grammar_first = false,
+        bool do_sort = false);
+
+// apply the configured sampler chain to token/logit pairs without forcing the
+// caller to materialize an intermediate llama_token_data array first
+llama_token_data_array * common_sampler_apply_logits(
+        struct common_sampler * gsmpl,
+        const llama_token * token_ids,
+        const float * logits,
+        size_t size,
+        bool grammar_first = false,
+        bool do_sort = false);
 
 // generalized version of common_sampler_sample
 //

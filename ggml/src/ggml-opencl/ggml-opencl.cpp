@@ -15,17 +15,21 @@
 
 #include <CL/cl.h>
 
+#include <algorithm>
 #include <inttypes.h>
 #include <string.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <vector>
 #include <string>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <memory>
+#include <queue>
 #include <charconv>
 #include <mutex>
 
@@ -477,9 +481,10 @@ struct ggml_backend_opencl_context {
     std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_f32_f16_q1;
     std::map<std::pair<int, int>, int>       kernels_flash_attn_bm;
     std::map<std::pair<int, int>, int>       kernels_flash_attn_bn;
-    cl_kernel kernel_get_rows_f32, kernel_get_rows_f16, kernel_get_rows_q4_0;
+    cl_kernel kernel_get_rows_f32, kernel_get_rows_f16, kernel_get_rows_q4_0, kernel_get_rows_q4_0_soa;
     cl_kernel kernel_set_rows_f32_i64, kernel_set_rows_f32_i32, kernel_set_rows_f16_i64, kernel_set_rows_f16_i32;
     cl_kernel kernel_set_rows_q4_0_i64, kernel_set_rows_q4_0_i32;
+    cl_kernel kernel_gather_rows_q4_0_transposed_i32, kernel_gather_rows_q4_0_transposed_i32_padded;
     cl_kernel kernel_rope_norm_f32, kernel_rope_norm_f16, kernel_rope_neox_f32, kernel_rope_neox_f16;
     cl_kernel kernel_rope_multi_f32, kernel_rope_multi_f16, kernel_rope_vision_f32, kernel_rope_vision_f16;
     cl_kernel kernel_cpy_f16_f16, kernel_cpy_f16_f32, kernel_cpy_f32_f16, kernel_cpy_f32_f32;
@@ -503,6 +508,39 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mv_q8_0_f32, kernel_mul_mv_q8_0_f32_flat;
     cl_kernel kernel_im2col_f32, kernel_im2col_f16;
     cl_kernel kernel_argsort_f32_i32;
+    cl_kernel kernel_init_i32_range;
+    cl_kernel kernel_fill_i32;
+    cl_kernel kernel_bitonic_sort_step_f32_i32;
+    cl_kernel kernel_bitonic_sort_step_i32;
+    cl_kernel kernel_topk_hist_f32          = nullptr;
+    cl_kernel kernel_topk_compact_f32       = nullptr;
+    cl_kernel kernel_softmax_threshold_reduce_max_f32 = nullptr;
+    cl_kernel kernel_softmax_threshold_reduce_sum_f32 = nullptr;
+    cl_kernel kernel_softmax_threshold_count_f32      = nullptr;
+    cl_kernel kernel_softmax_threshold_compact_f32    = nullptr;
+
+    // Pooled scratch buffers for the top-k / gather hot path. These are
+    // created on first use and reused across iterations to avoid per-call
+    // clCreateBuffer / clReleaseMemObject overhead.
+    cl_mem    topk_scores_pad_buf           = nullptr;
+    size_t    topk_scores_pad_cap_bytes     = 0;
+    cl_mem    topk_hist_buf                 = nullptr;
+    size_t    topk_hist_cap_bytes           = 0;
+    cl_mem    topk_counters_buf             = nullptr;   // 2 uints
+    cl_mem    topk_output_buf               = nullptr;   // up to `topk_output_cap` i32
+    size_t    topk_output_cap_bytes         = 0;
+    cl_mem    softmax_partial_max_buf       = nullptr;
+    size_t    softmax_partial_max_cap_bytes = 0;
+    cl_mem    softmax_partial_idx_buf       = nullptr;
+    size_t    softmax_partial_idx_cap_bytes = 0;
+    cl_mem    softmax_partial_sum_buf       = nullptr;
+    size_t    softmax_partial_sum_cap_bytes = 0;
+    cl_mem    softmax_block_counts_buf      = nullptr;
+    size_t    softmax_block_counts_cap_bytes = 0;
+    cl_mem    softmax_block_offsets_buf     = nullptr;
+    size_t    softmax_block_offsets_cap_bytes = 0;
+    cl_mem    gather_ids_pool_buf           = nullptr;
+    size_t    gather_ids_pool_cap_bytes     = 0;
     cl_kernel kernel_sum_rows_f32;
     cl_kernel kernel_repeat;
     cl_kernel kernel_pad;
@@ -526,6 +564,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mm_q8_0_f32_l4_lm;
 
     std::vector<ProfilingInfo> profiling_info;
+    std::mutex command_mutex;
 
     void write_profiling_info() {
         // static bool already_freed = false;
@@ -623,6 +662,7 @@ struct ggml_backend_opencl_context {
     }
 
     void enqueue_ndrange_kernel(cl_kernel kernel, cl_uint work_dim, size_t *global_work_size, size_t *local_work_size, const ggml_tensor * tensor) {
+        std::lock_guard<std::mutex> lock(command_mutex);
 #ifdef GGML_OPENCL_PROFILING
         cl_event evt;
         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, &evt));
@@ -670,6 +710,25 @@ struct ggml_backend_opencl_context {
             write_profiling_info();
             profiling_info.clear();
 #endif
+            if (topk_scores_pad_buf) { clReleaseMemObject(topk_scores_pad_buf); topk_scores_pad_buf = nullptr; }
+            if (topk_hist_buf)       { clReleaseMemObject(topk_hist_buf);       topk_hist_buf       = nullptr; }
+            if (topk_counters_buf)   { clReleaseMemObject(topk_counters_buf);   topk_counters_buf   = nullptr; }
+            if (topk_output_buf)     { clReleaseMemObject(topk_output_buf);     topk_output_buf     = nullptr; }
+            if (softmax_partial_max_buf)  { clReleaseMemObject(softmax_partial_max_buf);  softmax_partial_max_buf  = nullptr; }
+            if (softmax_partial_idx_buf)  { clReleaseMemObject(softmax_partial_idx_buf);  softmax_partial_idx_buf  = nullptr; }
+            if (softmax_partial_sum_buf)  { clReleaseMemObject(softmax_partial_sum_buf);  softmax_partial_sum_buf  = nullptr; }
+            if (softmax_block_counts_buf) { clReleaseMemObject(softmax_block_counts_buf); softmax_block_counts_buf = nullptr; }
+            if (softmax_block_offsets_buf){ clReleaseMemObject(softmax_block_offsets_buf); softmax_block_offsets_buf = nullptr; }
+            if (gather_ids_pool_buf) { clReleaseMemObject(gather_ids_pool_buf); gather_ids_pool_buf = nullptr; }
+            topk_scores_pad_cap_bytes = 0;
+            topk_hist_cap_bytes       = 0;
+            topk_output_cap_bytes     = 0;
+            softmax_partial_max_cap_bytes = 0;
+            softmax_partial_idx_cap_bytes = 0;
+            softmax_partial_sum_cap_bytes = 0;
+            softmax_block_counts_cap_bytes = 0;
+            softmax_block_offsets_cap_bytes = 0;
+            gather_ids_pool_cap_bytes = 0;
         }
     }
 };
@@ -904,6 +963,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         CL_CHECK((backend_ctx->kernel_get_rows_f32  = clCreateKernel(backend_ctx->program_get_rows, "kernel_get_rows_f32", &err), err));
         CL_CHECK((backend_ctx->kernel_get_rows_f16  = clCreateKernel(backend_ctx->program_get_rows, "kernel_get_rows_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_get_rows_q4_0 = clCreateKernel(backend_ctx->program_get_rows, "kernel_get_rows_q4_0", &err), err));
+        CL_CHECK((backend_ctx->kernel_get_rows_q4_0_soa = clCreateKernel(backend_ctx->program_get_rows, "kernel_get_rows_q4_0_soa", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -1571,6 +1631,26 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_argsort_f32_i32 = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_argsort_f32_i32", &err), err));
+        CL_CHECK((backend_ctx->kernel_init_i32_range = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_init_i32_range", &err), err));
+        CL_CHECK((backend_ctx->kernel_fill_i32 = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_fill_i32", &err), err));
+        CL_CHECK((backend_ctx->kernel_bitonic_sort_step_f32_i32 = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_bitonic_sort_step_f32_i32", &err), err));
+        CL_CHECK((backend_ctx->kernel_bitonic_sort_step_i32 = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_bitonic_sort_step_i32", &err), err));
+        backend_ctx->kernel_topk_hist_f32    = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_topk_hist_f32",    &err);
+        if (err != CL_SUCCESS) { backend_ctx->kernel_topk_hist_f32    = nullptr; }
+        backend_ctx->kernel_topk_compact_f32 = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_topk_compact_f32", &err);
+        if (err != CL_SUCCESS) { backend_ctx->kernel_topk_compact_f32 = nullptr; }
+        backend_ctx->kernel_softmax_threshold_reduce_max_f32 =
+                clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_softmax_threshold_reduce_max_f32", &err);
+        if (err != CL_SUCCESS) { backend_ctx->kernel_softmax_threshold_reduce_max_f32 = nullptr; }
+        backend_ctx->kernel_softmax_threshold_reduce_sum_f32 =
+                clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_softmax_threshold_reduce_sum_f32", &err);
+        if (err != CL_SUCCESS) { backend_ctx->kernel_softmax_threshold_reduce_sum_f32 = nullptr; }
+        backend_ctx->kernel_softmax_threshold_count_f32 =
+                clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_softmax_threshold_count_f32", &err);
+        if (err != CL_SUCCESS) { backend_ctx->kernel_softmax_threshold_count_f32 = nullptr; }
+        backend_ctx->kernel_softmax_threshold_compact_f32 =
+                clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_softmax_threshold_compact_f32", &err);
+        if (err != CL_SUCCESS) { backend_ctx->kernel_softmax_threshold_compact_f32 = nullptr; }
         GGML_LOG_CONT(".");
     }
 
@@ -1827,6 +1907,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         CL_CHECK((backend_ctx->kernel_set_rows_f16_i32 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_f16_i32", &err), err));
         CL_CHECK((backend_ctx->kernel_set_rows_q4_0_i64 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q4_0_i64", &err), err));
         CL_CHECK((backend_ctx->kernel_set_rows_q4_0_i32 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q4_0_i32", &err), err));
+        CL_CHECK((backend_ctx->kernel_gather_rows_q4_0_transposed_i32 = clCreateKernel(backend_ctx->program_set_rows, "kernel_gather_rows_q4_0_transposed_i32", &err), err));
+        CL_CHECK((backend_ctx->kernel_gather_rows_q4_0_transposed_i32_padded = clCreateKernel(backend_ctx->program_set_rows, "kernel_gather_rows_q4_0_transposed_i32_padded", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -2946,12 +3028,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 case GGML_TYPE_F16:
                     return true;
                 case GGML_TYPE_Q4_0:
-#ifdef GGML_OPENCL_SOA_Q
-                    // We do not support flattened Q4_0 (and possibly other Q's)
-                    return false;
-#else // GGML_OPENCL_SOA_Q
                     return true;
-#endif // GGML_OPENCL_SOA_Q
                 default:
                     return false;
             }
@@ -3523,6 +3600,1225 @@ inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ct
     return ((strstr(tensor->name, "ffn") != NULL) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 64 == 0);
 }
 
+static bool ggml_opencl_supports_gather_rows_q4_0_impl(
+        const ggml_backend_opencl_context * backend_ctx,
+        const ggml_tensor * src,
+        int32_t dst_rows) {
+#ifdef GGML_OPENCL_SOA_Q
+    if (backend_ctx == nullptr || src == nullptr) {
+        return false;
+    }
+
+    if (backend_ctx->gpu_family != ADRENO) {
+        return false;
+    }
+
+    if (src->type != GGML_TYPE_Q4_0 || src->buffer == nullptr || src->extra == nullptr) {
+        return false;
+    }
+
+    if (dst_rows <= 0 || (dst_rows % 8) != 0) {
+        return false;
+    }
+
+    if (src->ne[2] != 1 || src->ne[3] != 1 || !ggml_is_contiguous(src)) {
+        return false;
+    }
+
+    if (src->ne[0] % GGML_OPENCL_QK4_0 != 0) {
+        return false;
+    }
+
+    const auto * extra = (const ggml_tensor_extra_cl_q4_0 *) src->extra;
+    if (extra == nullptr || extra->q == nullptr || extra->d == nullptr) {
+        return false;
+    }
+
+    if (!use_adreno_kernels(backend_ctx, src)) {
+        return false;
+    }
+
+    ggml_tensor dst_shape = *src;
+    dst_shape.ne[1] = dst_rows;
+    dst_shape.ne[2] = 1;
+    dst_shape.ne[3] = 1;
+
+    return use_adreno_kernels(backend_ctx, &dst_shape);
+#else
+    GGML_UNUSED(backend_ctx);
+    GGML_UNUSED(src);
+    GGML_UNUSED(dst_rows);
+    return false;
+#endif
+}
+
+static int32_t ggml_opencl_top_k_padded_size(int32_t n_scores) {
+    if (n_scores <= 0) {
+        return 0;
+    }
+
+    int32_t padded = 1;
+    while (padded < n_scores && padded <= (std::numeric_limits<int32_t>::max() / 2)) {
+        padded *= 2;
+    }
+
+    return padded >= n_scores ? padded : 0;
+}
+
+bool ggml_backend_opencl_supports_gather_rows_q4_0(
+        ggml_backend_t backend,
+        const ggml_tensor * src,
+        int32_t dst_rows) {
+    if (!ggml_backend_is_opencl(backend)) {
+        return false;
+    }
+
+    const auto * backend_ctx = static_cast<const ggml_backend_opencl_context *>(backend->context);
+    return ggml_opencl_supports_gather_rows_q4_0_impl(backend_ctx, src, dst_rows);
+}
+
+bool ggml_backend_opencl_supports_top_k_f32(
+        ggml_backend_t backend) {
+    if (!ggml_backend_is_opencl(backend)) {
+        return false;
+    }
+
+    const auto * backend_ctx = static_cast<const ggml_backend_opencl_context *>(backend->context);
+    return backend_ctx != nullptr &&
+           backend_ctx->kernel_init_i32_range != nullptr &&
+           backend_ctx->kernel_bitonic_sort_step_f32_i32 != nullptr;
+}
+
+bool ggml_backend_opencl_supports_softmax_threshold_f32(
+        ggml_backend_t backend) {
+    if (!ggml_backend_is_opencl(backend)) {
+        return false;
+    }
+
+    const auto * backend_ctx = static_cast<const ggml_backend_opencl_context *>(backend->context);
+    return backend_ctx != nullptr &&
+           backend_ctx->kernel_softmax_threshold_reduce_max_f32 != nullptr &&
+           backend_ctx->kernel_softmax_threshold_reduce_sum_f32 != nullptr &&
+           backend_ctx->kernel_softmax_threshold_count_f32      != nullptr &&
+           backend_ctx->kernel_softmax_threshold_compact_f32    != nullptr;
+}
+
+// Ensure a pooled cl_mem buffer is at least `need_bytes`. Returns true on
+// success. Grows (re-creates) only when the current capacity is insufficient.
+static bool ggml_opencl_ensure_pool(
+        cl_context ctx,
+        cl_mem * buf,
+        size_t * cap_bytes,
+        size_t need_bytes,
+        cl_mem_flags flags) {
+    if (need_bytes == 0) {
+        return true;
+    }
+    if (*buf != nullptr && *cap_bytes >= need_bytes) {
+        return true;
+    }
+    if (*buf != nullptr) {
+        clReleaseMemObject(*buf);
+        *buf = nullptr;
+        *cap_bytes = 0;
+    }
+    cl_int err = CL_SUCCESS;
+    *buf = clCreateBuffer(ctx, flags, need_bytes, nullptr, &err);
+    if (err != CL_SUCCESS || *buf == nullptr) {
+        *buf = nullptr;
+        *cap_bytes = 0;
+        return false;
+    }
+    *cap_bytes = need_bytes;
+    return true;
+}
+
+// Bucket-select top-k. `n_buckets` is a power of two up to 4096; we use
+// B=2048 by default (11 bits of the f32 radix key). Returns the number of
+// indices actually written (typically top_k, <= n_scores). On failure
+// returns -1 so the caller can fall back to the bitonic path.
+static int32_t ggml_opencl_topk_bucket_select(
+        ggml_backend_opencl_context * backend_ctx,
+        cl_mem                        scores_buf,      // device-side padded scores
+        int32_t                       n_scores,
+        int32_t                       top_k,
+        cl_mem                        out_indices_buf  // at least top_k i32 slots
+) {
+    if (backend_ctx->kernel_topk_hist_f32    == nullptr ||
+        backend_ctx->kernel_topk_compact_f32 == nullptr) {
+        return -1;
+    }
+
+    constexpr int kBucketBits  = 11;
+    constexpr int kBucketCount = 1 << kBucketBits;
+    const int32_t bucket_shift = 32 - kBucketBits;
+
+    // Pooled histogram buffer.
+    if (!ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->topk_hist_buf,
+                &backend_ctx->topk_hist_cap_bytes,
+                sizeof(uint32_t) * (size_t) kBucketCount,
+                CL_MEM_READ_WRITE)) {
+        return -1;
+    }
+    if (backend_ctx->topk_counters_buf == nullptr) {
+        cl_int err = CL_SUCCESS;
+        backend_ctx->topk_counters_buf = clCreateBuffer(
+                backend_ctx->context, CL_MEM_READ_WRITE,
+                sizeof(uint32_t) * 2, nullptr, &err);
+        if (err != CL_SUCCESS || backend_ctx->topk_counters_buf == nullptr) {
+            backend_ctx->topk_counters_buf = nullptr;
+            return -1;
+        }
+    }
+
+    // Zero the histogram and counters.
+    const uint32_t zero = 0u;
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueFillBuffer(
+                backend_ctx->queue, backend_ctx->topk_hist_buf,
+                &zero, sizeof(uint32_t),
+                0, sizeof(uint32_t) * (size_t) kBucketCount,
+                0, nullptr, nullptr));
+        CL_CHECK(clEnqueueFillBuffer(
+                backend_ctx->queue, backend_ctx->topk_counters_buf,
+                &zero, sizeof(uint32_t),
+                0, sizeof(uint32_t) * 2,
+                0, nullptr, nullptr));
+    }
+
+    // Pass 1: histogram.
+    {
+        cl_kernel k = backend_ctx->kernel_topk_hist_f32;
+        CL_CHECK(clSetKernelArg(k, 0, sizeof(cl_mem), &scores_buf));
+        CL_CHECK(clSetKernelArg(k, 1, sizeof(int32_t), &n_scores));
+        CL_CHECK(clSetKernelArg(k, 2, sizeof(cl_mem), &backend_ctx->topk_hist_buf));
+        const int32_t nb = kBucketCount;
+        CL_CHECK(clSetKernelArg(k, 3, sizeof(int32_t), &nb));
+        CL_CHECK(clSetKernelArg(k, 4, sizeof(int32_t), &bucket_shift));
+
+        size_t lws = 256;
+        size_t gws = ((size_t) n_scores + lws - 1) / lws * lws;
+        size_t gws_arr[1] = { gws };
+        size_t lws_arr[1] = { lws };
+        ggml_tensor pt = {};
+        snprintf(pt.name, sizeof(pt.name), "topk_bucket_hist");
+        pt.ne[0] = n_scores; pt.ne[1] = 1; pt.ne[2] = 1; pt.ne[3] = 1;
+        backend_ctx->enqueue_ndrange_kernel(k, 1, gws_arr, lws_arr, &pt);
+    }
+
+    // Read histogram back to host and find threshold bucket. 2048 uints = 8KB.
+    uint32_t hist[kBucketCount];
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueReadBuffer(
+                backend_ctx->queue, backend_ctx->topk_hist_buf, CL_TRUE,
+                0, sizeof(hist), hist,
+                0, nullptr, nullptr));
+    }
+
+    uint32_t acc = 0;
+    int32_t  threshold_bucket = 0;
+    uint32_t taken_above = 0;
+    uint32_t quota_at    = 0;
+    const uint32_t kk = (uint32_t) top_k;
+    for (int b = kBucketCount - 1; b >= 0; --b) {
+        if (acc + hist[b] >= kk) {
+            threshold_bucket = b;
+            taken_above      = acc;
+            quota_at         = kk - acc;
+            break;
+        }
+        acc += hist[b];
+        if (b == 0) {
+            // All scores exhausted before reaching k — degenerate: fewer valid
+            // scores than top_k. Fill all we have from bucket 0.
+            threshold_bucket = 0;
+            taken_above      = acc;
+            quota_at         = (kk > acc) ? (kk - acc) : 0;
+        }
+    }
+
+    // Pass 2: compact.
+    {
+        cl_kernel k = backend_ctx->kernel_topk_compact_f32;
+        CL_CHECK(clSetKernelArg(k, 0, sizeof(cl_mem),  &scores_buf));
+        CL_CHECK(clSetKernelArg(k, 1, sizeof(int32_t), &n_scores));
+        CL_CHECK(clSetKernelArg(k, 2, sizeof(int32_t), &bucket_shift));
+        const uint32_t tb = (uint32_t) threshold_bucket;
+        CL_CHECK(clSetKernelArg(k, 3, sizeof(uint32_t), &tb));
+        CL_CHECK(clSetKernelArg(k, 4, sizeof(uint32_t), &taken_above));
+        CL_CHECK(clSetKernelArg(k, 5, sizeof(uint32_t), &quota_at));
+        CL_CHECK(clSetKernelArg(k, 6, sizeof(cl_mem),  &backend_ctx->topk_counters_buf));
+        CL_CHECK(clSetKernelArg(k, 7, sizeof(cl_mem),  &out_indices_buf));
+
+        size_t lws = 256;
+        size_t gws = ((size_t) n_scores + lws - 1) / lws * lws;
+        size_t gws_arr[1] = { gws };
+        size_t lws_arr[1] = { lws };
+        ggml_tensor pt = {};
+        snprintf(pt.name, sizeof(pt.name), "topk_bucket_compact");
+        pt.ne[0] = n_scores; pt.ne[1] = 1; pt.ne[2] = 1; pt.ne[3] = 1;
+        backend_ctx->enqueue_ndrange_kernel(k, 1, gws_arr, lws_arr, &pt);
+    }
+
+    return (int32_t) (taken_above + quota_at);
+}
+
+static int32_t ggml_opencl_softmax_threshold_select(
+        ggml_backend_opencl_context * backend_ctx,
+        cl_mem                        scores_buf,
+        int32_t                       n_scores,
+        float                         threshold,
+        int32_t                       max_count,
+        cl_mem                        out_indices_buf,
+        int32_t *                     out_total_above) {
+    if (backend_ctx == nullptr ||
+        backend_ctx->kernel_softmax_threshold_reduce_max_f32 == nullptr ||
+        backend_ctx->kernel_softmax_threshold_reduce_sum_f32 == nullptr ||
+        backend_ctx->kernel_softmax_threshold_count_f32      == nullptr ||
+        backend_ctx->kernel_softmax_threshold_compact_f32    == nullptr ||
+        n_scores <= 0 ||
+        threshold <= 0.0f ||
+        max_count <= 0 ||
+        out_indices_buf == nullptr) {
+        return -1;
+    }
+
+    constexpr int32_t kBlockSize = 256;
+    const int32_t n_blocks = (n_scores + kBlockSize - 1) / kBlockSize;
+    if (n_blocks <= 0) {
+        return -1;
+    }
+
+    const size_t partial_float_bytes = sizeof(float) * (size_t) n_blocks;
+    const size_t partial_i32_bytes   = sizeof(int32_t) * (size_t) n_blocks;
+    const size_t partial_u32_bytes   = sizeof(uint32_t) * (size_t) n_blocks;
+
+    if (!ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->softmax_partial_max_buf,
+                &backend_ctx->softmax_partial_max_cap_bytes,
+                partial_float_bytes,
+                CL_MEM_READ_WRITE) ||
+        !ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->softmax_partial_idx_buf,
+                &backend_ctx->softmax_partial_idx_cap_bytes,
+                partial_i32_bytes,
+                CL_MEM_READ_WRITE) ||
+        !ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->softmax_partial_sum_buf,
+                &backend_ctx->softmax_partial_sum_cap_bytes,
+                partial_float_bytes,
+                CL_MEM_READ_WRITE) ||
+        !ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->softmax_block_counts_buf,
+                &backend_ctx->softmax_block_counts_cap_bytes,
+                partial_u32_bytes,
+                CL_MEM_READ_WRITE) ||
+        !ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->softmax_block_offsets_buf,
+                &backend_ctx->softmax_block_offsets_cap_bytes,
+                partial_u32_bytes,
+                CL_MEM_READ_WRITE)) {
+        return -1;
+    }
+
+    const size_t lws = (size_t) kBlockSize;
+    const size_t gws = (size_t) n_blocks * lws;
+    size_t gws_arr[1] = { gws };
+    size_t lws_arr[1] = { lws };
+
+    {
+        cl_kernel k = backend_ctx->kernel_softmax_threshold_reduce_max_f32;
+        CL_CHECK(clSetKernelArg(k, 0, sizeof(cl_mem),  &scores_buf));
+        CL_CHECK(clSetKernelArg(k, 1, sizeof(int32_t), &n_scores));
+        CL_CHECK(clSetKernelArg(k, 2, sizeof(cl_mem),  &backend_ctx->softmax_partial_max_buf));
+        CL_CHECK(clSetKernelArg(k, 3, sizeof(cl_mem),  &backend_ctx->softmax_partial_idx_buf));
+        CL_CHECK(clSetKernelArg(k, 4, sizeof(float) * (size_t) kBlockSize, nullptr));
+        CL_CHECK(clSetKernelArg(k, 5, sizeof(int32_t) * (size_t) kBlockSize, nullptr));
+
+        ggml_tensor pt = {};
+        snprintf(pt.name, sizeof(pt.name), "softmax_threshold_reduce_max");
+        pt.ne[0] = n_scores; pt.ne[1] = 1; pt.ne[2] = 1; pt.ne[3] = 1;
+        backend_ctx->enqueue_ndrange_kernel(k, 1, gws_arr, lws_arr, &pt);
+    }
+
+    std::vector<float> partial_max((size_t) n_blocks, -std::numeric_limits<float>::infinity());
+    std::vector<int32_t> partial_idx((size_t) n_blocks, std::numeric_limits<int32_t>::max());
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueReadBuffer(
+                backend_ctx->queue,
+                backend_ctx->softmax_partial_max_buf,
+                CL_TRUE,
+                0,
+                partial_float_bytes,
+                partial_max.data(),
+                0,
+                nullptr,
+                nullptr));
+        CL_CHECK(clEnqueueReadBuffer(
+                backend_ctx->queue,
+                backend_ctx->softmax_partial_idx_buf,
+                CL_TRUE,
+                0,
+                partial_i32_bytes,
+                partial_idx.data(),
+                0,
+                nullptr,
+                nullptr));
+    }
+
+    float max_score = -std::numeric_limits<float>::infinity();
+    int32_t max_idx = -1;
+    for (int32_t i = 0; i < n_blocks; ++i) {
+        const float value = partial_max[(size_t) i];
+        const int32_t idx = partial_idx[(size_t) i];
+        if (!std::isfinite(value) || idx < 0 || idx >= n_scores) {
+            continue;
+        }
+        if (value > max_score || (value == max_score && (max_idx < 0 || idx < max_idx))) {
+            max_score = value;
+            max_idx = idx;
+        }
+    }
+    if (max_idx < 0 || !std::isfinite(max_score)) {
+        return -1;
+    }
+
+    {
+        cl_kernel k = backend_ctx->kernel_softmax_threshold_reduce_sum_f32;
+        CL_CHECK(clSetKernelArg(k, 0, sizeof(cl_mem),  &scores_buf));
+        CL_CHECK(clSetKernelArg(k, 1, sizeof(int32_t), &n_scores));
+        CL_CHECK(clSetKernelArg(k, 2, sizeof(float),   &max_score));
+        CL_CHECK(clSetKernelArg(k, 3, sizeof(cl_mem),  &backend_ctx->softmax_partial_sum_buf));
+        CL_CHECK(clSetKernelArg(k, 4, sizeof(float) * (size_t) kBlockSize, nullptr));
+
+        ggml_tensor pt = {};
+        snprintf(pt.name, sizeof(pt.name), "softmax_threshold_reduce_sum");
+        pt.ne[0] = n_scores; pt.ne[1] = 1; pt.ne[2] = 1; pt.ne[3] = 1;
+        backend_ctx->enqueue_ndrange_kernel(k, 1, gws_arr, lws_arr, &pt);
+    }
+
+    std::vector<float> partial_sum((size_t) n_blocks, 0.0f);
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueReadBuffer(
+                backend_ctx->queue,
+                backend_ctx->softmax_partial_sum_buf,
+                CL_TRUE,
+                0,
+                partial_float_bytes,
+                partial_sum.data(),
+                0,
+                nullptr,
+                nullptr));
+    }
+
+    double sum_exp = 0.0;
+    for (float value : partial_sum) {
+        if (std::isfinite(value) && value > 0.0f) {
+            sum_exp += (double) value;
+        }
+    }
+    if (!(sum_exp > 0.0) || !std::isfinite(sum_exp)) {
+        return -1;
+    }
+
+    const float inv_sum = (float) (1.0 / sum_exp);
+
+    {
+        cl_kernel k = backend_ctx->kernel_softmax_threshold_count_f32;
+        CL_CHECK(clSetKernelArg(k, 0, sizeof(cl_mem),  &scores_buf));
+        CL_CHECK(clSetKernelArg(k, 1, sizeof(int32_t), &n_scores));
+        CL_CHECK(clSetKernelArg(k, 2, sizeof(float),   &max_score));
+        CL_CHECK(clSetKernelArg(k, 3, sizeof(float),   &inv_sum));
+        CL_CHECK(clSetKernelArg(k, 4, sizeof(float),   &threshold));
+        CL_CHECK(clSetKernelArg(k, 5, sizeof(int32_t), &kBlockSize));
+        CL_CHECK(clSetKernelArg(k, 6, sizeof(cl_mem),  &backend_ctx->softmax_block_counts_buf));
+
+        size_t count_gws[1] = { (size_t) n_blocks };
+        ggml_tensor pt = {};
+        snprintf(pt.name, sizeof(pt.name), "softmax_threshold_count");
+        pt.ne[0] = n_blocks; pt.ne[1] = 1; pt.ne[2] = 1; pt.ne[3] = 1;
+        backend_ctx->enqueue_ndrange_kernel(k, 1, count_gws, nullptr, &pt);
+    }
+
+    std::vector<uint32_t> block_counts((size_t) n_blocks, 0u);
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueReadBuffer(
+                backend_ctx->queue,
+                backend_ctx->softmax_block_counts_buf,
+                CL_TRUE,
+                0,
+                partial_u32_bytes,
+                block_counts.data(),
+                0,
+                nullptr,
+                nullptr));
+    }
+
+    std::vector<uint32_t> block_offsets((size_t) n_blocks, 0u);
+    uint32_t total_above = 0u;
+    for (int32_t i = 0; i < n_blocks; ++i) {
+        block_offsets[(size_t) i] = total_above;
+        total_above += block_counts[(size_t) i];
+    }
+    if (out_total_above != nullptr) {
+        *out_total_above = (int32_t) std::min<uint32_t>(total_above, (uint32_t) std::numeric_limits<int32_t>::max());
+    }
+
+    if (total_above == 0u) {
+        {
+            std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+            CL_CHECK(clEnqueueWriteBuffer(
+                    backend_ctx->queue,
+                    out_indices_buf,
+                    CL_TRUE,
+                    0,
+                    sizeof(int32_t),
+                    &max_idx,
+                    0,
+                    nullptr,
+                    nullptr));
+        }
+        return 1;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueWriteBuffer(
+                backend_ctx->queue,
+                backend_ctx->softmax_block_offsets_buf,
+                CL_TRUE,
+                0,
+                partial_u32_bytes,
+                block_offsets.data(),
+                0,
+                nullptr,
+                nullptr));
+    }
+
+    const uint32_t max_count_u32 = (uint32_t) std::min<int32_t>(max_count, n_scores);
+    {
+        cl_kernel k = backend_ctx->kernel_softmax_threshold_compact_f32;
+        CL_CHECK(clSetKernelArg(k, 0, sizeof(cl_mem),  &scores_buf));
+        CL_CHECK(clSetKernelArg(k, 1, sizeof(int32_t), &n_scores));
+        CL_CHECK(clSetKernelArg(k, 2, sizeof(float),   &max_score));
+        CL_CHECK(clSetKernelArg(k, 3, sizeof(float),   &inv_sum));
+        CL_CHECK(clSetKernelArg(k, 4, sizeof(float),   &threshold));
+        CL_CHECK(clSetKernelArg(k, 5, sizeof(int32_t), &kBlockSize));
+        CL_CHECK(clSetKernelArg(k, 6, sizeof(cl_mem),  &backend_ctx->softmax_block_offsets_buf));
+        CL_CHECK(clSetKernelArg(k, 7, sizeof(uint32_t), &max_count_u32));
+        CL_CHECK(clSetKernelArg(k, 8, sizeof(cl_mem),  &out_indices_buf));
+
+        size_t compact_gws[1] = { (size_t) n_blocks };
+        ggml_tensor pt = {};
+        snprintf(pt.name, sizeof(pt.name), "softmax_threshold_compact");
+        pt.ne[0] = n_blocks; pt.ne[1] = 1; pt.ne[2] = 1; pt.ne[3] = 1;
+        backend_ctx->enqueue_ndrange_kernel(k, 1, compact_gws, nullptr, &pt);
+    }
+
+    return (int32_t) std::min<uint32_t>(total_above, max_count_u32);
+}
+
+bool ggml_backend_opencl_top_k_f32_to_device(
+        ggml_backend_t backend,
+        const float * scores,
+        int32_t n_scores,
+        int32_t top_k,
+        void ** out_device_indices) {
+    if (!ggml_backend_is_opencl(backend) || scores == nullptr || out_device_indices == nullptr || n_scores <= 0 || top_k <= 0) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    if (!ggml_backend_opencl_supports_top_k_f32(backend)) {
+        return false;
+    }
+
+    *out_device_indices = nullptr;
+
+    const int32_t out_count = MIN(n_scores, top_k);
+
+    // Upload scores into a pooled buffer. We do NOT pad the input for
+    // bucket-select — the extra padded entries from the bitonic path were only
+    // needed because bitonic sort requires a power-of-two. The radix
+    // histogram/compact kernels work on raw n_scores directly.
+    const size_t scores_bytes = sizeof(float) * (size_t) n_scores;
+    if (!ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->topk_scores_pad_buf,
+                &backend_ctx->topk_scores_pad_cap_bytes,
+                scores_bytes,
+                CL_MEM_READ_WRITE)) {
+        return false;
+    }
+    if (!ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->topk_output_buf,
+                &backend_ctx->topk_output_cap_bytes,
+                sizeof(int32_t) * (size_t) out_count,
+                CL_MEM_READ_WRITE)) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueWriteBuffer(
+                backend_ctx->queue,
+                backend_ctx->topk_scores_pad_buf,
+                CL_FALSE,
+                0,
+                scores_bytes,
+                scores,
+                0,
+                nullptr,
+                nullptr));
+    }
+
+    // Fast path: bucket-select when the kernels are available.
+    if (backend_ctx->kernel_topk_hist_f32    != nullptr &&
+        backend_ctx->kernel_topk_compact_f32 != nullptr) {
+        const int32_t written = ggml_opencl_topk_bucket_select(
+                backend_ctx,
+                backend_ctx->topk_scores_pad_buf,
+                n_scores,
+                out_count,
+                backend_ctx->topk_output_buf);
+        if (written >= 0) {
+            // Caller takes ownership of the cl_mem. We hand out the pooled
+            // buffer and clear our pool slot so a subsequent call re-allocates
+            // a fresh one. This preserves the existing API contract (callers
+            // call device_i32_buffer_free on the returned handle).
+            *out_device_indices = (void *) backend_ctx->topk_output_buf;
+            backend_ctx->topk_output_buf       = nullptr;
+            backend_ctx->topk_output_cap_bytes = 0;
+            return true;
+        }
+        // bucket-select failed mid-flight; fall through to bitonic fallback.
+    }
+
+    // Fallback: original bitonic-sort path. Kept for correctness / devices
+    // where the bucket-select kernels failed to compile.
+    const int32_t padded_count = ggml_opencl_top_k_padded_size(n_scores);
+    if (padded_count <= 0) {
+        return false;
+    }
+
+    std::vector<float> padded_scores((size_t) padded_count, -std::numeric_limits<float>::infinity());
+    std::copy(scores, scores + n_scores, padded_scores.begin());
+
+    cl_int err = CL_SUCCESS;
+    cl_mem scores_buffer = clCreateBuffer(
+            backend_ctx->context,
+            CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
+            sizeof(float) * (size_t) padded_count,
+            padded_scores.data(),
+            &err);
+    if (err != CL_SUCCESS || scores_buffer == nullptr) {
+        return false;
+    }
+
+    cl_mem indices_buffer = clCreateBuffer(
+            backend_ctx->context,
+            CL_MEM_READ_WRITE,
+            sizeof(int32_t) * (size_t) padded_count,
+            nullptr,
+            &err);
+    if (err != CL_SUCCESS || indices_buffer == nullptr) {
+        CL_CHECK(clReleaseMemObject(scores_buffer));
+        return false;
+    }
+
+    const int32_t pad_index = std::numeric_limits<int32_t>::max();
+    cl_kernel init_kernel = backend_ctx->kernel_init_i32_range;
+    CL_CHECK(clSetKernelArg(init_kernel, 0, sizeof(cl_mem), &indices_buffer));
+    CL_CHECK(clSetKernelArg(init_kernel, 1, sizeof(int32_t), &n_scores));
+    CL_CHECK(clSetKernelArg(init_kernel, 2, sizeof(int32_t), &padded_count));
+    CL_CHECK(clSetKernelArg(init_kernel, 3, sizeof(int32_t), &pad_index));
+
+    size_t init_gws[] = { (size_t) padded_count, 1, 1 };
+    ggml_tensor init_profile_tensor = {};
+    snprintf(init_profile_tensor.name, sizeof(init_profile_tensor.name), "selector_topk_opencl_init");
+    init_profile_tensor.ne[0] = padded_count;
+    init_profile_tensor.ne[1] = 1;
+    init_profile_tensor.ne[2] = 1;
+    init_profile_tensor.ne[3] = 1;
+    backend_ctx->enqueue_ndrange_kernel(init_kernel, 1, init_gws, nullptr, &init_profile_tensor);
+
+    cl_kernel step_kernel = backend_ctx->kernel_bitonic_sort_step_f32_i32;
+    CL_CHECK(clSetKernelArg(step_kernel, 0, sizeof(cl_mem), &scores_buffer));
+    CL_CHECK(clSetKernelArg(step_kernel, 1, sizeof(cl_mem), &indices_buffer));
+    CL_CHECK(clSetKernelArg(step_kernel, 2, sizeof(int32_t), &padded_count));
+
+    size_t step_gws[] = { (size_t) padded_count, 1, 1 };
+    ggml_tensor step_profile_tensor = {};
+    snprintf(step_profile_tensor.name, sizeof(step_profile_tensor.name), "selector_topk_opencl_sort");
+    step_profile_tensor.ne[0] = padded_count;
+    step_profile_tensor.ne[1] = 1;
+    step_profile_tensor.ne[2] = 1;
+    step_profile_tensor.ne[3] = 1;
+
+    for (int32_t stage_k = 2; stage_k <= padded_count; stage_k <<= 1) {
+        for (int32_t stage_j = stage_k >> 1; stage_j > 0; stage_j >>= 1) {
+            CL_CHECK(clSetKernelArg(step_kernel, 3, sizeof(int32_t), &stage_j));
+            CL_CHECK(clSetKernelArg(step_kernel, 4, sizeof(int32_t), &stage_k));
+            backend_ctx->enqueue_ndrange_kernel(step_kernel, 1, step_gws, nullptr, &step_profile_tensor);
+        }
+    }
+
+    cl_mem topk_buffer = clCreateBuffer(
+            backend_ctx->context,
+            CL_MEM_READ_WRITE,
+            sizeof(int32_t) * (size_t) out_count,
+            nullptr,
+            &err);
+    if (err != CL_SUCCESS || topk_buffer == nullptr) {
+        CL_CHECK(clReleaseMemObject(indices_buffer));
+        CL_CHECK(clReleaseMemObject(scores_buffer));
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueCopyBuffer(
+                backend_ctx->queue,
+                indices_buffer,
+                topk_buffer,
+                0,
+                0,
+                sizeof(int32_t) * (size_t) out_count,
+                0,
+                nullptr,
+                nullptr));
+    }
+
+    CL_CHECK(clReleaseMemObject(indices_buffer));
+    CL_CHECK(clReleaseMemObject(scores_buffer));
+
+    *out_device_indices = (void *) topk_buffer;
+    return true;
+}
+
+bool ggml_backend_opencl_softmax_threshold_f32_to_device(
+        ggml_backend_t backend,
+        const float * scores,
+        int32_t n_scores,
+        float threshold,
+        int32_t max_count,
+        void ** out_device_indices,
+        int32_t * out_count,
+        int32_t * out_total_above) {
+    if (!ggml_backend_is_opencl(backend) ||
+        scores == nullptr ||
+        out_device_indices == nullptr ||
+        out_count == nullptr ||
+        n_scores <= 0 ||
+        threshold <= 0.0f ||
+        threshold > 1.0f ||
+        max_count <= 0) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    if (!ggml_backend_opencl_supports_softmax_threshold_f32(backend)) {
+        return false;
+    }
+
+    *out_device_indices = nullptr;
+    *out_count = 0;
+    if (out_total_above != nullptr) {
+        *out_total_above = 0;
+    }
+
+    const int32_t output_cap = MIN(n_scores, max_count);
+    const size_t scores_bytes = sizeof(float) * (size_t) n_scores;
+    if (!ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->topk_scores_pad_buf,
+                &backend_ctx->topk_scores_pad_cap_bytes,
+                scores_bytes,
+                CL_MEM_READ_WRITE) ||
+        !ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->topk_output_buf,
+                &backend_ctx->topk_output_cap_bytes,
+                sizeof(int32_t) * (size_t) output_cap,
+                CL_MEM_READ_WRITE)) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueWriteBuffer(
+                backend_ctx->queue,
+                backend_ctx->topk_scores_pad_buf,
+                CL_FALSE,
+                0,
+                scores_bytes,
+                scores,
+                0,
+                nullptr,
+                nullptr));
+    }
+
+    int32_t total_above = 0;
+    const int32_t written = ggml_opencl_softmax_threshold_select(
+            backend_ctx,
+            backend_ctx->topk_scores_pad_buf,
+            n_scores,
+            threshold,
+            output_cap,
+            backend_ctx->topk_output_buf,
+            &total_above);
+    if (written <= 0) {
+        return false;
+    }
+
+    *out_count = written;
+    if (out_total_above != nullptr) {
+        *out_total_above = total_above;
+    }
+
+    *out_device_indices = (void *) backend_ctx->topk_output_buf;
+    backend_ctx->topk_output_buf       = nullptr;
+    backend_ctx->topk_output_cap_bytes = 0;
+    return true;
+}
+
+bool ggml_backend_opencl_device_i32_buffer_copy_to_host(
+        ggml_backend_t backend,
+        void * device_buffer,
+        int32_t count,
+        int32_t * out_values) {
+    if (!ggml_backend_is_opencl(backend) || device_buffer == nullptr || out_values == nullptr || count <= 0) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    cl_mem buffer = (cl_mem) device_buffer;
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueReadBuffer(
+                backend_ctx->queue,
+                buffer,
+                CL_TRUE,
+                0,
+                sizeof(int32_t) * (size_t) count,
+                out_values,
+                0,
+                nullptr,
+                nullptr));
+    }
+    return true;
+}
+
+bool ggml_backend_opencl_device_i32_buffer_fill(
+        ggml_backend_t backend,
+        void * device_buffer,
+        int32_t offset,
+        int32_t count,
+        int32_t value) {
+    if (!ggml_backend_is_opencl(backend) || device_buffer == nullptr || offset < 0 || count < 0) {
+        return false;
+    }
+    if (count == 0) {
+        return true;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    cl_mem buffer = (cl_mem) device_buffer;
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueFillBuffer(
+                backend_ctx->queue,
+                buffer,
+                &value,
+                sizeof(value),
+                sizeof(int32_t) * (size_t) offset,
+                sizeof(int32_t) * (size_t) count,
+                0,
+                nullptr,
+                nullptr));
+    }
+    return true;
+}
+
+bool ggml_backend_opencl_device_i32_buffer_from_host(
+        ggml_backend_t backend,
+        const int32_t * values,
+        int32_t count,
+        void ** out_device_buffer) {
+    if (!ggml_backend_is_opencl(backend) || values == nullptr || out_device_buffer == nullptr || count <= 0) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    cl_int err = CL_SUCCESS;
+    cl_mem buffer = clCreateBuffer(
+            backend_ctx->context,
+            CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+            sizeof(int32_t) * (size_t) count,
+            (void *) values,
+            &err);
+    if (err != CL_SUCCESS || buffer == nullptr) {
+        *out_device_buffer = nullptr;
+        return false;
+    }
+
+    *out_device_buffer = (void *) buffer;
+    return true;
+}
+
+bool ggml_backend_opencl_device_i32_buffer_sort_asc_inplace(
+        ggml_backend_t backend,
+        void * device_buffer,
+        int32_t count) {
+    if (!ggml_backend_is_opencl(backend) || device_buffer == nullptr || count <= 0) {
+        return false;
+    }
+    if (count == 1) {
+        return true;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    if (backend_ctx == nullptr ||
+        backend_ctx->kernel_fill_i32 == nullptr ||
+        backend_ctx->kernel_bitonic_sort_step_i32 == nullptr) {
+        return false;
+    }
+
+    const int32_t padded_count = ggml_opencl_top_k_padded_size(count);
+    if (padded_count <= 0) {
+        return false;
+    }
+
+    cl_mem values_buffer = (cl_mem) device_buffer;
+    cl_mem sort_buffer = values_buffer;
+    cl_mem scratch_buffer = nullptr;
+
+    if (padded_count != count) {
+        cl_int err = CL_SUCCESS;
+        scratch_buffer = clCreateBuffer(
+                backend_ctx->context,
+                CL_MEM_READ_WRITE,
+                sizeof(int32_t) * (size_t) padded_count,
+                nullptr,
+                &err);
+        if (err != CL_SUCCESS || scratch_buffer == nullptr) {
+            return false;
+        }
+
+        sort_buffer = scratch_buffer;
+
+        const int32_t pad_value = std::numeric_limits<int32_t>::max();
+        cl_kernel fill_kernel = backend_ctx->kernel_fill_i32;
+        CL_CHECK(clSetKernelArg(fill_kernel, 0, sizeof(cl_mem), &sort_buffer));
+        CL_CHECK(clSetKernelArg(fill_kernel, 1, sizeof(int32_t), &padded_count));
+        CL_CHECK(clSetKernelArg(fill_kernel, 2, sizeof(int32_t), &pad_value));
+
+        size_t fill_gws[] = { (size_t) padded_count, 1, 1 };
+        ggml_tensor fill_profile_tensor = {};
+        snprintf(fill_profile_tensor.name, sizeof(fill_profile_tensor.name), "selector_topk_opencl_fill_i32");
+        fill_profile_tensor.ne[0] = padded_count;
+        fill_profile_tensor.ne[1] = 1;
+        fill_profile_tensor.ne[2] = 1;
+        fill_profile_tensor.ne[3] = 1;
+        backend_ctx->enqueue_ndrange_kernel(fill_kernel, 1, fill_gws, nullptr, &fill_profile_tensor);
+
+        {
+            std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+            CL_CHECK(clEnqueueCopyBuffer(
+                    backend_ctx->queue,
+                    values_buffer,
+                    sort_buffer,
+                    0,
+                    0,
+                    sizeof(int32_t) * (size_t) count,
+                    0,
+                    nullptr,
+                    nullptr));
+        }
+    }
+
+    cl_kernel step_kernel = backend_ctx->kernel_bitonic_sort_step_i32;
+    CL_CHECK(clSetKernelArg(step_kernel, 0, sizeof(cl_mem), &sort_buffer));
+    CL_CHECK(clSetKernelArg(step_kernel, 1, sizeof(int32_t), &padded_count));
+
+    size_t step_gws[] = { (size_t) padded_count, 1, 1 };
+    ggml_tensor step_profile_tensor = {};
+    snprintf(step_profile_tensor.name, sizeof(step_profile_tensor.name), "selector_topk_opencl_sort_i32");
+    step_profile_tensor.ne[0] = padded_count;
+    step_profile_tensor.ne[1] = 1;
+    step_profile_tensor.ne[2] = 1;
+    step_profile_tensor.ne[3] = 1;
+
+    for (int32_t stage_k = 2; stage_k <= padded_count; stage_k <<= 1) {
+        for (int32_t stage_j = stage_k >> 1; stage_j > 0; stage_j >>= 1) {
+            CL_CHECK(clSetKernelArg(step_kernel, 2, sizeof(int32_t), &stage_j));
+            CL_CHECK(clSetKernelArg(step_kernel, 3, sizeof(int32_t), &stage_k));
+            backend_ctx->enqueue_ndrange_kernel(step_kernel, 1, step_gws, nullptr, &step_profile_tensor);
+        }
+    }
+
+    if (scratch_buffer != nullptr) {
+        {
+            std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+            CL_CHECK(clEnqueueCopyBuffer(
+                    backend_ctx->queue,
+                    sort_buffer,
+                    values_buffer,
+                    0,
+                    0,
+                    sizeof(int32_t) * (size_t) count,
+                    0,
+                    nullptr,
+                    nullptr));
+        }
+        CL_CHECK(clReleaseMemObject(scratch_buffer));
+    }
+
+    return true;
+}
+
+void ggml_backend_opencl_device_i32_buffer_free(
+        ggml_backend_t backend,
+        void * device_buffer) {
+    if (!ggml_backend_is_opencl(backend) || device_buffer == nullptr) {
+        return;
+    }
+
+    CL_CHECK(clReleaseMemObject((cl_mem) device_buffer));
+}
+
+bool ggml_backend_opencl_top_k_f32(
+        ggml_backend_t backend,
+        const float * scores,
+        int32_t n_scores,
+        int32_t top_k,
+        int32_t * out_indices) {
+    if (!ggml_backend_is_opencl(backend) || scores == nullptr || out_indices == nullptr || n_scores <= 0 || top_k <= 0) {
+        return false;
+    }
+
+    void * device_buffer = nullptr;
+    if (!ggml_backend_opencl_top_k_f32_to_device(backend, scores, n_scores, top_k, &device_buffer) || device_buffer == nullptr) {
+        return false;
+    }
+
+    const int32_t out_count = MIN(n_scores, top_k);
+    const bool ok = ggml_backend_opencl_device_i32_buffer_copy_to_host(backend, device_buffer, out_count, out_indices);
+    ggml_backend_opencl_device_i32_buffer_free(backend, device_buffer);
+    return ok;
+}
+
+bool ggml_backend_opencl_gather_rows_q4_0(
+        ggml_backend_t backend,
+        const ggml_tensor * src,
+        const int32_t * row_indices,
+        int32_t n_rows,
+        ggml_tensor * dst) {
+#ifdef GGML_OPENCL_SOA_Q
+    if (!ggml_backend_is_opencl(backend) || src == nullptr || dst == nullptr || row_indices == nullptr) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    const size_t ids_bytes = sizeof(int32_t) * (size_t) n_rows;
+    if (!ggml_opencl_ensure_pool(
+                backend_ctx->context,
+                &backend_ctx->gather_ids_pool_buf,
+                &backend_ctx->gather_ids_pool_cap_bytes,
+                ids_bytes,
+                CL_MEM_READ_ONLY)) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueWriteBuffer(
+                backend_ctx->queue,
+                backend_ctx->gather_ids_pool_buf,
+                CL_FALSE,
+                0,
+                ids_bytes,
+                row_indices,
+                0,
+                nullptr,
+                nullptr));
+    }
+
+    return ggml_backend_opencl_gather_rows_q4_0_device_i32(
+            backend,
+            src,
+            (void *) backend_ctx->gather_ids_pool_buf,
+            n_rows,
+            dst);
+#else
+    GGML_UNUSED(backend);
+    GGML_UNUSED(src);
+    GGML_UNUSED(row_indices);
+    GGML_UNUSED(n_rows);
+    GGML_UNUSED(dst);
+    return false;
+#endif
+}
+
+bool ggml_backend_opencl_gather_rows_q4_0_device_i32(
+        ggml_backend_t backend,
+        const ggml_tensor * src,
+        void * device_row_indices,
+        int32_t n_rows,
+        ggml_tensor * dst) {
+#ifdef GGML_OPENCL_SOA_Q
+    if (!ggml_backend_is_opencl(backend) || src == nullptr || dst == nullptr || device_row_indices == nullptr) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    if (!ggml_opencl_supports_gather_rows_q4_0_impl(backend_ctx, src, n_rows)) {
+        return false;
+    }
+
+    if (dst->type != GGML_TYPE_Q4_0 || dst->buffer == nullptr || dst->extra == nullptr) {
+        return false;
+    }
+
+    if (dst->ne[0] != src->ne[0] || dst->ne[1] != n_rows || dst->ne[2] != 1 || dst->ne[3] != 1) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    auto * src_extra = (ggml_tensor_extra_cl_q4_0 *) src->extra;
+    auto * dst_extra = (ggml_tensor_extra_cl_q4_0 *) dst->extra;
+    if (src_extra == nullptr || dst_extra == nullptr ||
+        src_extra->q == nullptr || src_extra->d == nullptr ||
+        dst_extra->q == nullptr || dst_extra->d == nullptr) {
+        return false;
+    }
+
+    cl_mem ids_buffer = (cl_mem) device_row_indices;
+
+    const int src_rows = (int) src->ne[1];
+    const int k4_count = (int) (src->ne[0] >> 2);
+
+    cl_kernel kernel = backend_ctx->kernel_gather_rows_q4_0_transposed_i32;
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_extra->q));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &src_extra->d));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &ids_buffer));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &dst_extra->q));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &dst_extra->d));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),    &src_rows));
+    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),    &n_rows));
+    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),    &k4_count));
+
+    size_t local_work_size[] = { 64, 2 };
+    size_t global_work_size[] = {
+        (size_t) ((n_rows   + (int) local_work_size[0] - 1) / (int) local_work_size[0]) * local_work_size[0],
+        (size_t) ((k4_count + (int) local_work_size[1] - 1) / (int) local_work_size[1]) * local_work_size[1],
+    };
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
+    return true;
+#else
+    GGML_UNUSED(backend);
+    GGML_UNUSED(src);
+    GGML_UNUSED(device_row_indices);
+    GGML_UNUSED(n_rows);
+    GGML_UNUSED(dst);
+    return false;
+#endif
+}
+
+bool ggml_backend_opencl_gather_rows_q4_0_device_i32_padded(
+        ggml_backend_t backend,
+        const ggml_tensor * src,
+        void * device_row_indices,
+        int32_t selected_rows,
+        int32_t n_rows,
+        int32_t pad_row_index,
+        ggml_tensor * dst) {
+#ifdef GGML_OPENCL_SOA_Q
+    if (!ggml_backend_is_opencl(backend) || src == nullptr || dst == nullptr || device_row_indices == nullptr) {
+        return false;
+    }
+    if (selected_rows <= 0 || n_rows <= 0 || selected_rows > n_rows) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    if (!ggml_opencl_supports_gather_rows_q4_0_impl(backend_ctx, src, n_rows)) {
+        return false;
+    }
+
+    if (dst->type != GGML_TYPE_Q4_0 || dst->buffer == nullptr || dst->extra == nullptr) {
+        return false;
+    }
+
+    if (dst->ne[0] != src->ne[0] || dst->ne[1] != n_rows || dst->ne[2] != 1 || dst->ne[3] != 1) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    auto * src_extra = (ggml_tensor_extra_cl_q4_0 *) src->extra;
+    auto * dst_extra = (ggml_tensor_extra_cl_q4_0 *) dst->extra;
+    if (src_extra == nullptr || dst_extra == nullptr ||
+        src_extra->q == nullptr || src_extra->d == nullptr ||
+        dst_extra->q == nullptr || dst_extra->d == nullptr) {
+        return false;
+    }
+
+    cl_mem ids_buffer = (cl_mem) device_row_indices;
+
+    const int src_rows = (int) src->ne[1];
+    const int k4_count = (int) (src->ne[0] >> 2);
+
+    cl_kernel kernel = backend_ctx->kernel_gather_rows_q4_0_transposed_i32_padded;
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_extra->q));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &src_extra->d));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &ids_buffer));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &dst_extra->q));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &dst_extra->d));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),     &src_rows));
+    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int32_t), &selected_rows));
+    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int32_t), &n_rows));
+    CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),     &k4_count));
+    CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int32_t), &pad_row_index));
+
+    size_t local_work_size[] = { 64, 2 };
+    size_t global_work_size[] = {
+        (size_t) ((n_rows   + (int) local_work_size[0] - 1) / (int) local_work_size[0]) * local_work_size[0],
+        (size_t) ((k4_count + (int) local_work_size[1] - 1) / (int) local_work_size[1]) * local_work_size[1],
+    };
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
+    return true;
+#else
+    GGML_UNUSED(backend);
+    GGML_UNUSED(src);
+    GGML_UNUSED(device_row_indices);
+    GGML_UNUSED(selected_rows);
+    GGML_UNUSED(n_rows);
+    GGML_UNUSED(pad_row_index);
+    GGML_UNUSED(dst);
+    return false;
+#endif
+}
+
 static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(buffer->buft->device);
 
@@ -4044,6 +5340,65 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
     GGML_UNUSED(buffer);
 }
 
+static bool ggml_backend_opencl_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
+    if (src == nullptr || dst == nullptr || src->buffer == nullptr || dst->buffer == nullptr) {
+        return false;
+    }
+    if (src->buffer->buft->iface.get_name != ggml_backend_opencl_buffer_type_get_name ||
+        dst->buffer->buft->iface.get_name != ggml_backend_opencl_buffer_type_get_name) {
+        return false;
+    }
+    if (!ggml_are_same_layout(src, dst)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(buffer->buft->device);
+    cl_command_queue queue = backend_ctx->queue;
+
+#ifdef GGML_OPENCL_SOA_Q
+    if (src->type == GGML_TYPE_Q4_0 && dst->type == GGML_TYPE_Q4_0) {
+        if (!ggml_is_contiguous(src) || !ggml_is_contiguous(dst) || src->view_offs != 0 || dst->view_offs != 0) {
+            return false;
+        }
+
+        auto * extra_src = (ggml_tensor_extra_cl_q4_0 *) src->extra;
+        auto * extra_dst = (ggml_tensor_extra_cl_q4_0 *) dst->extra;
+        if (extra_src == nullptr || extra_dst == nullptr ||
+            extra_src->q == nullptr || extra_src->d == nullptr ||
+            extra_dst->q == nullptr || extra_dst->d == nullptr ||
+            extra_src->size_q != extra_dst->size_q ||
+            extra_src->size_d != extra_dst->size_d) {
+            return false;
+        }
+
+        CL_CHECK(clEnqueueCopyBuffer(queue, extra_src->q, extra_dst->q, 0, 0, extra_src->size_q, 0, NULL, NULL));
+        CL_CHECK(clEnqueueCopyBuffer(queue, extra_src->d, extra_dst->d, 0, 0, extra_src->size_d, 0, NULL, NULL));
+        CL_CHECK(clFinish(queue));
+        return true;
+    }
+#endif
+
+    auto * extra_src = (ggml_tensor_extra_cl *) src->extra;
+    auto * extra_dst = (ggml_tensor_extra_cl *) dst->extra;
+    if (extra_src == nullptr || extra_dst == nullptr ||
+        extra_src->data_device == nullptr || extra_dst->data_device == nullptr) {
+        return false;
+    }
+
+    CL_CHECK(clEnqueueCopyBuffer(
+            queue,
+            extra_src->data_device,
+            extra_dst->data_device,
+            extra_src->offset + src->view_offs,
+            extra_dst->offset + dst->view_offs,
+            ggml_nbytes(src),
+            0,
+            NULL,
+            NULL));
+    CL_CHECK(clFinish(queue));
+    return true;
+}
+
 static void ggml_backend_opencl_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_dev_t dev = buffer->buft->device;
     ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(dev);
@@ -4068,7 +5423,7 @@ static ggml_backend_buffer_i ggml_backend_opencl_buffer_interface = {
     /* .memset_tensor   = */ NULL,
     /* .set_tensor      = */ ggml_backend_opencl_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_opencl_buffer_get_tensor,
-    /* .cpy_tensor      = */ NULL,
+    /* .cpy_tensor      = */ ggml_backend_opencl_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_opencl_buffer_clear,
     /* .reset           = */ ggml_backend_opencl_buffer_reset,
 };
@@ -4503,6 +5858,42 @@ static void ggml_cl_get_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     cl_ulong offset0 = extra0->offset + src0->view_offs;
     cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+#ifdef GGML_OPENCL_SOA_Q
+    if (src0->type == GGML_TYPE_Q4_0) {
+        auto * extra0_q4 = (ggml_tensor_extra_cl_q4_0 *) src0->extra;
+        if (extra0_q4->q != nullptr && extra0_q4->d != nullptr) {
+            const cl_ulong src0_block_offset = src0->view_offs / GGML_OPENCL_BLOCK_Q4_0_SIZE;
+            const cl_ulong nb00              = src0->nb[0];
+
+            cl_kernel kernel_soa = backend_ctx->kernel_get_rows_q4_0_soa;
+            CL_CHECK(clSetKernelArg(kernel_soa,  0, sizeof(cl_mem),   &extra0_q4->q));
+            CL_CHECK(clSetKernelArg(kernel_soa,  1, sizeof(cl_mem),   &extra0_q4->d));
+            CL_CHECK(clSetKernelArg(kernel_soa,  2, sizeof(cl_ulong), &src0_block_offset));
+            CL_CHECK(clSetKernelArg(kernel_soa,  3, sizeof(cl_mem),   &extra1->data_device));
+            CL_CHECK(clSetKernelArg(kernel_soa,  4, sizeof(cl_ulong), &offset1));
+            CL_CHECK(clSetKernelArg(kernel_soa,  5, sizeof(cl_mem),   &extrad->data_device));
+            CL_CHECK(clSetKernelArg(kernel_soa,  6, sizeof(cl_ulong), &offsetd));
+            CL_CHECK(clSetKernelArg(kernel_soa,  7, sizeof(int),      &ne00));
+            CL_CHECK(clSetKernelArg(kernel_soa,  8, sizeof(cl_ulong), &nb00));
+            CL_CHECK(clSetKernelArg(kernel_soa,  9, sizeof(cl_ulong), &nb01));
+            CL_CHECK(clSetKernelArg(kernel_soa, 10, sizeof(cl_ulong), &nb02));
+            CL_CHECK(clSetKernelArg(kernel_soa, 11, sizeof(cl_ulong), &nb03));
+            CL_CHECK(clSetKernelArg(kernel_soa, 12, sizeof(int),      &ne10));
+            CL_CHECK(clSetKernelArg(kernel_soa, 13, sizeof(cl_ulong), &nb10));
+            CL_CHECK(clSetKernelArg(kernel_soa, 14, sizeof(cl_ulong), &nb11));
+            CL_CHECK(clSetKernelArg(kernel_soa, 15, sizeof(cl_ulong), &nb12));
+            CL_CHECK(clSetKernelArg(kernel_soa, 16, sizeof(cl_ulong), &nb1));
+            CL_CHECK(clSetKernelArg(kernel_soa, 17, sizeof(cl_ulong), &nb2));
+            CL_CHECK(clSetKernelArg(kernel_soa, 18, sizeof(cl_ulong), &nb3));
+
+            size_t global_work_size[] = {(size_t)ne10*64, (size_t)ne11, (size_t)ne12};
+            size_t local_work_size[] = {64, 1, 1};
+            backend_ctx->enqueue_ndrange_kernel(kernel_soa, 3, global_work_size, local_work_size, dst);
+            return;
+        }
+    }
+#endif // GGML_OPENCL_SOA_Q
 
     cl_kernel kernel;
 
@@ -7201,6 +8592,11 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     // q4_0 x fp32
     if(src0t == GGML_TYPE_Q4_0 && src1t == GGML_TYPE_F32) {
         // TODO: remove duplicate definitions of image description + format -- move to top
+        const bool prefer_q4_0_gemm =
+            N == 1 &&
+            M >= 512 &&
+            strstr(src0->name, "reduced_lm_head_opencl_gather") != NULL;
+        const bool use_q4_0_gemv = N == 1 && M != 128256 && !prefer_q4_0_gemm;
 
         // create an image for A
         // <--------------------------------------------> //
@@ -7238,7 +8634,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         // <--------------------------------------------> //
 
         // transpose activation for Skyler's gemm
-        if (N != 1 || (N==1 && M ==128256)) {
+        if (!use_q4_0_gemv) {
             //how many extra elements beyond multiple of 8
             int extra_elements = N % 8;
 
@@ -7361,7 +8757,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
         // choose gemm or gemv kernel
         // <--------------------------------------------> //
-        if (N == 1 && M != 128256) {
+        if (use_q4_0_gemv) {
             kernel = backend_ctx->CL_mul_mat_vec_q4_0_f32_1d_4x_flat_general;
             if (M == 4096 && K == 4096) {
                 kernel = backend_ctx->CL_mul_mat_vec_q4_0_f32_1d_4x_flat_4096_1_4096;
@@ -7381,7 +8777,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         // <--------------------------------------------> //
         cl_uint k_arg = 0;
 
-        if (N == 1 && M != 128256) {
+        if (use_q4_0_gemv) {
             CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &A_image1d));
             CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &extra0_q4_0->d));
             CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &B_image1d));
@@ -7489,7 +8885,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         //     local_work_size[1] = 64;
         // }
 
-        if (N == 1 && M != 128256) {
+        if (use_q4_0_gemv) {
             size_t wavesize = backend_ctx->adreno_wave_size;
             local_work_size[0] = wavesize; // localsize
             local_work_size[1] = 4; // reduce factor
@@ -7512,7 +8908,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         CL_CHECK(clReleaseMemObject(B_sub_buffer));
         CL_CHECK(clReleaseMemObject(B_image1d));
 
-        if (N != 1 || (N==1 && M ==128256)) {
+        if (!use_q4_0_gemv) {
             CL_CHECK(clReleaseMemObject(B_d));
             CL_CHECK(clReleaseMemObject(B_d_input_image));
             CL_CHECK(clReleaseMemObject(C_d));

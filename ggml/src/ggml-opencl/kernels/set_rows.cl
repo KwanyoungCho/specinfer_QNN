@@ -100,6 +100,80 @@ kernel void KERNEL_NAME( \
 DEFINE_SET_ROWS_Q4_0_KERNEL(kernel_set_rows_q4_0_i64, long)
 DEFINE_SET_ROWS_Q4_0_KERNEL(kernel_set_rows_q4_0_i32, int)
 
+kernel void kernel_gather_rows_q4_0_transposed_i32(
+        global const ushort * src_q,
+        global const half   * src_d,
+        global const int    * src_ids,
+        global ushort       * dst_q,
+        global half         * dst_d,
+        int                   src_rows,
+        int                   dst_rows,
+        int                   k4_count
+) {
+    const int dst_row = get_global_id(0);
+    const int k4_idx  = get_global_id(1);
+
+    if (dst_row >= dst_rows || k4_idx >= k4_count) {
+        return;
+    }
+
+    const int src_row = src_ids[dst_row];
+    ushort q_value = (ushort) 0;
+    half   d_value = (half) 0;
+
+    if (src_row >= 0 && src_row < src_rows) {
+        q_value = src_q[(ulong) k4_idx * (ulong) src_rows + (ulong) src_row];
+        if ((k4_idx & 7) == 0) {
+            const int kb = k4_idx >> 3;
+            d_value = src_d[(ulong) kb * (ulong) src_rows + (ulong) src_row];
+        }
+    }
+
+    dst_q[(ulong) k4_idx * (ulong) dst_rows + (ulong) dst_row] = q_value;
+    if ((k4_idx & 7) == 0) {
+        const int kb = k4_idx >> 3;
+        dst_d[(ulong) kb * (ulong) dst_rows + (ulong) dst_row] = d_value;
+    }
+}
+
+kernel void kernel_gather_rows_q4_0_transposed_i32_padded(
+        global const ushort * src_q,
+        global const half   * src_d,
+        global const int    * src_ids,
+        global ushort       * dst_q,
+        global half         * dst_d,
+        int                   src_rows,
+        int                   selected_rows,
+        int                   dst_rows,
+        int                   k4_count,
+        int                   pad_row
+) {
+    const int dst_row = get_global_id(0);
+    const int k4_idx  = get_global_id(1);
+
+    if (dst_row >= dst_rows || k4_idx >= k4_count) {
+        return;
+    }
+
+    const int src_row = dst_row < selected_rows ? src_ids[dst_row] : pad_row;
+    ushort q_value = (ushort) 0;
+    half   d_value = (half) 0;
+
+    if (src_row >= 0 && src_row < src_rows) {
+        q_value = src_q[(ulong) k4_idx * (ulong) src_rows + (ulong) src_row];
+        if ((k4_idx & 7) == 0) {
+            const int kb = k4_idx >> 3;
+            d_value = src_d[(ulong) kb * (ulong) src_rows + (ulong) src_row];
+        }
+    }
+
+    dst_q[(ulong) k4_idx * (ulong) dst_rows + (ulong) dst_row] = q_value;
+    if ((k4_idx & 7) == 0) {
+        const int kb = k4_idx >> 3;
+        dst_d[(ulong) kb * (ulong) dst_rows + (ulong) dst_row] = d_value;
+    }
+}
+
 kernel void kernel_set_rows_f32_i64(
         global char * src0,
         ulong         offset0,

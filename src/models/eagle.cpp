@@ -146,8 +146,16 @@ llm_build_eagle::llm_build_eagle(const llama_model & model, const llm_graph_para
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
+    if (cparams.eagle_hidden_only) {
+        res->t_logits = nullptr;
+        ggml_build_forward_expand(gf, cur);
+        return;
+    }
+
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = eagle_runtime_output != nullptr
+            ? ggml_mul_mat(ctx0, eagle_runtime_output, cur)
+            : build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

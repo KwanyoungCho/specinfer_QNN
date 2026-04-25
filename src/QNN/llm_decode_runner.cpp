@@ -124,26 +124,6 @@ bool LLMDecodeRunner::initialize() {
 
 bool LLMDecodeRunner::load_graphs() {
   std::string json_path = config_.ctx_dir + "/forward_0_json.json";
-  
-  if (!parse_qnn_json(json_path, graphs_)) {
-    error_msg_ = "Failed to parse QNN JSON: " + json_path;
-    return false;
-  }
-  
-  if (graphs_.find("prefill_forward") == graphs_.end() ||
-      graphs_.find("kv_forward") == graphs_.end()) {
-    error_msg_ = "Required graphs not found (prefill_forward, kv_forward)";
-    return false;
-  }
-  
-  prefill_graph_ = &graphs_["prefill_forward"];
-  kv_graph_ = &graphs_["kv_forward"];
-  
-  if (config_.log_level >= 1) {
-    std::cout << "[Graphs] Loaded prefill_forward and kv_forward\n";
-  }
-  
-  // Load context binary
   std::string ctx_bin = config_.ctx_dir + "/forward_0.bin";
   
   // Read binary file
@@ -161,6 +141,30 @@ bool LLMDecodeRunner::load_graphs() {
     return false;
   }
   ifs.close();
+
+  const bool has_json_metadata = parse_qnn_json(json_path, graphs_);
+  if (!has_json_metadata) {
+    if (!parse_qnn_binary_info(loader_->handles().system_so_handle, buffer.data(), size, graphs_)) {
+      error_msg_ = "Failed to parse graph metadata from JSON or binary: " + json_path;
+      return false;
+    }
+    if (config_.log_level >= 1) {
+      std::cout << "[Graphs] Metadata loaded from binary (JSON optional)\n";
+    }
+  }
+  
+  if (graphs_.find("prefill_forward") == graphs_.end() ||
+      graphs_.find("kv_forward") == graphs_.end()) {
+    error_msg_ = "Required graphs not found (prefill_forward, kv_forward)";
+    return false;
+  }
+  
+  prefill_graph_ = &graphs_["prefill_forward"];
+  kv_graph_ = &graphs_["kv_forward"];
+  
+  if (config_.log_level >= 1) {
+    std::cout << "[Graphs] Loaded prefill_forward and kv_forward\n";
+  }
   
   if (!loader_->create_context_from_binary(buffer.data(), size)) {
     error_msg_ = "Failed to create context from binary: " + ctx_bin;

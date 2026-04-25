@@ -443,6 +443,8 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    ggml_tensor *                  eagle_runtime_output;
+    uint32_t                       eagle_runtime_output_rows;
 
     uint32_t n_outputs;
 
@@ -486,8 +488,14 @@ struct llm_graph_params {
         return
             cparams.embeddings  == other.cparams.embeddings  &&
             cparams.causal_attn == other.cparams.causal_attn &&
+            cparams.eagle_hidden_only == other.cparams.eagle_hidden_only &&
+            (cparams.eagle_hidden_only || (
+                eagle_runtime_output      == other.eagle_runtime_output &&
+                eagle_runtime_output_rows == other.eagle_runtime_output_rows
+            )) &&
             arch      == other.arch  &&
             gtype     == other.gtype &&
+            sched     == other.sched &&
             cvec      == other.cvec  &&
             loras     == other.loras &&
             cross     == other.cross &&
@@ -610,6 +618,8 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    ggml_tensor * const            eagle_runtime_output;
+    const int64_t                  eagle_runtime_output_rows;
 
     const llm_graph_cb & cb_func;
 

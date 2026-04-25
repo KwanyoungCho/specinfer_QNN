@@ -10,6 +10,7 @@
 #include "model_params.h"
 #include "../llama-context.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <memory>
@@ -30,6 +31,26 @@ struct LLMDecodeConfig {
   bool use_multi_context = false; // Enable multi-context (sharding) mode
   int num_shards = 0;           // Number of context shards (0=auto-detect, default)
   bool deferred_kv_writeback = false; // Defer KV write-back until commit (for speculative decoding)
+};
+
+struct MultiContextPrefillProfile {
+  bool is_initial_prefill = false;
+  int32_t n_tokens = 0;
+  int32_t chunk_count = 0;
+  int32_t vocab_size = 0;
+  int64_t slot_search_us = 0;
+  int64_t attn_mask_us = 0;
+  int64_t shard_prefill_us = 0;
+  int64_t shard_kv_override_us = 0;
+  int64_t shard_input_fill_us = 0;
+  int64_t shard_tensor_build_us = 0;
+  int64_t shard_execute_us = 0;
+  int64_t shard_output_copy_us = 0;
+  int64_t kv_writeback_us = 0;
+  int64_t cell_meta_us = 0;
+  int64_t logits_dequant_us = 0;
+  int64_t hidden_copy_us = 0;
+  int64_t logits_inject_us = 0;
 };
 
 /**
@@ -56,6 +77,13 @@ class LLMDecodeRunner {
    * @brief Get last error message
    */
   const std::string& get_error() const { return error_msg_; }
+
+  /**
+   * @brief Get the timing breakdown of the most recent multi-context prefill call.
+   */
+  const MultiContextPrefillProfile & get_last_multi_context_prefill_profile() const {
+    return last_multi_context_prefill_profile_;
+  }
   
   // ========== KV Cache Metadata API (llama_memory_seq_* compatible) ==========
   
@@ -89,6 +117,7 @@ class LLMDecodeRunner {
   // Configuration
   LLMDecodeConfig config_;
   std::string error_msg_;
+  MultiContextPrefillProfile last_multi_context_prefill_profile_;
   
   // QNN components
   std::unique_ptr<QnnLoader> loader_;

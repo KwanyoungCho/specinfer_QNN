@@ -9,6 +9,7 @@
 #include "ggml-opt.h"
 
 #include <map>
+#include <memory>
 #include <vector>
 
 struct llama_model;
@@ -79,6 +80,11 @@ struct llama_context {
     void set_embeddings (bool value);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
+    void set_eagle_hidden_only(bool value);
+    bool set_eagle_runtime_output(const void * weights, size_t n_bytes, int32_t n_rows);
+    bool set_eagle_runtime_output_copy(ggml_tensor * src, int32_t n_rows);
+    bool set_eagle_runtime_output_borrowed(ggml_tensor * src, int32_t n_rows, std::shared_ptr<void> owner);
+    void clear_eagle_runtime_output();
 
     void set_adapter_lora(
             llama_adapter_lora * adapter,
@@ -205,6 +211,7 @@ private:
     // Make sure enough space is available for outputs.
     // Returns max number of outputs for which space was reserved.
     uint32_t output_reserve(int32_t n_outputs);
+    uint32_t output_n_vocab() const;
 
     void output_reorder();
 
@@ -227,6 +234,14 @@ public:
     ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false);
 
 private:
+    ggml_backend_sched_t graph_sched_for_mode(bool eagle_hidden_only) const;
+    ggml_backend_sched_t graph_sched_for_current_mode() const;
+    llm_graph_result * eagle_graph_result_for_mode(bool eagle_hidden_only) const;
+    llm_graph_result * eagle_graph_result_for_current_mode() const;
+    ggml_status graph_compute_with_sched(ggml_backend_sched_t sched_cur, ggml_cgraph * gf, bool batched);
+    void reset_eagle_runtime_output_graph_cache();
+    void reset_eagle_graph_cache();
+
     llm_graph_params graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
@@ -234,6 +249,7 @@ private:
                           llm_graph_type   gtype) const;
 
     llm_graph_cb graph_get_cb() const;
+    ggml_backend_t resolve_output_backend() const;
 
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
@@ -284,6 +300,7 @@ private:
     std::vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
+    ggml_backend_sched_ptr sched_eagle_hidden;
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
@@ -304,10 +321,18 @@ private:
     std::vector<ggml_backend_buffer_type_t> backend_buft;
 
     llm_graph_result_ptr gf_res_prev;
+    llm_graph_result_ptr gf_res_prev_eagle_hidden;
     llm_graph_result_ptr gf_res_reserve;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
+
+    ggml_context_ptr        ctx_eagle_runtime_output;
+    ggml_backend_buffer_ptr buf_eagle_runtime_output;
+    ggml_tensor *           t_eagle_runtime_output = nullptr;
+    uint32_t                n_eagle_runtime_output = 0;
+    bool                    eagle_runtime_output_borrowed = false;
+    std::shared_ptr<void>   eagle_runtime_output_owner;
 
     bool has_evaluated_once = false;
 
@@ -327,4 +352,14 @@ private:
     mutable int32_t n_eval   = 0; // number of eval calls
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
+
+    // eagle draft perf (cumulative, reset by llama_perf_eagle_draft_reset)
+public:
+    mutable int64_t t_eagle_apply_mctx_us    = 0;
+    mutable int64_t t_eagle_graph_build_us   = 0; // time spent in build_graph + sched_alloc when reuse misses
+    mutable int64_t t_eagle_set_inputs_us    = 0; // set_inputs + ggml_backend_tensor_set for hidden
+    mutable int64_t t_eagle_graph_compute_us = 0; // graph_compute call (submit+wait depending on backend)
+    mutable int32_t n_eagle_decode_calls     = 0;
+    mutable int32_t n_eagle_graph_reused     = 0;
+    mutable int32_t n_eagle_graph_rebuilt    = 0;
 };

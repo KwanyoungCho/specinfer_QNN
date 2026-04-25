@@ -940,6 +940,22 @@ extern "C" {
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
 
+    // Set whether EAGLE decoder graphs should stop at result_norm and skip the built-in LM head.
+    // This is intended for reduced-LMHead experiments where logits are computed separately from hidden states.
+    LLAMA_API void llama_set_eagle_hidden_only(struct llama_context * ctx, bool eagle_hidden_only);
+
+    // Upload a runtime EAGLE output matrix with shape [hidden_dim, n_rows] using the
+    // same tensor type/layout as the model LM head. When hidden-only mode is disabled,
+    // EAGLE decoder graphs will use this matrix instead of the built-in LM head.
+    LLAMA_API bool llama_set_eagle_runtime_output(
+            struct llama_context * ctx,
+            const void           * weights,
+                   size_t          n_bytes,
+                   int32_t         n_rows);
+
+    // Restore the built-in EAGLE LM head and discard any runtime-uploaded output matrix.
+    LLAMA_API void llama_clear_eagle_runtime_output(struct llama_context * ctx);
+
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 
@@ -1414,6 +1430,28 @@ extern "C" {
     LLAMA_API struct llama_perf_context_data llama_perf_context      (const struct llama_context * ctx);
     LLAMA_API void                           llama_perf_context_print(const struct llama_context * ctx);
     LLAMA_API void                           llama_perf_context_reset(      struct llama_context * ctx);
+
+    // Fine-grained per-phase timing inside llama_decode_eagle (process_ubatch_eagle).
+    // All us counters are cumulative across calls; use reset to zero them out.
+    //   - t_apply_mctx_us   : time applying memory context (KV slot acquire)
+    //   - t_graph_build_us  : time spent building+allocating graph on cache MISS; near-zero on hit
+    //   - t_set_inputs_us   : time setting graph inputs + ggml_backend_tensor_set(hidden)
+    //   - t_graph_compute_us: time spent in ggml_backend_sched_graph_compute_async (submit + wait)
+    //   - n_decode_calls    : total process_ubatch_eagle calls
+    //   - n_graph_reused    : of those, how many reused the cached graph
+    //   - n_graph_rebuilt   : of those, how many rebuilt (n_decode_calls == reused + rebuilt)
+    struct llama_perf_eagle_draft_data {
+        int64_t t_apply_mctx_us;
+        int64_t t_graph_build_us;
+        int64_t t_set_inputs_us;
+        int64_t t_graph_compute_us;
+        int32_t n_decode_calls;
+        int32_t n_graph_reused;
+        int32_t n_graph_rebuilt;
+    };
+
+    LLAMA_API struct llama_perf_eagle_draft_data llama_perf_eagle_draft      (const struct llama_context * ctx);
+    LLAMA_API void                               llama_perf_eagle_draft_reset(      struct llama_context * ctx);
 
     // NOTE: the following work only with samplers constructed via llama_sampler_chain_init
     LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);

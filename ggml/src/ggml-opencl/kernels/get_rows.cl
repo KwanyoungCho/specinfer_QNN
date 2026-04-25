@@ -185,3 +185,94 @@ kernel void kernel_get_rows_q4_0(
         *(((global float16 *) ((global char *) dst + i12*nb3 + i11*nb2 + i10*nb1)) + ind) = temp;
     }
 }
+
+// Q4_0 weights stored as struct-of-arrays (scales and quants in separate buffers, GGML_OPENCL_SOA_Q).
+// Same math as mul_mv_q4_0_f32_v_trans: block_index = block_byte / Q4_0_BLOCK_SIZE.
+#define Q4_0_SOA_BLK 18
+
+void dequantize_q4_0_f32_soa(half xd, global uchar * qs_16, short il, float16 * reg) {
+    global ushort * qs = (global ushort *) qs_16;
+    float d1 = il ? (xd / 16.h) : xd;
+    float d2 = d1 / 256.f;
+    float md = -8.h * xd;
+    ushort mask0 = il ? 0x00F0 : 0x000F;
+    ushort mask1 = mask0 << 8;
+
+    reg->s0 = d1 * (qs[0] & mask0) + md;
+    reg->s1 = d2 * (qs[0] & mask1) + md;
+
+    reg->s2 = d1 * (qs[1] & mask0) + md;
+    reg->s3 = d2 * (qs[1] & mask1) + md;
+
+    reg->s4 = d1 * (qs[2] & mask0) + md;
+    reg->s5 = d2 * (qs[2] & mask1) + md;
+
+    reg->s6 = d1 * (qs[3] & mask0) + md;
+    reg->s7 = d2 * (qs[3] & mask1) + md;
+
+    reg->s8 = d1 * (qs[4] & mask0) + md;
+    reg->s9 = d2 * (qs[4] & mask1) + md;
+
+    reg->sa = d1 * (qs[5] & mask0) + md;
+    reg->sb = d2 * (qs[5] & mask1) + md;
+
+    reg->sc = d1 * (qs[6] & mask0) + md;
+    reg->sd = d2 * (qs[6] & mask1) + md;
+
+    reg->se = d1 * (qs[7] & mask0) + md;
+    reg->sf = d2 * (qs[7] & mask1) + md;
+}
+
+kernel void kernel_get_rows_q4_0_soa(
+        global uchar * src0_q,
+        global half  * src0_d,
+        ulong          src0_block_offset,
+        global int *   src1,
+        ulong          offset1,
+        global float * dst,
+        ulong          offsetd,
+        int            ne00,
+        ulong          nb00,
+        ulong          nb01,
+        ulong          nb02,
+        ulong          nb03,
+        int            ne10,
+        ulong          nb10,
+        ulong          nb11,
+        ulong          nb12,
+        ulong          nb1,
+        ulong          nb2,
+        ulong          nb3
+) {
+    src1 = (global int*)((global char*)src1 + offset1);
+    dst = (global float*)((global char*)dst + offsetd);
+
+    const int NL = 2;
+
+    int i10 = get_group_id(0);
+    int i11 = get_group_id(1);
+    int i12 = get_group_id(2);
+
+    int r = ((global int32_t *) ((global char *) src1 + i12*nb12 + i11*nb11 + i10*nb10))[0];
+
+    int i02 = i11;
+    int i03 = i12;
+
+    for (int ind = get_local_id(0); ind < ne00/16; ind += get_local_size(0)) {
+        float16 temp;
+        const ulong row_base_byte =
+            src0_block_offset * (ulong) Q4_0_SOA_BLK +
+            (ulong) i03 * nb03 +
+            (ulong) i02 * nb02 +
+            (ulong) r * nb01;
+        const ulong block_byte = row_base_byte + (ulong)(ind/NL) * nb00;
+        const ulong block_index = block_byte / (ulong) Q4_0_SOA_BLK;
+
+        dequantize_q4_0_f32_soa(
+            src0_d[block_index],
+            src0_q + block_index * (QK4_0 / 2),
+            (short)(ind % NL),
+            &temp);
+        *(((global float16 *) ((global char *) dst + i12*nb3 + i11*nb2 + i10*nb1)) + ind) = temp;
+    }
+}

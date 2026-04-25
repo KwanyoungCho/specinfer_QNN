@@ -362,6 +362,10 @@ int main(int argc, char ** argv) {
     cb_data.data.clear();
     llama_decode_eagle(ctx_dft, llama_batch_get_one(inp.data() + 1, n_input - 1), sliced_data.data());
 
+    // Reset eagle-decode perf counters after prefill so per-step averages
+    // in the Latency Breakdown only reflect the decode loop, not prefill.
+    llama_perf_eagle_draft_reset(ctx_dft);
+
     LOG("\n");LOG("\n");
 
     const auto t_enc_end = ggml_time_us();
@@ -389,9 +393,9 @@ int main(int argc, char ** argv) {
     // 각 단계별 수락 길이를 저장하기 위한 벡터
     std::vector<int> acceptance_lengths;
     std::vector<float> confidence_scores;
-    std::vector<int> decoding_latencies;
-    std::vector<int> verification_latencies;
-    std::vector<float> T_d;
+    std::vector<double> decoding_latencies;
+    std::vector<double> verification_latencies;
+    std::vector<double> T_d;
     // std::vector<float> tgt_smpl_latencies;
     // std::vector<float> dft_smpl_latencies;
     std::vector<int> temp_i_batch_dft(n_seq_dft, 0);
@@ -424,11 +428,24 @@ int main(int argc, char ** argv) {
     auto verification_start = ggml_time_us();
 
     // Latency breakdown variables (in microseconds)
+    int64_t total_draft_wall_us = 0;
     int64_t total_draft_recompute_us = 0;
+    int64_t total_draft_setup_us = 0;
     int64_t total_draft_forward_us = 0;
+    int64_t total_draft_forward_submit_us = 0; // time from decode_eagle entry until it returns (pre-sync)
+    int64_t total_draft_forward_sync_us = 0;   // time spent in ctx->synchronize() right after decode_eagle
+    int32_t total_draft_forward_calls = 0;     // number of tree-expansion decode_eagle calls timed here
+    int64_t total_draft_recompute_state_reset_us = 0;
+    int64_t total_draft_recompute_replay_decode_us = 0;
+    int64_t total_draft_recompute_current_decode_us = 0;
+    int64_t total_draft_recompute_steps = 0;
+    int64_t total_draft_recompute_replay_steps = 0;
     
     // New fine-grained variables for Tree Expansion
+    int64_t total_expansion_loop_prep_us = 0;
     int64_t total_expansion_sampling_us = 0;
+    int64_t total_expansion_candidate_bookkeeping_us = 0;
+    int64_t total_expansion_post_batch_us = 0;
     
     // Splitting Sequence Breakdown Variables
     int64_t total_split_kv_copy_us = 0;
@@ -441,14 +458,46 @@ int main(int argc, char ** argv) {
 
     int64_t total_tree_pruning_us = 0;
 
+    std::vector<int64_t> per_depth_total_us(n_depth, 0);
+    std::vector<int64_t> per_depth_body_us(n_depth, 0);
+    std::vector<int64_t> per_depth_forward_us(n_depth, 0);
+    std::vector<int64_t> per_depth_visit_counts(n_depth, 0);
+    std::vector<int64_t> per_depth_forward_calls(n_depth, 0);
+
     // int64_t total_target_forward_us = 0;
-    std::vector<int> target_forward_us;
+    std::vector<int64_t> target_forward_us;
     int64_t total_target_kv_cache_us = 0;
     int64_t total_verify_logic_us = 0;
     int64_t total_fallback_sampling_us = 0;
+    common_sampler_profile_snapshot total_fallback_sampler_profile = {};
+    int64_t total_verification_wall_us = 0;
+    int64_t total_target_batch_tokens = 0;
+    int64_t total_target_batch_seq_refs = 0;
+    int64_t total_target_batch_shared_tokens = 0;
+    int64_t total_target_tree_attn_edges = 0;
+    int64_t total_target_seq_compare_ops = 0;
+    int64_t total_target_slot_search_us = 0;
+    int64_t total_target_mask_build_us = 0;
+    int64_t total_target_shard_prefill_us = 0;
+    int64_t total_target_shard_kv_override_us = 0;
+    int64_t total_target_shard_input_fill_us = 0;
+    int64_t total_target_shard_tensor_build_us = 0;
+    int64_t total_target_shard_execute_us = 0;
+    int64_t total_target_shard_output_copy_us = 0;
+    int64_t total_target_internal_kv_writeback_us = 0;
+    int64_t total_target_cell_meta_us = 0;
+    int64_t total_target_logits_dequant_us = 0;
+    int64_t total_target_hidden_copy_us = 0;
+    int64_t total_target_logits_inject_us = 0;
+    int32_t max_target_batch_tokens = 0;
+    int32_t max_target_batch_seq_refs_per_token = 0;
+    int64_t max_target_tree_attn_edges = 0;
+    int64_t max_target_seq_compare_ops = 0;
     int64_t total_draft_target_delay_us = 0;
     int64_t total_target_draft_delay_us = 0;
     int num_steps = 0;
+
+    common_sampler_profile_reset();
 
     while (true) {
         int64_t step_fallback_sampling_us = 0;
@@ -617,7 +666,11 @@ int main(int argc, char ** argv) {
                     // sample from the target model
                     // LOG_DBG("sampling target: s_keep = %3d, i_dft = %3d, i_batch_tgt = %3d\n", s_keep, i_dft, drafts[s_keep].i_batch_tgt[i_dft]);
                     const auto fallback_start = ggml_time_us();
+                    const auto fallback_profile_start = common_sampler_profile_get();
                     token_id = common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft]);
+                    common_sampler_profile_accumulate(
+                            total_fallback_sampler_profile,
+                            common_sampler_profile_diff(common_sampler_profile_get(), fallback_profile_start));
 
                     common_sampler_accept(smpl, token_id, true);
 
@@ -669,10 +722,11 @@ int main(int argc, char ** argv) {
         }
         
         const auto verification_end = ggml_time_us(); //verification 종료 시간 기록 -ym-
+        total_verification_wall_us += (verification_end - verification_start);
         total_verify_logic_us += ((verification_end - step_verify_logic_start) - step_fallback_sampling_us);
         total_fallback_sampling_us += step_fallback_sampling_us;
 
-        int verification_latency = (verification_end - verification_start) / 1000; //ms 단위로 변환 -ym-
+        double verification_latency = (verification_end - verification_start) / 1000.0; //ms 단위로 변환 -ym-
         verification_latencies.push_back(verification_latency);
 
         if (target_draft_delay_ms > 0) {
@@ -703,7 +757,7 @@ int main(int argc, char ** argv) {
         const auto step_recompute_start = ggml_time_us();
         {
             // LOG_DBG("the sampled target token (%d, '%s') did not match, or we ran out of drafted tokens\n", token_id, token_str.c_str());
-            const auto remove_KV_Cache_start = ggml_time_us();
+            const auto recompute_state_reset_start = ggml_time_us();
             // TODO: simplify
             {
                 // LOG_DBG("keeping sequence %d, n_past_tgt = %d, n_past_dft = %d\n", s_keep, n_past_tgt, n_past_dft);
@@ -735,11 +789,13 @@ int main(int argc, char ** argv) {
             drafts[0].i_batch_tgt.push_back(0);
 
             llama_memory_seq_rm(mem_dft, 0, recompute_point, -1);
-
-            const auto remove_KV_Cache_end = ggml_time_us();
+            const auto recompute_state_reset_end = ggml_time_us();
+            total_draft_recompute_state_reset_us += (recompute_state_reset_end - recompute_state_reset_start);
 
             //recompute logic 추가 -ym-
             if (i_dft > 0) {
+                ++total_draft_recompute_replay_steps;
+                const auto recompute_replay_decode_start = ggml_time_us();
                 std::vector temp4 = std::vector<float>(backup_data.begin(), backup_data.end() - hidden_dim);
 
                 common_batch_clear(batch_dft);
@@ -750,8 +806,11 @@ int main(int argc, char ** argv) {
                 cb_data.data.clear();
                 llama_decode_eagle(ctx_dft, batch_dft, temp4.data());
                 // const auto recompute_decode_end = ggml_time_us();
+                const auto recompute_replay_decode_end = ggml_time_us();
+                total_draft_recompute_replay_decode_us += (recompute_replay_decode_end - recompute_replay_decode_start);
             }
 
+            const auto recompute_current_decode_start = ggml_time_us();
             common_batch_clear(batch_dft);
             common_batch_add(batch_dft, token_id, n_past_dft, {0}, true);
 
@@ -759,6 +818,8 @@ int main(int argc, char ** argv) {
             cb_data.data.clear();
             llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
             // const auto recompute_decode_end1 = ggml_time_us();
+            const auto recompute_current_decode_end = ggml_time_us();
+            total_draft_recompute_current_decode_us += (recompute_current_decode_end - recompute_current_decode_start);
 
             ++n_past_dft;
         }
@@ -766,7 +827,9 @@ int main(int argc, char ** argv) {
         //////////////////////////////////////////Recompute Logic End////////////////////////////////////////
         const auto step_recompute_end = ggml_time_us();
         total_draft_recompute_us += (step_recompute_end - step_recompute_start);
+        ++total_draft_recompute_steps;
 
+        const auto step_draft_setup_start = ggml_time_us();
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
             break;
         }
@@ -808,9 +871,12 @@ int main(int argc, char ** argv) {
         common_batch_add  (batch_tgt, drafts[0].tokens[0], n_past_tgt, { 0 }, true);
 
         expandk_indices = { 0, };
+        const auto step_draft_setup_end = ggml_time_us();
+        total_draft_setup_us += (step_draft_setup_end - step_draft_setup_start);
 
         // sample n_draft tokens from the draft model using tree-based sampling
         for (int i = 0; i < n_draft; ++i) {
+            const auto step_loop_prep_start = ggml_time_us();
             batch_dft.n_tokens = 0;
             for (int i = 0; i < rows; i++) {
                 column_scores[i] = 0;
@@ -819,6 +885,9 @@ int main(int argc, char ** argv) {
             if (batch_tgt.n_tokens >= n_draft) {
                 break;
             }
+
+            const auto depth_total_start = ggml_time_us();
+            ++per_depth_visit_counts[i];
 
             for (int s = 0; s < n_seq_dft; ++s) {
                 auto it_last = std::find(topk_indices.begin(), topk_indices.end(), s);
@@ -834,6 +903,8 @@ int main(int argc, char ** argv) {
             std::vector<int> ss;
             std::vector<float> temp_probs;
             std::vector<std::vector<llama_token_data>> datas;
+            const auto step_loop_prep_end = ggml_time_us();
+            total_expansion_loop_prep_us += (step_loop_prep_end - step_loop_prep_start);
 
             for (int s = 0; s < n_seq_dft; ++s) {
                 if (!drafts[s].drafting || drafts[s].skip) {
@@ -862,6 +933,7 @@ int main(int argc, char ** argv) {
                     }
                 }
 
+                const auto candidate_bookkeeping_start = ggml_time_us();
                 // for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
                 //     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
                 //             k, s, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
@@ -884,9 +956,10 @@ int main(int argc, char ** argv) {
                     scores.at(s).at(i) = scores.at(s).at(i-1) * prob;
                     column_scores.at(s) = scores.at(s).at(i-1) * prob;
                 }
+                const auto candidate_bookkeeping_end = ggml_time_us();
+                total_expansion_candidate_bookkeeping_us += (candidate_bookkeeping_end - candidate_bookkeeping_start);
 
                 ////////////////////////////////////////Split Start///////////////////////////////////////
-                const auto t_split_start = ggml_time_us();
                 for (int f = 1; f < expand_k; ++f) {
                     // LOG_DBG("cur_p->data[f].p = %lf\n", cur_p->data[f].p);
                     // if (n_seq_cur < n_seq_dft && cur_p->data[f].p > p_draft_split) {
@@ -1022,6 +1095,7 @@ int main(int argc, char ** argv) {
             const auto target_batch_end = ggml_time_us();
             total_expansion_target_batch_us += (target_batch_end - target_batch_start);
 
+            const auto post_batch_start = ggml_time_us();
             for (int i = 0; i < n_seq_dft; i++) {
                     temp_i_batch_dft[i] = drafts[i].i_batch_dft;
             }
@@ -1036,16 +1110,16 @@ int main(int argc, char ** argv) {
                 confidence_scores.push_back(sum);
             }
 
-            if (i + 1 >= n_depth) {
-                break;
-            }
+            const bool stop_due_depth = (i + 1 >= n_depth);
+            const bool stop_due_no_draft_batch = (batch_dft.n_tokens == 0);
+            const bool stop_due_target_overflow = (batch_tgt.n_tokens > n_draft);
+            const auto post_batch_end = ggml_time_us();
+            total_expansion_post_batch_us += (post_batch_end - post_batch_start);
+            const int64_t depth_body_us = post_batch_end - depth_total_start;
 
-            // no sequence is drafting anymore
-            if (batch_dft.n_tokens == 0) {
-                break;
-            }
-
-            if (batch_tgt.n_tokens > n_draft) {
+            if (stop_due_depth || stop_due_no_draft_batch || stop_due_target_overflow) {
+                per_depth_body_us[i] += depth_body_us;
+                per_depth_total_us[i] += depth_body_us;
                 break;
             }
 
@@ -1053,9 +1127,17 @@ int main(int argc, char ** argv) {
             const auto dft_model_decode_start = ggml_time_us();
             cb_data.data.clear();
             llama_decode_eagle(ctx_dft, batch_dft, temp.data());
+            const auto dft_model_decode_submit_end = ggml_time_us();
             ctx_dft->synchronize();
             const auto dft_model_decode_end = ggml_time_us();
             total_draft_forward_us += (dft_model_decode_end - dft_model_decode_start);
+            total_draft_forward_submit_us += (dft_model_decode_submit_end - dft_model_decode_start);
+            total_draft_forward_sync_us += (dft_model_decode_end - dft_model_decode_submit_end);
+            ++total_draft_forward_calls;
+            per_depth_body_us[i] += depth_body_us;
+            per_depth_forward_us[i] += (dft_model_decode_end - dft_model_decode_start);
+            per_depth_total_us[i] += (dft_model_decode_end - depth_total_start);
+            ++per_depth_forward_calls[i];
             T_d.push_back((dft_model_decode_end - dft_model_decode_start) / 1000.0f);
             ++n_past_cur;
             ++n_drafted;
@@ -1169,7 +1251,19 @@ int main(int argc, char ** argv) {
                     for (int p = 0; p < batch_tgt.n_seq_id[t]; ++p) {
                         int s = batch_tgt.seq_id[t][p];
                         // 메인 시퀀스(0)이거나 여전히 active 상태인 시퀀스만 남김
-                        if (s == 0 || drafts[s].active) {
+                        if (s != 0 && !drafts[s].active) {
+                            continue;
+                        }
+
+                        bool already_present = false;
+                        for (int q = 0; q < valid_seqs; ++q) {
+                            if (batch_tgt.seq_id[t][q] == s) {
+                                already_present = true;
+                                break;
+                            }
+                        }
+
+                        if (!already_present) {
                             batch_tgt.seq_id[t][valid_seqs++] = s;
                         }
                     }
@@ -1185,7 +1279,8 @@ int main(int argc, char ** argv) {
         /////////////////////////////////////////Drafting End///////////////////////////////////////
 
         const auto drafting_end = ggml_time_us();
-        int tree_decoding_latency = (drafting_end - drafting_start) / 1000.0f;
+        total_draft_wall_us += (drafting_end - drafting_start);
+        double tree_decoding_latency = (drafting_end - drafting_start) / 1000.0;
         decoding_latencies.push_back(tree_decoding_latency);
 
         total_draft_tokens += batch_tgt.n_tokens - 1;
@@ -1201,6 +1296,56 @@ int main(int argc, char ** argv) {
         // evaluate the target model on the drafted tokens using QNN
         {
             const auto step_target_forward_start = ggml_time_us();
+            int64_t step_target_seq_refs = 0;
+            int32_t step_target_shared_tokens = 0;
+            int32_t step_target_max_seq_refs = 0;
+            int64_t step_target_tree_attn_edges = 0;
+            int64_t step_target_seq_compare_ops = 0;
+            for (int t = 0; t < batch_tgt.n_tokens; ++t) {
+                const int32_t seq_refs = batch_tgt.n_seq_id[t];
+                step_target_seq_refs += seq_refs;
+                step_target_max_seq_refs = std::max(step_target_max_seq_refs, seq_refs);
+                if (seq_refs > 1) {
+                    ++step_target_shared_tokens;
+                }
+            }
+            for (int i = 0; i < batch_tgt.n_tokens; ++i) {
+                const int32_t p_i = batch_tgt.pos ? batch_tgt.pos[i] : i;
+                for (int k = 0; k < batch_tgt.n_tokens; ++k) {
+                    const int32_t p_k = batch_tgt.pos ? batch_tgt.pos[k] : k;
+                    if (p_k > p_i) {
+                        continue;
+                    }
+
+                    bool has_common_seq = false;
+                    if (batch_tgt.n_seq_id && batch_tgt.seq_id) {
+                        for (int si = 0; si < batch_tgt.n_seq_id[i] && !has_common_seq; ++si) {
+                            for (int sk = 0; sk < batch_tgt.n_seq_id[k] && !has_common_seq; ++sk) {
+                                ++step_target_seq_compare_ops;
+                                if (batch_tgt.seq_id[i][si] == batch_tgt.seq_id[k][sk]) {
+                                    has_common_seq = true;
+                                }
+                            }
+                        }
+                    } else {
+                        has_common_seq = true;
+                    }
+
+                    if (has_common_seq) {
+                        ++step_target_tree_attn_edges;
+                    }
+                }
+            }
+            total_target_batch_tokens += batch_tgt.n_tokens;
+            total_target_batch_seq_refs += step_target_seq_refs;
+            total_target_batch_shared_tokens += step_target_shared_tokens;
+            total_target_tree_attn_edges += step_target_tree_attn_edges;
+            total_target_seq_compare_ops += step_target_seq_compare_ops;
+            max_target_batch_tokens = std::max(max_target_batch_tokens, batch_tgt.n_tokens);
+            max_target_batch_seq_refs_per_token = std::max(max_target_batch_seq_refs_per_token, step_target_max_seq_refs);
+            max_target_tree_attn_edges = std::max(max_target_tree_attn_edges, step_target_tree_attn_edges);
+            max_target_seq_compare_ops = std::max(max_target_seq_compare_ops, step_target_seq_compare_ops);
+
             // QNN KV cache management: Copy seq 0 to all active sequences
             qnn_runner.kv_seq_keep(0);
             for (int s = 1; s < n_seq_dft; ++s) {
@@ -1220,7 +1365,21 @@ int main(int argc, char ** argv) {
             }
             const auto t_dec_end = ggml_time_us();
             // total_target_forward_us += (t_dec_end - t_dec_start);
-            target_forward_us.push_back((t_dec_end - t_dec_start) / 1000.0f);
+            target_forward_us.push_back(t_dec_end - t_dec_start);
+            const auto & target_prefill_profile = qnn_runner.get_last_multi_context_prefill_profile();
+            total_target_slot_search_us += target_prefill_profile.slot_search_us;
+            total_target_mask_build_us += target_prefill_profile.attn_mask_us;
+            total_target_shard_prefill_us += target_prefill_profile.shard_prefill_us;
+            total_target_shard_kv_override_us += target_prefill_profile.shard_kv_override_us;
+            total_target_shard_input_fill_us += target_prefill_profile.shard_input_fill_us;
+            total_target_shard_tensor_build_us += target_prefill_profile.shard_tensor_build_us;
+            total_target_shard_execute_us += target_prefill_profile.shard_execute_us;
+            total_target_shard_output_copy_us += target_prefill_profile.shard_output_copy_us;
+            total_target_internal_kv_writeback_us += target_prefill_profile.kv_writeback_us;
+            total_target_cell_meta_us += target_prefill_profile.cell_meta_us;
+            total_target_logits_dequant_us += target_prefill_profile.logits_dequant_us;
+            total_target_hidden_copy_us += target_prefill_profile.hidden_copy_us;
+            total_target_logits_inject_us += target_prefill_profile.logits_inject_us;
 
             if (!ctx_tgt->final_hiddens.empty()) {
                 backup_data = ctx_tgt->final_hiddens;  // Hidden states from QNN verification
@@ -1260,7 +1419,7 @@ int main(int argc, char ** argv) {
         const int    n_steps     = (int)decoding_latencies.size();
         const double draft_len   = n_depth;
         const double draft_tokens_avg = n_steps > 0 ? (double)total_draft_tokens / n_steps : 0;
-        const double accept_len  = n_steps > 0
+        const double accept_len  = (n_steps > 0 && acceptance_lengths.size() > 1)
             ? std::accumulate(acceptance_lengths.begin()+1, acceptance_lengths.end(), 0.0) / n_steps : 0;
         const double avg_draft_lat = !decoding_latencies.empty()
             ? std::accumulate(decoding_latencies.begin(), decoding_latencies.end(), 0.0) / decoding_latencies.size() : 0;
@@ -1270,55 +1429,182 @@ int main(int argc, char ** argv) {
             ? std::accumulate(T_d.begin(), T_d.end(), 0.0) / T_d.size() : 0;
 
         const double avg_step_ms = avg_draft_lat + avg_verify_lat;
-        int64_t total_target_forward_us = std::accumulate(target_forward_us.begin(), target_forward_us.end(), 0);
+        int64_t total_target_forward_us = std::accumulate(target_forward_us.begin(), target_forward_us.end(), int64_t{0});
+        const double avg_target_batch_tokens = num_steps > 0 ? (double) total_target_batch_tokens / num_steps : 0.0;
+        const double avg_target_batch_seq_refs = num_steps > 0 ? (double) total_target_batch_seq_refs / num_steps : 0.0;
+        const double avg_target_batch_shared_tokens = num_steps > 0 ? (double) total_target_batch_shared_tokens / num_steps : 0.0;
+        const double avg_target_tree_attn_edges = num_steps > 0 ? (double) total_target_tree_attn_edges / num_steps : 0.0;
+        const double avg_target_seq_compare_ops = num_steps > 0 ? (double) total_target_seq_compare_ops / num_steps : 0.0;
+        const double avg_target_batch_seq_refs_per_token = total_target_batch_tokens > 0
+            ? (double) total_target_batch_seq_refs / total_target_batch_tokens
+            : 0.0;
+        const int64_t total_verification_accounted_us =
+            total_target_forward_us + total_target_kv_cache_us + total_verify_logic_us + total_fallback_sampling_us;
+        const int64_t total_verification_unaccounted_us = std::max<int64_t>(
+            0,
+            total_verification_wall_us - total_verification_accounted_us);
+        const int64_t fallback_sampler_other_us = std::max<int64_t>(
+                0,
+                total_fallback_sampling_us - total_fallback_sampler_profile.sample_total_us);
+        const int64_t fallback_sample_calls = total_fallback_sampler_profile.sample_calls;
+
+        const auto avg_ms_per = [](int64_t total_us, int64_t count) -> double {
+            return count > 0 ? static_cast<double>(total_us) / 1000.0 / static_cast<double>(count) : 0.0;
+        };
+        const auto avg_per = [](int64_t total, int64_t count) -> double {
+            return count > 0 ? static_cast<double>(total) / static_cast<double>(count) : 0.0;
+        };
+        const int64_t total_expansion_split_us =
+                total_split_kv_copy_us + total_split_history_update_us + total_split_draft_state_alloc_us;
+        const int64_t total_expansion_us =
+                total_expansion_loop_prep_us +
+                total_expansion_sampling_us +
+                total_expansion_candidate_bookkeeping_us +
+                total_expansion_split_us +
+                total_expansion_temp_probs_us +
+                total_expansion_topk_us +
+                total_expansion_target_batch_us +
+                total_expansion_post_batch_us;
+        const int64_t total_draft_accounted_us =
+                total_draft_recompute_us +
+                total_draft_setup_us +
+                total_expansion_us +
+                total_draft_forward_us +
+                total_tree_pruning_us;
+        const int64_t total_draft_unaccounted_us = std::max<int64_t>(0, total_draft_wall_us - total_draft_accounted_us);
 
         LOG_INF("\n");
-        LOG_INF("================ Latency Breakdown ==================\n");
-        LOG_INF("Prefill Time                    : %8.3f ms\n", (t_enc_end - t_enc_start) / 1000.0f);
-        LOG_INF("[1] Drafting Phase\n");
-        LOG_INF("  - Draft Recompute/Alignment   : %8.3f ms\n", total_draft_recompute_us / 1000.0f);
-        LOG_INF("  - Draft Tree Forward          : %8.3f ms\n", total_draft_forward_us / 1000.0f);
-        auto total_expansion_split_us = total_split_kv_copy_us + total_split_history_update_us + total_split_draft_state_alloc_us;
-        LOG_INF("  - Tree Expansion (Total)      : %8.3f ms\n", (total_expansion_sampling_us + total_expansion_split_us + total_expansion_temp_probs_us + total_expansion_topk_us + total_expansion_target_batch_us) / 1000.0f);
-        LOG_INF("     ㄴ Sampling from Draft     : %8.3f ms\n", total_expansion_sampling_us / 1000.0f);
-        LOG_INF("     ㄴ Splitting Sequence      : %8.3f ms\n", total_expansion_split_us / 1000.0f);
-        LOG_INF("        - KV Cache Copy         : %8.3f ms\n", total_split_kv_copy_us / 1000.0f);
-        LOG_INF("        - Seq History Update    : %8.3f ms\n", total_split_history_update_us / 1000.0f);
-        LOG_INF("        - Draft State Alloc     : %8.3f ms\n", total_split_draft_state_alloc_us / 1000.0f);
-        LOG_INF("     ㄴ Temp Probs Array Prep   : %8.3f ms\n", total_expansion_temp_probs_us / 1000.0f);
-        LOG_INF("     ㄴ TopK Sorting            : %8.3f ms\n", total_expansion_topk_us / 1000.0f);
-        LOG_INF("     ㄴ Target Batch Append     : %8.3f ms\n", total_expansion_target_batch_us / 1000.0f);
-        LOG_INF("  - Tree Pruning (Reranking)    : %8.3f ms\n", total_tree_pruning_us / 1000.0f);
-        LOG_INF("[2] Verification Phase\n");
-        LOG_INF("  - Target Model Forward        : %8.3f ms\n", total_target_forward_us / 1000.0f);
-        LOG_INF("  - Target KV Cache Management  : %8.3f ms\n", total_target_kv_cache_us / 1000.0f);
-        LOG_INF("  - Tree Verification Logic     : %8.3f ms\n", total_verify_logic_us / 1000.0f);
-        LOG_INF("  - Fallback Sampling           : %8.3f ms\n", total_fallback_sampling_us / 1000.0f);
-        LOG_INF("[3] Injected Handoff Delay\n");
-        LOG_INF("  - Draft -> Target Delay       : %8.3f ms\n", total_draft_target_delay_us / 1000.0f);
-        LOG_INF("  - Target -> Draft Delay       : %8.3f ms\n", total_target_draft_delay_us / 1000.0f);
-        LOG_INF("-----------------------------------------------------\n");
-        if (num_steps > 0) {
-            auto total_expansion_split_us = total_split_kv_copy_us + total_split_history_update_us + total_split_draft_state_alloc_us;
-            LOG_INF("Avg Draft Recompute/Step        : %8.3f ms\n", (total_draft_recompute_us / 1000.0f) / num_steps);
-            LOG_INF("Avg Draft Forward/Step          : %8.3f ms\n", (total_draft_forward_us / 1000.0f) / num_steps);
-            LOG_INF("Avg Tree Expansion Total/Step   : %8.3f ms\n", ((total_expansion_sampling_us + total_expansion_split_us + total_expansion_temp_probs_us + total_expansion_topk_us + total_expansion_target_batch_us) / 1000.0f) / num_steps);
-            LOG_INF("   ㄴ Avg Sampling Dfts/Step    : %8.3f ms\n", (total_expansion_sampling_us / 1000.0f) / num_steps);
-            LOG_INF("   ㄴ Avg Split Sequence/Step   : %8.3f ms\n", (total_expansion_split_us / 1000.0f) / num_steps);
-            LOG_INF("      - KV Cache Copy           : %8.3f ms\n", (total_split_kv_copy_us / 1000.0f) / num_steps);
-            LOG_INF("      - Seq History Update      : %8.3f ms\n", (total_split_history_update_us / 1000.0f) / num_steps);
-            LOG_INF("      - Draft State Alloc       : %8.3f ms\n", (total_split_draft_state_alloc_us / 1000.0f) / num_steps);
-            LOG_INF("   ㄴ Avg Temp Probs Prep/Step  : %8.3f ms\n", (total_expansion_temp_probs_us / 1000.0f) / num_steps);
-            LOG_INF("   ㄴ Avg TopK Sorting/Step     : %8.3f ms\n", (total_expansion_topk_us / 1000.0f) / num_steps);
-            LOG_INF("   ㄴ Avg Target Batch/Step     : %8.3f ms\n", (total_expansion_target_batch_us / 1000.0f) / num_steps);
-            LOG_INF("Avg Tree Pruning/Step           : %8.3f ms\n", (total_tree_pruning_us / 1000.0f) / num_steps);
-            LOG_INF("Avg Target Forward/Step         : %8.3f ms\n", (total_target_forward_us / 1000.0f) / num_steps);
-            LOG_INF("Avg Target KV Cache/Step        : %8.3f ms\n", (total_target_kv_cache_us / 1000.0f) / num_steps);
-            LOG_INF("Avg Tree Verify Logic/Step      : %8.3f ms\n", (total_verify_logic_us / 1000.0f) / num_steps);
-            LOG_INF("Avg Fallback Sampling/Step      : %8.3f ms\n", (total_fallback_sampling_us / 1000.0f) / num_steps);
-            LOG_INF("Avg Draft -> Target Delay/Step  : %8.3f ms\n", (total_draft_target_delay_us / 1000.0f) / num_steps);
-            LOG_INF("Avg Target -> Draft Delay/Step  : %8.3f ms\n", (total_target_draft_delay_us / 1000.0f) / num_steps);
+        LOG_INF("======= Latency Breakdown (Avg / Step, Additive) =========\n");
+        LOG_INF("Prefill (one-time)              : %8.3f ms\n", prefill_ms);
+        LOG_INF("Decode steps                    : %8d\n", num_steps);
+        LOG_INF("Fallback sample calls           : %8lld\n", (long long) fallback_sample_calls);
+
+        LOG_INF("[1] Drafting Phase (top-level items sum to Avg draft phase)\n");
+        LOG_INF("  - Draft Recompute/Alignment   : %8.3f ms\n", avg_ms_per(total_draft_recompute_us, num_steps));
+        LOG_INF("    * KV/State Reset            : %8.3f ms\n", avg_ms_per(total_draft_recompute_state_reset_us, num_steps));
+        LOG_INF("    * Replay Accepted Tokens    : %8.3f ms\n", avg_ms_per(total_draft_recompute_replay_decode_us, num_steps));
+        LOG_INF("    * Current Token Re-decode   : %8.3f ms\n", avg_ms_per(total_draft_recompute_current_decode_us, num_steps));
+        LOG_INF("    * Recompute steps           : %8.3f / step (%lld total steps)\n",
+                avg_per(total_draft_recompute_steps, num_steps),
+                (long long) total_draft_recompute_steps);
+        LOG_INF("    * Replay decode steps       : %8.3f / step (%lld total steps)\n",
+                avg_per(total_draft_recompute_replay_steps, num_steps),
+                (long long) total_draft_recompute_replay_steps);
+        LOG_INF("  - Draft Phase Setup           : %8.3f ms\n", avg_ms_per(total_draft_setup_us, num_steps));
+        LOG_INF("  - Tree Expansion Total        : %8.3f ms\n", avg_ms_per(total_expansion_us, num_steps));
+        LOG_INF("    * Loop Prep                 : %8.3f ms\n", avg_ms_per(total_expansion_loop_prep_us, num_steps));
+        LOG_INF("    * Sampling from Draft       : %8.3f ms\n", avg_ms_per(total_expansion_sampling_us, num_steps));
+        LOG_INF("    * Candidate Bookkeeping     : %8.3f ms\n", avg_ms_per(total_expansion_candidate_bookkeeping_us, num_steps));
+        LOG_INF("    * Split Sequence            : %8.3f ms\n", avg_ms_per(total_expansion_split_us, num_steps));
+        LOG_INF("      - KV Cache Copy           : %8.3f ms\n", avg_ms_per(total_split_kv_copy_us, num_steps));
+        LOG_INF("      - Seq History Update      : %8.3f ms\n", avg_ms_per(total_split_history_update_us, num_steps));
+        LOG_INF("      - Draft State Alloc       : %8.3f ms\n", avg_ms_per(total_split_draft_state_alloc_us, num_steps));
+        LOG_INF("    * Temp Probs Array Prep     : %8.3f ms\n", avg_ms_per(total_expansion_temp_probs_us, num_steps));
+        LOG_INF("    * TopK Sorting              : %8.3f ms\n", avg_ms_per(total_expansion_topk_us, num_steps));
+        LOG_INF("    * Target Batch Append       : %8.3f ms\n", avg_ms_per(total_expansion_target_batch_us, num_steps));
+        LOG_INF("    * Post Batch Bookkeeping    : %8.3f ms\n", avg_ms_per(total_expansion_post_batch_us, num_steps));
+        LOG_INF("  - Draft Tree Forward          : %8.3f ms\n", avg_ms_per(total_draft_forward_us, num_steps));
+        LOG_INF("    * Pre-sync submit           : %8.3f ms\n", avg_ms_per(total_draft_forward_submit_us, num_steps));
+        LOG_INF("    * Post-submit sync wait     : %8.3f ms\n", avg_ms_per(total_draft_forward_sync_us, num_steps));
+        LOG_INF("    * Tree decode calls         : %8.3f / step (%d total)\n",
+                avg_per(total_draft_forward_calls, num_steps), total_draft_forward_calls);
+        {
+            const auto ed = llama_perf_eagle_draft(ctx_dft);
+            const int32_t n_calls_all = ed.n_decode_calls;
+            const double calls_per_step = num_steps > 0 ? (double) n_calls_all / (double) num_steps : 0.0;
+            LOG_INF("  - Eagle Decode Breakdown (cumulative across ALL llama_decode_eagle calls: recompute + tree)\n");
+            LOG_INF("    * Total decode calls        : %d (%.3f / step)\n", n_calls_all, calls_per_step);
+            LOG_INF("    * Graph cache hits (reused) : %d  (%.1f%%)\n",
+                    ed.n_graph_reused, n_calls_all > 0 ? 100.0 * ed.n_graph_reused / n_calls_all : 0.0);
+            LOG_INF("    * Graph rebuilds            : %d  (%.1f%%)\n",
+                    ed.n_graph_rebuilt, n_calls_all > 0 ? 100.0 * ed.n_graph_rebuilt / n_calls_all : 0.0);
+            LOG_INF("    * Avg per call: apply_mctx  : %8.3f ms\n", n_calls_all > 0 ? (ed.t_apply_mctx_us    / 1000.0) / n_calls_all : 0.0);
+            LOG_INF("    * Avg per call: graph_build : %8.3f ms (amortized; actual on rebuild only)\n",
+                    n_calls_all > 0 ? (ed.t_graph_build_us   / 1000.0) / n_calls_all : 0.0);
+            if (ed.n_graph_rebuilt > 0) {
+                LOG_INF("      - Per rebuild             : %8.3f ms\n", (ed.t_graph_build_us / 1000.0) / ed.n_graph_rebuilt);
+            }
+            LOG_INF("    * Avg per call: set_inputs  : %8.3f ms\n", n_calls_all > 0 ? (ed.t_set_inputs_us    / 1000.0) / n_calls_all : 0.0);
+            LOG_INF("    * Avg per call: graph_compute: %7.3f ms (submit + any in-call wait)\n",
+                    n_calls_all > 0 ? (ed.t_graph_compute_us / 1000.0) / n_calls_all : 0.0);
+            LOG_INF("    * Avg per step (all phases) : %8.3f ms\n",
+                    num_steps > 0 ? ((ed.t_apply_mctx_us + ed.t_graph_build_us + ed.t_set_inputs_us + ed.t_graph_compute_us) / 1000.0) / num_steps : 0.0);
         }
+        LOG_INF("  - Tree Pruning (Reranking)    : %8.3f ms\n", avg_ms_per(total_tree_pruning_us, num_steps));
+        LOG_INF("  - Draft Residual              : %8.3f ms\n", avg_ms_per(total_draft_unaccounted_us, num_steps));
+        LOG_INF("[1a] Draft Depth Latency (avg / visit)\n");
+        for (int depth = 0; depth < n_depth; ++depth) {
+            if (per_depth_visit_counts[depth] == 0) {
+                continue;
+            }
+            LOG_INF("  - Depth %d Total              : %8.3f ms (%lld visits)\n",
+                    depth,
+                    avg_ms_per(per_depth_total_us[depth], per_depth_visit_counts[depth]),
+                    (long long) per_depth_visit_counts[depth]);
+            LOG_INF("    * Pre-forward Work          : %8.3f ms / visit\n",
+                    avg_ms_per(per_depth_body_us[depth], per_depth_visit_counts[depth]));
+            LOG_INF("    * Draft Forward             : %8.3f ms / visit\n",
+                    avg_ms_per(per_depth_forward_us[depth], per_depth_visit_counts[depth]));
+            LOG_INF("    * Forward Calls             : %8.3f / visit (%lld total)\n",
+                    avg_per(per_depth_forward_calls[depth], per_depth_visit_counts[depth]),
+                    (long long) per_depth_forward_calls[depth]);
+        }
+
+        LOG_INF("[2] Verification Phase (avg / step)\n");
+        LOG_INF("  - Target Model Forward        : %8.3f ms\n", avg_ms_per(total_target_forward_us, num_steps));
+        LOG_INF("  - Target KV Cache Management  : %8.3f ms\n", avg_ms_per(total_target_kv_cache_us, num_steps));
+        LOG_INF("  - Target Batch Tokens         : %8.3f / step (max %d)\n",
+                avg_target_batch_tokens,
+                max_target_batch_tokens);
+        LOG_INF("  - Target Batch SeqRefs        : %8.3f / step (%8.3f / tok, max %d)\n",
+                avg_target_batch_seq_refs,
+                avg_target_batch_seq_refs_per_token,
+                max_target_batch_seq_refs_per_token);
+        LOG_INF("  - Target Shared Tokens        : %8.3f / step\n", avg_target_batch_shared_tokens);
+        LOG_INF("  - Target Tree Attn Edges      : %8.3f / step (max %lld)\n",
+                avg_target_tree_attn_edges,
+                (long long) max_target_tree_attn_edges);
+        LOG_INF("  - Target Seq Compare Ops      : %8.3f / step (max %lld)\n",
+                avg_target_seq_compare_ops,
+                (long long) max_target_seq_compare_ops);
+        LOG_INF("  - Target Slot Search          : %8.3f ms\n", avg_ms_per(total_target_slot_search_us, num_steps));
+        LOG_INF("  - Target Mask Build           : %8.3f ms\n", avg_ms_per(total_target_mask_build_us, num_steps));
+        LOG_INF("  - Target Shard Prefill        : %8.3f ms\n", avg_ms_per(total_target_shard_prefill_us, num_steps));
+        LOG_INF("    * Shard KV Override         : %8.3f ms\n", avg_ms_per(total_target_shard_kv_override_us, num_steps));
+        LOG_INF("    * Shard Input Fill          : %8.3f ms\n", avg_ms_per(total_target_shard_input_fill_us, num_steps));
+        LOG_INF("    * Shard Tensor Build        : %8.3f ms\n", avg_ms_per(total_target_shard_tensor_build_us, num_steps));
+        LOG_INF("    * Shard Execute             : %8.3f ms\n", avg_ms_per(total_target_shard_execute_us, num_steps));
+        LOG_INF("    * Shard Output Copy         : %8.3f ms\n", avg_ms_per(total_target_shard_output_copy_us, num_steps));
+        LOG_INF("  - Target Internal KV Write    : %8.3f ms\n", avg_ms_per(total_target_internal_kv_writeback_us, num_steps));
+        LOG_INF("  - Target Cell Meta Update     : %8.3f ms\n", avg_ms_per(total_target_cell_meta_us, num_steps));
+        LOG_INF("  - Target Logits Dequant       : %8.3f ms\n", avg_ms_per(total_target_logits_dequant_us, num_steps));
+        LOG_INF("  - Target Hidden Copy          : %8.3f ms\n", avg_ms_per(total_target_hidden_copy_us, num_steps));
+        LOG_INF("  - Target Logits Inject        : %8.3f ms\n", avg_ms_per(total_target_logits_inject_us, num_steps));
+        LOG_INF("  - Tree Verification Logic     : %8.3f ms\n", avg_ms_per(total_verify_logic_us, num_steps));
+        LOG_INF("  - Fallback Sampling           : %8.3f ms\n", avg_ms_per(total_fallback_sampling_us, num_steps));
+        LOG_INF("  - Verification Unaccounted    : %8.3f ms\n", avg_ms_per(total_verification_unaccounted_us, num_steps));
+        if (fallback_sample_calls > 0) {
+            LOG_INF("    * Sampler sync              : %8.3f ms / call\n",
+                    avg_ms_per(total_fallback_sampler_profile.sync_us, fallback_sample_calls));
+            LOG_INF("    * set_logits                : %8.3f ms / call\n",
+                    avg_ms_per(total_fallback_sampler_profile.set_logits_us, fallback_sample_calls));
+            LOG_INF("      - logits fetch            : %8.3f ms / call\n",
+                    avg_ms_per(total_fallback_sampler_profile.get_logits_us, fallback_sample_calls));
+            LOG_INF("      - candidate build         : %8.3f ms / call\n",
+                    avg_ms_per(total_fallback_sampler_profile.build_candidates_us, fallback_sample_calls));
+            LOG_INF("    * Grammar apply/check       : %8.3f ms / call\n",
+                    avg_ms_per(total_fallback_sampler_profile.grammar_apply_us + total_fallback_sampler_profile.grammar_check_us, fallback_sample_calls));
+            LOG_INF("    * Sampler chain apply       : %8.3f ms / call\n",
+                    avg_ms_per(total_fallback_sampler_profile.chain_apply_us, fallback_sample_calls));
+            LOG_INF("    * Resample passes           : %8.3f / call\n",
+                    avg_per(total_fallback_sampler_profile.resample_count, fallback_sample_calls));
+            LOG_INF("    * Non-sampler overhead      : %8.3f ms / call\n",
+                    avg_ms_per(fallback_sampler_other_us, fallback_sample_calls));
+        }
+
+        LOG_INF("[3] Injected Handoff Delay (avg / step)\n");
+        LOG_INF("  - Draft -> Target Delay       : %8.3f ms\n", avg_ms_per(total_draft_target_delay_us, num_steps));
+        LOG_INF("  - Target -> Draft Delay       : %8.3f ms\n", avg_ms_per(total_target_draft_delay_us, num_steps));
         LOG_INF("=====================================================\n");
         
         fprintf(stderr, "\n");
@@ -1342,13 +1628,13 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  Avg verification      : %9.3f ms\n", avg_verify_lat);
         fprintf(stderr, "  Avg T_d (1-tok dft)   : %9.3f ms\n", avg_td);
         fprintf(stderr, "  Avg (draft+verify)    : %9.3f ms\n", avg_step_ms);
-        fprintf(stderr, "  Gap draft->target     : %9.3f ms total\n", total_draft_target_delay_us / 1000.0f);
-        fprintf(stderr, "  Gap target->draft     : %9.3f ms total\n", total_target_draft_delay_us / 1000.0f);
+        fprintf(stderr, "  Gap draft->target     : %9.3f ms / step\n", avg_ms_per(total_draft_target_delay_us, num_steps));
+        fprintf(stderr, "  Gap target->draft     : %9.3f ms / step\n", avg_ms_per(total_target_draft_delay_us, num_steps));
         fprintf(stderr, "------------------------------------------------------------\n");
     }
 
     // [추가] 수락 길이 통계 계산 및 출력
-    if (!acceptance_lengths.empty()) {
+    if (acceptance_lengths.size() > 1) {
         const double avg_len = std::accumulate(acceptance_lengths.begin()+1, acceptance_lengths.end(), 0.0) / (acceptance_lengths.size()-1);
         const int min_len = *std::min_element(acceptance_lengths.begin()+1, acceptance_lengths.end());
         const int max_len = *std::max_element(acceptance_lengths.begin()+1, acceptance_lengths.end());
@@ -1365,20 +1651,20 @@ int main(int argc, char ** argv) {
         const double avg_verification_latency = std::accumulate(verification_latencies.begin(), verification_latencies.end(), 0.0) / verification_latencies.size();
         LOG_INF("\navg drafting latency: %.3f ms\n", avg_decoding_latency);
         LOG_INF("avg verification latency: %.3f ms\n", avg_verification_latency);
-        LOG_INF("avg T_d: %.3f ms\n", std::accumulate(T_d.begin(), T_d.end(), 0.0) / T_d.size());
-        LOG_INF("Verification/Draft Phase Count: %zu", verification_latencies.size());
+        LOG_INF("avg T_d: %.3f ms\n", !T_d.empty() ? (std::accumulate(T_d.begin(), T_d.end(), 0.0) / T_d.size()) : 0.0);
+        LOG_INF("Verification/Draft Phase Count: %zu\n", verification_latencies.size());
     }
 
-    // Accepted Token Counts Matrix 출력 (디버깅용)
-    LOG_INF("\nAccepted Token Counts Matrix:\n");
-    for (int i = 0; i < rows; i++) {
-        LOG_INF("[");
-        for (int j = 0; j < cols; j++) {
-            // 기존 "%d " 대신 "%3d"를 사용하여 너비를 3으로 맞춥니다.
-            LOG_INF("%3d", accept_counts[i][j]);
-        }
-        LOG_INF(" ]\n");
-    }
+    // // Accepted Token Counts Matrix 출력 (디버깅용)
+    // LOG_INF("\nAccepted Token Counts Matrix:\n");
+    // for (int i = 0; i < rows; i++) {
+    //     LOG_INF("[");
+    //     for (int j = 0; j < cols; j++) {
+    //         // 기존 "%d " 대신 "%3d"를 사용하여 너비를 3으로 맞춥니다.
+    //         LOG_INF("%3d", accept_counts[i][j]);
+    //     }
+    //     LOG_INF(" ]\n");
+    // }
 
     // Save data files
     {
