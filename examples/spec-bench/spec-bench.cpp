@@ -19,6 +19,8 @@
 #include "../src/llama-model.h"
 
 #include <algorithm>
+#include <cinttypes>
+#include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -33,6 +35,9 @@
 #include <fstream>
 #include <sstream>
 #include <numeric>
+#include <functional>
+#include <limits>
+#include <utility>
 #include <unordered_map>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
@@ -1220,6 +1225,491 @@ static void write_prompt_result_file(
     ofs << "  Avg T_d (1-tok dft) : " << res.avg_td << " ms\n";
 }
 
+// ============================================================
+// Selector training data collection
+// ============================================================
+
+struct selector_data_config {
+    bool collect = false;
+    std::string data_dir;
+    int lookahead_depth = 5;
+    int top_k = 2048;
+    int64_t max_samples = -1;
+    bool save_hidden_fp16 = true;
+    bool save_logits_fp16 = true;
+};
+
+struct selector_topk_row {
+    std::vector<int32_t> ids;
+    std::vector<float> logits;
+};
+
+static bool write_float_record(
+    std::ofstream & ofs,
+    const float * data,
+    size_t count,
+    bool fp16,
+    std::vector<ggml_fp16_t> & fp16_scratch) {
+    if (!ofs.is_open() || !data) {
+        return false;
+    }
+
+    if (fp16) {
+        fp16_scratch.resize(count);
+        for (size_t i = 0; i < count; ++i) {
+            fp16_scratch[i] = ggml_fp32_to_fp16(data[i]);
+        }
+        ofs.write(reinterpret_cast<const char *>(fp16_scratch.data()),
+                  (std::streamsize) (fp16_scratch.size() * sizeof(ggml_fp16_t)));
+    } else {
+        ofs.write(reinterpret_cast<const char *>(data),
+                  (std::streamsize) (count * sizeof(float)));
+    }
+
+    return ofs.good();
+}
+
+static void topk_logits(
+    const float * logits,
+    int vocab_size,
+    int k,
+    std::vector<int32_t> & ids,
+    std::vector<float> & values) {
+    ids.assign(k, -1);
+    values.assign(k, -std::numeric_limits<float>::infinity());
+
+    if (!logits || vocab_size <= 0 || k <= 0) {
+        return;
+    }
+
+    const int k_eff = std::min(k, vocab_size);
+    std::vector<std::pair<float, int32_t>> heap;
+    heap.reserve(k_eff);
+    const auto cmp = std::greater<std::pair<float, int32_t>>();
+
+    for (int32_t token_id = 0; token_id < vocab_size; ++token_id) {
+        const std::pair<float, int32_t> cur(logits[token_id], token_id);
+        if ((int) heap.size() < k_eff) {
+            heap.push_back(cur);
+            std::push_heap(heap.begin(), heap.end(), cmp);
+        } else if (cur > heap.front()) {
+            std::pop_heap(heap.begin(), heap.end(), cmp);
+            heap.back() = cur;
+            std::push_heap(heap.begin(), heap.end(), cmp);
+        }
+    }
+
+    std::sort(heap.begin(), heap.end(),
+        [](const auto & a, const auto & b) {
+            if (a.first != b.first) {
+                return a.first > b.first;
+            }
+            return a.second < b.second;
+        });
+
+    for (int i = 0; i < k_eff; ++i) {
+        values[i] = heap[i].first;
+        ids[i] = heap[i].second;
+    }
+}
+
+class SelectorDataWriter {
+public:
+    bool open(const selector_data_config & cfg) {
+        cfg_ = cfg;
+        namespace fs = std::filesystem;
+
+        std::error_code ec;
+        fs::create_directories(cfg_.data_dir, ec);
+        if (ec) {
+            fprintf(stderr, "Error: failed to create selector data directory %s: %s\n",
+                    cfg_.data_dir.c_str(), ec.message().c_str());
+            return false;
+        }
+
+        const fs::path dir(cfg_.data_dir);
+        hidden_path_     = (dir / (cfg_.save_hidden_fp16 ? "hidden.fp16.bin" : "hidden.f32.bin")).string();
+        top_ids_path_    = (dir / "top_ids.i32.bin").string();
+        top_logits_path_ = (dir / (cfg_.save_logits_fp16 ? "top_logits.fp16.bin" : "top_logits.f32.bin")).string();
+        gold_ids_path_   = (dir / "gold_ids.i32.bin").string();
+        meta_path_       = (dir / "meta.json").string();
+
+        hidden_.open(hidden_path_, std::ios::binary);
+        top_ids_.open(top_ids_path_, std::ios::binary);
+        top_logits_.open(top_logits_path_, std::ios::binary);
+        gold_ids_.open(gold_ids_path_, std::ios::binary);
+
+        if (!hidden_.is_open() || !top_ids_.is_open() ||
+            !top_logits_.is_open() || !gold_ids_.is_open()) {
+            fprintf(stderr, "Error: failed to open selector data output files under %s\n",
+                    cfg_.data_dir.c_str());
+            return false;
+        }
+
+        return true;
+    }
+
+    bool write_sample(
+        const float * hidden,
+        int hidden_dim,
+        int vocab_size,
+        const std::vector<int32_t> & top_ids,
+        const std::vector<float> & top_logits,
+        const std::vector<int32_t> & gold_ids) {
+        if (hidden_dim <= 0 || vocab_size <= 0) {
+            fprintf(stderr, "Error: invalid selector sample dimensions hidden_dim=%d vocab_size=%d\n",
+                    hidden_dim, vocab_size);
+            return false;
+        }
+
+        if (hidden_dim_ == 0) {
+            hidden_dim_ = hidden_dim;
+        } else if (hidden_dim_ != hidden_dim) {
+            fprintf(stderr, "Error: selector hidden_dim changed from %d to %d\n",
+                    hidden_dim_, hidden_dim);
+            return false;
+        }
+
+        if (vocab_size_ == 0) {
+            vocab_size_ = vocab_size;
+        } else if (vocab_size_ != vocab_size) {
+            fprintf(stderr, "Error: selector vocab_size changed from %d to %d\n",
+                    vocab_size_, vocab_size);
+            return false;
+        }
+
+        const size_t dk = (size_t) cfg_.lookahead_depth * (size_t) cfg_.top_k;
+        if (top_ids.size() != dk || top_logits.size() != dk ||
+            gold_ids.size() != (size_t) cfg_.lookahead_depth) {
+            fprintf(stderr, "Error: invalid selector sample payload sizes\n");
+            return false;
+        }
+
+        if (!write_float_record(hidden_, hidden, (size_t) hidden_dim_, cfg_.save_hidden_fp16, fp16_scratch_)) {
+            fprintf(stderr, "Error: failed to write selector hidden record\n");
+            return false;
+        }
+
+        top_ids_.write(reinterpret_cast<const char *>(top_ids.data()),
+                       (std::streamsize) (top_ids.size() * sizeof(int32_t)));
+        if (!top_ids_.good()) {
+            fprintf(stderr, "Error: failed to write selector top_ids record\n");
+            return false;
+        }
+
+        if (!write_float_record(top_logits_, top_logits.data(), top_logits.size(),
+                                cfg_.save_logits_fp16, fp16_scratch_)) {
+            fprintf(stderr, "Error: failed to write selector top_logits record\n");
+            return false;
+        }
+
+        gold_ids_.write(reinterpret_cast<const char *>(gold_ids.data()),
+                        (std::streamsize) (gold_ids.size() * sizeof(int32_t)));
+        if (!gold_ids_.good()) {
+            fprintf(stderr, "Error: failed to write selector gold_ids record\n");
+            return false;
+        }
+
+        ++num_samples_;
+        return true;
+    }
+
+    void close() {
+        hidden_.close();
+        top_ids_.close();
+        top_logits_.close();
+        gold_ids_.close();
+    }
+
+    bool write_meta(
+        const std::string & bench_file,
+        const std::string & dataset_type,
+        const std::string & chat_template,
+        int prompts_processed,
+        int64_t token_positions_processed) const {
+        std::ofstream ofs(meta_path_);
+        if (!ofs.is_open()) {
+            fprintf(stderr, "Error: failed to write selector meta file: %s\n", meta_path_.c_str());
+            return false;
+        }
+
+        ofs << "{\n"
+            << "  \"num_samples\": " << num_samples_ << ",\n"
+            << "  \"hidden_dim\": " << hidden_dim_ << ",\n"
+            << "  \"vocab_size\": " << vocab_size_ << ",\n"
+            << "  \"lookahead_depth\": " << cfg_.lookahead_depth << ",\n"
+            << "  \"top_k\": " << cfg_.top_k << ",\n"
+            << "  \"hidden_dtype\": \"" << (cfg_.save_hidden_fp16 ? "fp16" : "f32") << "\",\n"
+            << "  \"top_logits_dtype\": \"" << (cfg_.save_logits_fp16 ? "fp16" : "f32") << "\",\n"
+            << "  \"top_ids_dtype\": \"i32\",\n"
+            << "  \"gold_ids_dtype\": \"i32\",\n"
+            << "  \"bench_file\": \"" << json_escape(bench_file) << "\",\n"
+            << "  \"dataset_type\": \"" << json_escape(dataset_type) << "\",\n"
+            << "  \"chat_template\": \"" << json_escape(chat_template) << "\",\n"
+            << "  \"alignment_description\": \"hidden[t] and logits[t] predict tokens[t+1]. top_ids[t,0] is from logits[t]. gold_ids[t,0] is tokens[t+1].\",\n"
+            << "  \"prompts_processed\": " << prompts_processed << ",\n"
+            << "  \"token_positions_processed\": " << token_positions_processed << "\n"
+            << "}\n";
+
+        return ofs.good();
+    }
+
+    int64_t num_samples() const { return num_samples_; }
+    int hidden_dim() const { return hidden_dim_; }
+    int vocab_size() const { return vocab_size_; }
+    void set_vocab_size(int vocab_size) { if (vocab_size_ == 0) vocab_size_ = vocab_size; }
+
+private:
+    selector_data_config cfg_;
+    int64_t num_samples_ = 0;
+    int hidden_dim_ = 0;
+    int vocab_size_ = 0;
+
+    std::string hidden_path_;
+    std::string top_ids_path_;
+    std::string top_logits_path_;
+    std::string gold_ids_path_;
+    std::string meta_path_;
+
+    std::ofstream hidden_;
+    std::ofstream top_ids_;
+    std::ofstream top_logits_;
+    std::ofstream gold_ids_;
+    std::vector<ggml_fp16_t> fp16_scratch_;
+};
+
+static int collect_selector_data(
+    const selector_data_config & cfg,
+    const std::vector<bench_prompt> & prompts,
+    size_t idx_start,
+    size_t idx_end,
+    const std::string & bench_file,
+    const std::string & dataset_type,
+    const std::string & chat_template,
+    llama_context * ctx_tgt,
+    llama_model * model_tgt,
+    callback_data & cb_data) {
+    if (!ctx_tgt || !model_tgt) {
+        fprintf(stderr, "Error: selector collector received null model/context\n");
+        return 1;
+    }
+
+    const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
+    int vocab_size = (int) llama_model_n_vocab_out(model_tgt);
+    if (vocab_size <= 0 && vocab) {
+        vocab_size = llama_vocab_n_tokens(vocab);
+    }
+    if (vocab_size <= 0) {
+        fprintf(stderr, "Error: failed to infer selector vocab size from target model\n");
+        return 1;
+    }
+    if (cfg.top_k > vocab_size) {
+        fprintf(stderr, "Error: --selector-top-k (%d) exceeds vocab size (%d)\n",
+                cfg.top_k, vocab_size);
+        return 1;
+    }
+
+    SelectorDataWriter writer;
+    if (!writer.open(cfg)) {
+        return 1;
+    }
+    writer.set_vocab_size(vocab_size);
+
+    auto * mem_tgt = llama_get_memory(ctx_tgt);
+    const int max_context_size = (int) llama_n_ctx(ctx_tgt);
+    const int max_batch_size = (int) llama_n_batch(ctx_tgt);
+    int64_t token_positions_processed = 0;
+    int prompts_processed = 0;
+    int prompts_with_samples = 0;
+
+    fprintf(stderr,
+            "[%s] Selector data collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64 "\n",
+            SPEC_BENCH_BACKEND_LABEL,
+            cfg.data_dir.c_str(),
+            cfg.lookahead_depth,
+            cfg.top_k,
+            cfg.max_samples);
+
+    for (size_t prompt_idx = idx_start; prompt_idx < idx_end; ++prompt_idx) {
+        if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
+            break;
+        }
+
+        const auto & bp = prompts[prompt_idx];
+        const std::string prompt_text = apply_template(chat_template, bp.text);
+        std::vector<llama_token> tokens = common_tokenize(ctx_tgt, prompt_text, true, true);
+        const int n_tokens = (int) tokens.size();
+
+        ++prompts_processed;
+
+        if (n_tokens <= cfg.lookahead_depth) {
+            if (prompts_processed % 10 == 0) {
+                fprintf(stderr,
+                        "[%s] selector progress: prompts=%d token_positions=%" PRId64 " samples=%" PRId64 "\n",
+                        SPEC_BENCH_BACKEND_LABEL,
+                        prompts_processed,
+                        token_positions_processed,
+                        writer.num_samples());
+            }
+            continue;
+        }
+
+        if (n_tokens > max_context_size) {
+            fprintf(stderr,
+                    "[%s] selector skip prompt %zu: %d tokens exceed context limit (%d)\n",
+                    SPEC_BENCH_BACKEND_LABEL,
+                    prompt_idx + 1,
+                    n_tokens,
+                    max_context_size);
+            continue;
+        }
+
+        llama_memory_clear(mem_tgt, true);
+        cb_data.data.clear();
+
+        const int rows_needed = n_tokens - 1;
+        std::vector<selector_topk_row> topk_by_row(rows_needed);
+        bool ok = true;
+        int n_past = 0;
+        llama_batch batch = llama_batch_init(max_batch_size, 0, 1);
+
+        for (int chunk_start = 0; chunk_start < rows_needed; chunk_start += max_batch_size) {
+            const int chunk_size = std::min(max_batch_size, rows_needed - chunk_start);
+            common_batch_clear(batch);
+            for (int j = 0; j < chunk_size; ++j) {
+                common_batch_add(batch, tokens[chunk_start + j], n_past++, { 0 }, true);
+            }
+
+            if (llama_decode(ctx_tgt, batch) != 0) {
+                fprintf(stderr,
+                        "[%s] selector skip prompt %zu: target decode failed at token %d\n",
+                        SPEC_BENCH_BACKEND_LABEL,
+                        prompt_idx + 1,
+                        chunk_start);
+                ok = false;
+                break;
+            }
+            ctx_tgt->synchronize();
+
+            for (int j = 0; j < chunk_size; ++j) {
+                const float * logits = llama_get_logits_ith(ctx_tgt, j);
+                if (!logits) {
+                    fprintf(stderr,
+                            "[%s] selector skip prompt %zu: logits row %d unavailable\n",
+                            SPEC_BENCH_BACKEND_LABEL,
+                            prompt_idx + 1,
+                            chunk_start + j);
+                    ok = false;
+                    break;
+                }
+                topk_logits(logits, vocab_size, cfg.top_k,
+                            topk_by_row[chunk_start + j].ids,
+                            topk_by_row[chunk_start + j].logits);
+            }
+
+            if (!ok) {
+                break;
+            }
+        }
+
+        llama_batch_free(batch);
+
+        if (!ok) {
+            continue;
+        }
+
+        const auto & hiddens = cb_data.data;
+        if (hiddens.empty() || hiddens.size() % (size_t) rows_needed != 0) {
+            fprintf(stderr,
+                    "[%s] selector skip prompt %zu: result_norm hidden states unavailable (floats=%zu rows=%d)\n",
+                    SPEC_BENCH_BACKEND_LABEL,
+                    prompt_idx + 1,
+                    hiddens.size(),
+                    rows_needed);
+            continue;
+        }
+
+        const int hidden_dim = (int) (hiddens.size() / (size_t) rows_needed);
+        if (hidden_dim <= 0) {
+            fprintf(stderr,
+                    "[%s] selector skip prompt %zu: invalid hidden_dim=%d\n",
+                    SPEC_BENCH_BACKEND_LABEL,
+                    prompt_idx + 1,
+                    hidden_dim);
+            continue;
+        }
+
+        const int n_valid_positions = n_tokens - cfg.lookahead_depth;
+        bool prompt_wrote_sample = false;
+        std::vector<int32_t> sample_top_ids;
+        std::vector<float> sample_top_logits;
+        std::vector<int32_t> sample_gold_ids;
+        sample_top_ids.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
+        sample_top_logits.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
+        sample_gold_ids.reserve(cfg.lookahead_depth);
+
+        for (int t = 0; t < n_valid_positions; ++t) {
+            if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
+                break;
+            }
+
+            sample_top_ids.clear();
+            sample_top_logits.clear();
+            sample_gold_ids.clear();
+
+            for (int d = 0; d < cfg.lookahead_depth; ++d) {
+                const auto & row = topk_by_row[t + d];
+                sample_top_ids.insert(sample_top_ids.end(), row.ids.begin(), row.ids.end());
+                sample_top_logits.insert(sample_top_logits.end(), row.logits.begin(), row.logits.end());
+                sample_gold_ids.push_back((int32_t) tokens[t + d + 1]);
+            }
+
+            const float * hidden = hiddens.data() + (size_t) t * (size_t) hidden_dim;
+            if (!writer.write_sample(hidden, hidden_dim, vocab_size,
+                                     sample_top_ids, sample_top_logits, sample_gold_ids)) {
+                writer.close();
+                return 1;
+            }
+
+            ++token_positions_processed;
+            prompt_wrote_sample = true;
+        }
+
+        if (prompt_wrote_sample) {
+            ++prompts_with_samples;
+        }
+
+        if (prompts_processed % 10 == 0 ||
+            prompt_idx + 1 == idx_end ||
+            (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples)) {
+            fprintf(stderr,
+                    "[%s] selector progress: prompts=%d token_positions=%" PRId64 " samples=%" PRId64 "\n",
+                    SPEC_BENCH_BACKEND_LABEL,
+                    prompts_processed,
+                    token_positions_processed,
+                    writer.num_samples());
+        }
+    }
+
+    writer.close();
+
+    if (!writer.write_meta(bench_file, dataset_type, chat_template,
+                           prompts_processed, token_positions_processed)) {
+        return 1;
+    }
+
+    fprintf(stderr,
+            "[%s] selector collection complete: samples=%" PRId64 " prompts=%d prompts_with_samples=%d hidden_dim=%d vocab_size=%d\n",
+            SPEC_BENCH_BACKEND_LABEL,
+            writer.num_samples(),
+            prompts_processed,
+            prompts_with_samples,
+            writer.hidden_dim(),
+            writer.vocab_size());
+
+    return 0;
+}
+
 static void write_json_token_array(std::ostream & os, const std::vector<llama_token> & tokens) {
     os << "[";
     for (size_t i = 0; i < tokens.size(); ++i) {
@@ -1366,34 +1856,50 @@ int main(int argc, char ** argv) {
     std::string calibration_mode = "none";
     bool collect_vocab_stats = false;
     shortlist_config shortlist_cfg;
+    selector_data_config selector_cfg;
     int bench_start = 0;
     int bench_count = -1;
     std::vector<char *> filtered_argv;
     for (int i = 0; i < argc; ++i) {
-        if (std::string(argv[i]) == "--bench-file" && i + 1 < argc) {
+        std::string arg = argv[i];
+        if (arg == "--bench-file" && i + 1 < argc) {
             bench_file = argv[++i];
-        } else if (std::string(argv[i]) == "--chat-template" && i + 1 < argc) {
+        } else if (arg == "--chat-template" && i + 1 < argc) {
             chat_template = argv[++i];
-        } else if (std::string(argv[i]) == "--no-chat-template") {
+        } else if (arg == "--no-chat-template") {
             chat_template = "none";
-        } else if (std::string(argv[i]) == "--dataset-type" && i + 1 < argc) {
+        } else if (arg == "--dataset-type" && i + 1 < argc) {
             dataset_type = argv[++i];
-        } else if (std::string(argv[i]) == "--bench-start" && i + 1 < argc) {
+        } else if (arg == "--bench-start" && i + 1 < argc) {
             bench_start = std::atoi(argv[++i]);
-        } else if (std::string(argv[i]) == "--bench-count" && i + 1 < argc) {
+        } else if (arg == "--bench-count" && i + 1 < argc) {
             bench_count = std::atoi(argv[++i]);
-        } else if (std::string(argv[i]) == "--results-dir" && i + 1 < argc) {
+        } else if (arg == "--results-dir" && i + 1 < argc) {
             results_dir = argv[++i];
-        } else if (std::string(argv[i]) == "--analysis-shortlist" && i + 1 < argc) {
+        } else if (arg == "--analysis-shortlist" && i + 1 < argc) {
             shortlist_cfg.global_path = argv[++i];
-        } else if (std::string(argv[i]) == "--analysis-shortlist-dir" && i + 1 < argc) {
+        } else if (arg == "--analysis-shortlist-dir" && i + 1 < argc) {
             shortlist_cfg.category_dir = argv[++i];
-        } else if (std::string(argv[i]) == "--save-trace") {
+        } else if (arg == "--save-trace") {
             shortlist_cfg.save_trace = true;
-        } else if (std::string(argv[i]) == "--collect-vocab-stats") {
+        } else if (arg == "--collect-vocab-stats") {
             collect_vocab_stats = true;
-        } else if (std::string(argv[i]) == "--calibration-mode" && i + 1 < argc) {
+        } else if (arg == "--calibration-mode" && i + 1 < argc) {
             calibration_mode = argv[++i];
+        } else if (arg == "--collect-selector-data") {
+            selector_cfg.collect = true;
+        } else if (arg == "--selector-data-dir" && i + 1 < argc) {
+            selector_cfg.data_dir = argv[++i];
+        } else if (arg == "--selector-lookahead-depth" && i + 1 < argc) {
+            selector_cfg.lookahead_depth = std::atoi(argv[++i]);
+        } else if (arg == "--selector-top-k" && i + 1 < argc) {
+            selector_cfg.top_k = std::atoi(argv[++i]);
+        } else if (arg == "--selector-max-samples" && i + 1 < argc) {
+            selector_cfg.max_samples = std::atoll(argv[++i]);
+        } else if (arg == "--selector-save-hidden-fp16") {
+            selector_cfg.save_hidden_fp16 = true;
+        } else if (arg == "--selector-save-logits-fp16") {
+            selector_cfg.save_logits_fp16 = true;
         } else {
             filtered_argv.push_back(argv[i]);
         }
@@ -1412,6 +1918,11 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  --collect-vocab-stats    Enable raw acceptance/prefix/proposal stat collection\n");
         fprintf(stderr, "  --save-trace             Save per-step verification trace to step_trace.jsonl\n");
         fprintf(stderr, "  --calibration-mode MODE  none (default) or target-generate\n");
+        fprintf(stderr, "  --collect-selector-data  Collect dynamic vocab selector training data\n");
+        fprintf(stderr, "  --selector-data-dir DIR  Output directory for selector data\n");
+        fprintf(stderr, "  --selector-lookahead-depth N  Future target distributions per hidden (default: 5)\n");
+        fprintf(stderr, "  --selector-top-k N       Top target logits/token ids per future step (default: 2048)\n");
+        fprintf(stderr, "  --selector-max-samples N Optional sample limit (-1 = no limit)\n");
         return 1;
     }
 
@@ -1428,6 +1939,29 @@ int main(int argc, char ** argv) {
     if (calibration_mode != "none" && calibration_mode != "target-generate") {
         fprintf(stderr, "Error: unknown calibration mode '%s'. Use: none, target-generate\n", calibration_mode.c_str());
         return 1;
+    }
+
+    if (selector_cfg.collect) {
+        if (selector_cfg.data_dir.empty()) {
+            fprintf(stderr, "Error: --selector-data-dir is required with --collect-selector-data\n");
+            return 1;
+        }
+        if (selector_cfg.lookahead_depth <= 0) {
+            fprintf(stderr, "Error: --selector-lookahead-depth must be > 0\n");
+            return 1;
+        }
+        if (selector_cfg.top_k <= 0) {
+            fprintf(stderr, "Error: --selector-top-k must be > 0\n");
+            return 1;
+        }
+        if (selector_cfg.max_samples < -1) {
+            fprintf(stderr, "Error: --selector-max-samples must be -1 or >= 0\n");
+            return 1;
+        }
+        if (calibration_mode != "none") {
+            fprintf(stderr, "Error: --collect-selector-data cannot be combined with --calibration-mode\n");
+            return 1;
+        }
     }
 
     int new_argc = (int)filtered_argv.size();
@@ -1447,7 +1981,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (calibration_mode == "none" && params.speculative.model.path.empty()) {
+    if (!selector_cfg.collect && calibration_mode == "none" && params.speculative.model.path.empty()) {
         fprintf(stderr, "Error: --model-draft is required\n");
         return 1;
     }
@@ -1476,25 +2010,29 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (results_dir.empty()) {
-        results_dir = default_results_dir(bench_file);
-    }
-
-    std::error_code ec;
-    std::filesystem::create_directories(results_dir, ec);
-    if (ec) {
-        fprintf(stderr, "Error: failed to create results directory %s: %s\n",
-                results_dir.c_str(), ec.message().c_str());
-        return 1;
-    }
-
-    if (!load_shortlist_config(shortlist_cfg)) {
-        return 1;
-    }
-
     fprintf(stderr, "[Spec-Bench] Loaded %zu prompts from %s (type: %s, template: %s)\n",
             prompts.size(), bench_file.c_str(), dataset_type.c_str(), chat_template.c_str());
-    fprintf(stderr, "[Spec-Bench] Per-prompt results will be saved under %s\n", results_dir.c_str());
+    if (!selector_cfg.collect) {
+        if (results_dir.empty()) {
+            results_dir = default_results_dir(bench_file);
+        }
+
+        std::error_code ec;
+        std::filesystem::create_directories(results_dir, ec);
+        if (ec) {
+            fprintf(stderr, "Error: failed to create results directory %s: %s\n",
+                    results_dir.c_str(), ec.message().c_str());
+            return 1;
+        }
+
+        if (!load_shortlist_config(shortlist_cfg)) {
+            return 1;
+        }
+
+        fprintf(stderr, "[Spec-Bench] Per-prompt results will be saved under %s\n", results_dir.c_str());
+    } else {
+        fprintf(stderr, "[Spec-Bench] Selector data will be saved under %s\n", selector_cfg.data_dir.c_str());
+    }
 
     const int n_seq_dft = params.n_parallel;
 
@@ -1529,6 +2067,22 @@ int main(int argc, char ** argv) {
     analysis_stats analysis;
     const size_t idx_start = std::max(0, bench_start);
     const size_t idx_end   = bench_count < 0 ? prompts.size() : std::min(prompts.size(), (size_t) (bench_start + bench_count));
+
+    if (selector_cfg.collect) {
+        const int rc = collect_selector_data(
+            selector_cfg,
+            prompts,
+            idx_start,
+            idx_end,
+            bench_file,
+            dataset_type,
+            chat_template,
+            ctx_tgt,
+            model_tgt,
+            cb_data);
+        llama_backend_free();
+        return rc;
+    }
 
     if (calibration_mode == "target-generate") {
         const int rc = run_target_generate_calibration(
