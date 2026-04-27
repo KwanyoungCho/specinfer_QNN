@@ -82,6 +82,7 @@ struct llama_context {
     void set_warmup(bool value);
     void set_eagle_hidden_only(bool value);
     bool set_eagle_runtime_output(const void * weights, size_t n_bytes, int32_t n_rows);
+    bool set_eagle_runtime_output_ids(const int32_t * ids, int32_t n_rows);
     bool set_eagle_runtime_output_copy(ggml_tensor * src, int32_t n_rows);
     bool set_eagle_runtime_output_borrowed(ggml_tensor * src, int32_t n_rows, std::shared_ptr<void> owner);
     void clear_eagle_runtime_output();
@@ -333,6 +334,9 @@ private:
     uint32_t                n_eagle_runtime_output = 0;
     bool                    eagle_runtime_output_borrowed = false;
     std::shared_ptr<void>   eagle_runtime_output_owner;
+    std::vector<int32_t>    eagle_runtime_output_ids;
+    uint32_t                n_eagle_runtime_output_ids = 0;
+    bool                    eagle_runtime_output_ids_active = false;
 
     bool has_evaluated_once = false;
 

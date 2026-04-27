@@ -695,7 +695,10 @@ struct ggml_backend_opencl_context {
     cl_program program_CL_gemv_4096_1_4096;
     cl_program program_CL_gemv_11008_1_4096;
     cl_program program_CL_gemv_32000_1_4096;
+    cl_program program_CL_gemm_indexed_q4_0_Ab_Bi;
     cl_kernel CL_mul_mat_Ab_Bi_8x4;
+    cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit;
+    cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit;
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_general;
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_4096_1_11008;
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_4096_1_4096;
@@ -2166,6 +2169,24 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 #endif
         backend_ctx->program_CL_gemm = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_CL_gemm.c_str(), compile_opts);
         CL_CHECK((backend_ctx->CL_mul_mat_Ab_Bi_8x4 = clCreateKernel(backend_ctx->program_CL_gemm, "kernel_mul_mat_Ab_Bi_8x4", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // indexed Q4_0 x F32 reduced-LMHead matmul
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src_CL_gemm_indexed {
+            #include "mul_mat_indexed_q4_0_Ab_Bi.cl.h"
+        };
+#else
+        const std::string kernel_src_CL_gemm_indexed = read_file("mul_mat_indexed_q4_0_Ab_Bi.cl");
+#endif
+        backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_CL_gemm_indexed.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit =
+                clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit", &err), err));
+        CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit =
+                clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -3652,6 +3673,54 @@ static bool ggml_opencl_supports_gather_rows_q4_0_impl(
 #endif
 }
 
+static bool ggml_opencl_supports_indexed_mul_mat_q4_0_impl(
+        const ggml_backend_opencl_context * backend_ctx,
+        const ggml_tensor * src,
+        int32_t n_rows,
+        int32_t batch_size) {
+#if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
+    if (backend_ctx == nullptr || src == nullptr) {
+        return false;
+    }
+    if (backend_ctx->gpu_family != ADRENO ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit == nullptr) {
+        return false;
+    }
+    if (src->type != GGML_TYPE_Q4_0 || src->buffer == nullptr || src->extra == nullptr) {
+        return false;
+    }
+    if (n_rows <= 0 || batch_size <= 0 || (n_rows % 8) != 0) {
+        return false;
+    }
+    if (src->ne[2] != 1 || src->ne[3] != 1 || !ggml_is_contiguous(src)) {
+        return false;
+    }
+    if (src->ne[0] % GGML_OPENCL_QK4_0 != 0) {
+        return false;
+    }
+    const auto * extra = (const ggml_tensor_extra_cl_q4_0 *) src->extra;
+    if (extra == nullptr || extra->q == nullptr || extra->d == nullptr) {
+        return false;
+    }
+    if (!use_adreno_kernels(backend_ctx, src)) {
+        return false;
+    }
+
+    ggml_tensor dst_shape = *src;
+    dst_shape.ne[1] = n_rows;
+    dst_shape.ne[2] = 1;
+    dst_shape.ne[3] = 1;
+    return use_adreno_kernels(backend_ctx, &dst_shape);
+#else
+    GGML_UNUSED(backend_ctx);
+    GGML_UNUSED(src);
+    GGML_UNUSED(n_rows);
+    GGML_UNUSED(batch_size);
+    return false;
+#endif
+}
+
 static int32_t ggml_opencl_top_k_padded_size(int32_t n_scores) {
     if (n_scores <= 0) {
         return 0;
@@ -3675,6 +3744,19 @@ bool ggml_backend_opencl_supports_gather_rows_q4_0(
 
     const auto * backend_ctx = static_cast<const ggml_backend_opencl_context *>(backend->context);
     return ggml_opencl_supports_gather_rows_q4_0_impl(backend_ctx, src, dst_rows);
+}
+
+bool ggml_backend_opencl_supports_indexed_mul_mat_q4_0(
+        ggml_backend_t backend,
+        const ggml_tensor * src,
+        int32_t n_rows,
+        int32_t batch_size) {
+    if (!ggml_backend_is_opencl(backend)) {
+        return false;
+    }
+
+    const auto * backend_ctx = static_cast<const ggml_backend_opencl_context *>(backend->context);
+    return ggml_opencl_supports_indexed_mul_mat_q4_0_impl(backend_ctx, src, n_rows, batch_size);
 }
 
 bool ggml_backend_opencl_supports_top_k_f32(
@@ -4479,6 +4561,33 @@ bool ggml_backend_opencl_device_i32_buffer_from_host(
     return true;
 }
 
+bool ggml_backend_opencl_device_i32_buffer_write_from_host(
+        ggml_backend_t backend,
+        void * device_buffer,
+        const int32_t * values,
+        int32_t count) {
+    if (!ggml_backend_is_opencl(backend) || device_buffer == nullptr || values == nullptr || count <= 0) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    cl_mem buffer = (cl_mem) device_buffer;
+    {
+        std::lock_guard<std::mutex> lock(backend_ctx->command_mutex);
+        CL_CHECK(clEnqueueWriteBuffer(
+                backend_ctx->queue,
+                buffer,
+                CL_FALSE,
+                0,
+                sizeof(int32_t) * (size_t) count,
+                values,
+                0,
+                nullptr,
+                nullptr));
+    }
+    return true;
+}
+
 bool ggml_backend_opencl_device_i32_buffer_sort_asc_inplace(
         ggml_backend_t backend,
         void * device_buffer,
@@ -4814,6 +4923,424 @@ bool ggml_backend_opencl_gather_rows_q4_0_device_i32_padded(
     GGML_UNUSED(selected_rows);
     GGML_UNUSED(n_rows);
     GGML_UNUSED(pad_row_index);
+    GGML_UNUSED(dst);
+    return false;
+#endif
+}
+
+bool ggml_backend_opencl_indexed_mul_mat_q4_0(
+        ggml_backend_t backend,
+        const ggml_tensor * src,
+        void * device_row_indices,
+        int32_t n_rows,
+        const ggml_tensor * hidden,
+        ggml_tensor * dst) {
+#if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
+    if (!ggml_backend_is_opencl(backend) ||
+        src == nullptr || hidden == nullptr || dst == nullptr || device_row_indices == nullptr) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    const int hidden_dim = (int) src->ne[0];
+    const int src_rows   = (int) src->ne[1];
+    const int batch_size = (int) hidden->ne[1];
+
+    if (!ggml_opencl_supports_indexed_mul_mat_q4_0_impl(backend_ctx, src, n_rows, batch_size)) {
+        return false;
+    }
+    if (hidden->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+        hidden->buffer == nullptr || dst->buffer == nullptr ||
+        hidden->extra == nullptr || dst->extra == nullptr) {
+        return false;
+    }
+    if (hidden->ne[0] != hidden_dim || hidden->ne[2] != 1 || hidden->ne[3] != 1 ||
+        dst->ne[0] != n_rows || dst->ne[1] != batch_size || dst->ne[2] != 1 || dst->ne[3] != 1) {
+        return false;
+    }
+    if (!ggml_is_contiguous(hidden) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    auto * src_extra    = (ggml_tensor_extra_cl_q4_0 *) src->extra;
+    auto * hidden_extra = (ggml_tensor_extra_cl *) hidden->extra;
+    auto * dst_extra    = (ggml_tensor_extra_cl *) dst->extra;
+    if (src_extra == nullptr || hidden_extra == nullptr || dst_extra == nullptr ||
+        src_extra->q == nullptr || src_extra->d == nullptr ||
+        hidden_extra->data_device == nullptr || dst_extra->data_device == nullptr ||
+        backend_ctx->B_d_max == nullptr) {
+        return false;
+    }
+
+    cl_int status = CL_SUCCESS;
+    cl_buffer_region region;
+
+    cl_mem hidden_sub_buffer = nullptr;
+    cl_mem hidden_half_buffer = nullptr;
+    cl_mem hidden_input_image = nullptr;
+    cl_mem hidden_half_image = nullptr;
+    cl_mem dst_sub_buffer = nullptr;
+
+    const int padding = (8 - (batch_size % 8)) % 8;
+    const int padded_batch = batch_size + padding;
+
+    region.origin = hidden_extra->offset + hidden->view_offs;
+    region.size = (size_t) hidden_dim * (size_t) batch_size * sizeof(float);
+    hidden_sub_buffer = clCreateSubBuffer(
+            hidden_extra->data_device,
+            0,
+            CL_BUFFER_CREATE_TYPE_REGION,
+            &region,
+            &status);
+    CL_CHECK(status);
+
+    region.origin = 0;
+    region.size = (size_t) hidden_dim * (size_t) padded_batch * sizeof(float) / 2;
+    hidden_half_buffer = clCreateSubBuffer(
+            backend_ctx->B_d_max,
+            0,
+            CL_BUFFER_CREATE_TYPE_REGION,
+            &region,
+            &status);
+    CL_CHECK(status);
+
+    cl_image_format input_format = { CL_RGBA, CL_FLOAT };
+    cl_image_desc input_desc;
+    memset(&input_desc, 0, sizeof(input_desc));
+    input_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+    input_desc.image_width = (size_t) hidden_dim * (size_t) batch_size / 4;
+    input_desc.buffer = hidden_sub_buffer;
+    hidden_input_image = clCreateImage(
+            backend_ctx->context,
+            0,
+            &input_format,
+            &input_desc,
+            nullptr,
+            &status);
+    CL_CHECK(status);
+
+    cl_image_format half_format = { CL_RGBA, CL_HALF_FLOAT };
+    cl_image_desc half_desc;
+    memset(&half_desc, 0, sizeof(half_desc));
+    half_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+    half_desc.image_width = (size_t) hidden_dim * (size_t) padded_batch / 4;
+    half_desc.buffer = hidden_half_buffer;
+    hidden_half_image = clCreateImage(
+            backend_ctx->context,
+            0,
+            &half_format,
+            &half_desc,
+            nullptr,
+            &status);
+    CL_CHECK(status);
+
+    {
+        const int height_B2 = (batch_size + 3) / 4;
+        const int width_B2 = hidden_dim;
+        const int padded_height_B = padded_batch / 4;
+        const int padded_height_B2 = (padded_batch + 3) / 4;
+        cl_kernel transpose_kernel = backend_ctx->kernel_transpose_32_16;
+        CL_CHECK(clSetKernelArg(transpose_kernel, 0, sizeof(cl_mem), &hidden_input_image));
+        CL_CHECK(clSetKernelArg(transpose_kernel, 1, sizeof(cl_mem), &hidden_half_image));
+        CL_CHECK(clSetKernelArg(transpose_kernel, 2, sizeof(int),    &height_B2));
+        CL_CHECK(clSetKernelArg(transpose_kernel, 3, sizeof(int),    &width_B2));
+        CL_CHECK(clSetKernelArg(transpose_kernel, 4, sizeof(int),    &padded_height_B));
+
+        size_t local_size_t[2] = { 16, 1 };
+        size_t global_size_t[2] = {
+            (size_t) width_B2,
+            (size_t) padded_height_B2,
+        };
+        backend_ctx->enqueue_ndrange_kernel(transpose_kernel, 2, global_size_t, local_size_t, dst);
+    }
+
+    region.origin = dst_extra->offset + dst->view_offs;
+    region.size = (size_t) n_rows * (size_t) batch_size * sizeof(float);
+    dst_sub_buffer = clCreateSubBuffer(
+            dst_extra->data_device,
+            CL_MEM_WRITE_ONLY,
+            CL_BUFFER_CREATE_TYPE_REGION,
+            &region,
+            &status);
+    CL_CHECK(status);
+
+    cl_mem ids_buffer = (cl_mem) device_row_indices;
+    cl_kernel kernel = batch_size >= 8
+            ? backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit
+            : backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit;
+    const size_t tile_n = 8;
+    const size_t tile_m = batch_size >= 8 ? 2 : 4;
+    const size_t wi_m = 64;
+
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_extra->q));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &src_extra->d));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &hidden_half_image));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &ids_buffer));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &dst_sub_buffer));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),    &src_rows));
+    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),    &n_rows));
+    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),    &hidden_dim));
+    CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),    &batch_size));
+
+    const size_t wg_n = ((size_t) batch_size + tile_n - 1) / tile_n;
+    const size_t row_tiles = ((size_t) n_rows + tile_m - 1) / tile_m;
+    const size_t wg_m = (row_tiles + wi_m - 1) / wi_m;
+    size_t local_work_size[2] = { 1, wi_m };
+    size_t global_work_size[2] = { wg_n, wg_m * wi_m };
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
+
+    CL_CHECK(clReleaseMemObject(hidden_sub_buffer));
+    CL_CHECK(clReleaseMemObject(hidden_half_buffer));
+    CL_CHECK(clReleaseMemObject(hidden_input_image));
+    CL_CHECK(clReleaseMemObject(hidden_half_image));
+    CL_CHECK(clReleaseMemObject(dst_sub_buffer));
+    return true;
+#else
+    GGML_UNUSED(backend);
+    GGML_UNUSED(src);
+    GGML_UNUSED(device_row_indices);
+    GGML_UNUSED(n_rows);
+    GGML_UNUSED(hidden);
+    GGML_UNUSED(dst);
+    return false;
+#endif
+}
+
+static bool ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(
+        ggml_backend_t backend,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        ggml_tensor * dst) {
+#if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
+    if (!ggml_backend_is_opencl(backend) || src0 == nullptr || src1 == nullptr || dst == nullptr) {
+        return false;
+    }
+
+    const ggml_tensor * src2 = dst->src[2];
+    if (src2 == nullptr) {
+        return false;
+    }
+
+    if (src0->type != GGML_TYPE_Q4_0 || src1->type != GGML_TYPE_F32 ||
+        src2->type != GGML_TYPE_I32  || dst->type  != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // LMHead-shaped mul_mat_id:
+    //   src0 = reshape_3d(output, hidden_dim, 1, vocab)
+    //   src1 = reshape_3d(hidden, hidden_dim, 1, batch)
+    //   src2 = ids[n_rows, batch]
+    //   dst  = [1, n_rows, batch], later reshaped to [n_rows, batch]
+    if (src0->ne[1] != 1 || src0->ne[3] != 1 ||
+        src1->ne[1] != 1 || src1->ne[3] != 1 ||
+        dst->ne[0]  != 1 || dst->ne[3]  != 1) {
+        return false;
+    }
+
+    const int hidden_dim = (int) src0->ne[0];
+    const int src_rows   = (int) src0->ne[2];
+    const int batch_size = (int) src1->ne[2];
+    const int n_rows     = (int) src2->ne[0];
+
+    if (hidden_dim <= 0 || src_rows <= 0 || batch_size <= 0 || n_rows <= 0 ||
+        src1->ne[0] != hidden_dim ||
+        src2->ne[1] != batch_size ||
+        dst->ne[1]  != n_rows ||
+        dst->ne[2]  != batch_size ||
+        (n_rows % 8) != 0) {
+        return false;
+    }
+
+    if (src0->buffer == nullptr || src1->buffer == nullptr ||
+        src2->buffer == nullptr || dst->buffer  == nullptr ||
+        src0->extra  == nullptr || src1->extra  == nullptr ||
+        src2->extra  == nullptr || dst->extra   == nullptr) {
+        return false;
+    }
+
+    if (hidden_dim % GGML_OPENCL_QK4_0 != 0 ||
+        !ggml_is_contiguous(src0) ||
+        !ggml_is_contiguous(src1) ||
+        !ggml_is_contiguous(src2) ||
+        !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    if (backend_ctx == nullptr ||
+        backend_ctx->gpu_family != ADRENO ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit == nullptr ||
+        backend_ctx->B_d_max == nullptr) {
+        return false;
+    }
+
+    ggml_tensor src_shape = *src0;
+    src_shape.ne[1] = src_rows;
+    src_shape.ne[2] = 1;
+    src_shape.ne[3] = 1;
+    if (!use_adreno_kernels(backend_ctx, &src_shape)) {
+        return false;
+    }
+
+    ggml_tensor dst_shape = src_shape;
+    dst_shape.ne[1] = n_rows;
+    if (!use_adreno_kernels(backend_ctx, &dst_shape)) {
+        return false;
+    }
+
+    auto * src_extra    = (ggml_tensor_extra_cl_q4_0 *) src0->extra;
+    auto * hidden_extra = (ggml_tensor_extra_cl *) src1->extra;
+    auto * ids_extra    = (ggml_tensor_extra_cl *) src2->extra;
+    auto * dst_extra    = (ggml_tensor_extra_cl *) dst->extra;
+    if (src_extra == nullptr || hidden_extra == nullptr || ids_extra == nullptr || dst_extra == nullptr ||
+        src_extra->q == nullptr || src_extra->d == nullptr ||
+        hidden_extra->data_device == nullptr ||
+        ids_extra->data_device == nullptr ||
+        dst_extra->data_device == nullptr) {
+        return false;
+    }
+
+    cl_int status = CL_SUCCESS;
+    cl_buffer_region region;
+
+    cl_mem hidden_sub_buffer = nullptr;
+    cl_mem hidden_half_buffer = nullptr;
+    cl_mem hidden_input_image = nullptr;
+    cl_mem hidden_half_image = nullptr;
+    cl_mem ids_sub_buffer = nullptr;
+    cl_mem dst_sub_buffer = nullptr;
+
+    const int padding = (8 - (batch_size % 8)) % 8;
+    const int padded_batch = batch_size + padding;
+
+    region.origin = hidden_extra->offset + src1->view_offs;
+    region.size = (size_t) hidden_dim * (size_t) batch_size * sizeof(float);
+    hidden_sub_buffer = clCreateSubBuffer(
+            hidden_extra->data_device,
+            0,
+            CL_BUFFER_CREATE_TYPE_REGION,
+            &region,
+            &status);
+    CL_CHECK(status);
+
+    region.origin = 0;
+    region.size = (size_t) hidden_dim * (size_t) padded_batch * sizeof(float) / 2;
+    hidden_half_buffer = clCreateSubBuffer(
+            backend_ctx->B_d_max,
+            0,
+            CL_BUFFER_CREATE_TYPE_REGION,
+            &region,
+            &status);
+    CL_CHECK(status);
+
+    cl_image_format input_format = { CL_RGBA, CL_FLOAT };
+    cl_image_desc input_desc;
+    memset(&input_desc, 0, sizeof(input_desc));
+    input_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+    input_desc.image_width = (size_t) hidden_dim * (size_t) batch_size / 4;
+    input_desc.buffer = hidden_sub_buffer;
+    hidden_input_image = clCreateImage(
+            backend_ctx->context,
+            0,
+            &input_format,
+            &input_desc,
+            nullptr,
+            &status);
+    CL_CHECK(status);
+
+    cl_image_format half_format = { CL_RGBA, CL_HALF_FLOAT };
+    cl_image_desc half_desc;
+    memset(&half_desc, 0, sizeof(half_desc));
+    half_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+    half_desc.image_width = (size_t) hidden_dim * (size_t) padded_batch / 4;
+    half_desc.buffer = hidden_half_buffer;
+    hidden_half_image = clCreateImage(
+            backend_ctx->context,
+            0,
+            &half_format,
+            &half_desc,
+            nullptr,
+            &status);
+    CL_CHECK(status);
+
+    {
+        const int height_B2 = (batch_size + 3) / 4;
+        const int width_B2 = hidden_dim;
+        const int padded_height_B = padded_batch / 4;
+        const int padded_height_B2 = (padded_batch + 3) / 4;
+        cl_kernel transpose_kernel = backend_ctx->kernel_transpose_32_16;
+        CL_CHECK(clSetKernelArg(transpose_kernel, 0, sizeof(cl_mem), &hidden_input_image));
+        CL_CHECK(clSetKernelArg(transpose_kernel, 1, sizeof(cl_mem), &hidden_half_image));
+        CL_CHECK(clSetKernelArg(transpose_kernel, 2, sizeof(int),    &height_B2));
+        CL_CHECK(clSetKernelArg(transpose_kernel, 3, sizeof(int),    &width_B2));
+        CL_CHECK(clSetKernelArg(transpose_kernel, 4, sizeof(int),    &padded_height_B));
+
+        size_t local_size_t[2] = { 16, 1 };
+        size_t global_size_t[2] = {
+            (size_t) width_B2,
+            (size_t) padded_height_B2,
+        };
+        backend_ctx->enqueue_ndrange_kernel(transpose_kernel, 2, global_size_t, local_size_t, dst);
+    }
+
+    region.origin = ids_extra->offset + src2->view_offs;
+    region.size = (size_t) n_rows * (size_t) batch_size * sizeof(int32_t);
+    ids_sub_buffer = clCreateSubBuffer(
+            ids_extra->data_device,
+            CL_MEM_READ_ONLY,
+            CL_BUFFER_CREATE_TYPE_REGION,
+            &region,
+            &status);
+    CL_CHECK(status);
+
+    region.origin = dst_extra->offset + dst->view_offs;
+    region.size = (size_t) n_rows * (size_t) batch_size * sizeof(float);
+    dst_sub_buffer = clCreateSubBuffer(
+            dst_extra->data_device,
+            CL_MEM_WRITE_ONLY,
+            CL_BUFFER_CREATE_TYPE_REGION,
+            &region,
+            &status);
+    CL_CHECK(status);
+
+    cl_kernel kernel = batch_size >= 8
+            ? backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit
+            : backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit;
+    const size_t tile_n = 8;
+    const size_t tile_m = batch_size >= 8 ? 2 : 4;
+    const size_t wi_m = 64;
+
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_extra->q));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &src_extra->d));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &hidden_half_image));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &ids_sub_buffer));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &dst_sub_buffer));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),    &src_rows));
+    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),    &n_rows));
+    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),    &hidden_dim));
+    CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),    &batch_size));
+
+    const size_t wg_n = ((size_t) batch_size + tile_n - 1) / tile_n;
+    const size_t row_tiles = ((size_t) n_rows + tile_m - 1) / tile_m;
+    const size_t wg_m = (row_tiles + wi_m - 1) / wi_m;
+    size_t local_work_size[2] = { 1, wi_m };
+    size_t global_work_size[2] = { wg_n, wg_m * wi_m };
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
+
+    CL_CHECK(clReleaseMemObject(hidden_sub_buffer));
+    CL_CHECK(clReleaseMemObject(hidden_half_buffer));
+    CL_CHECK(clReleaseMemObject(hidden_input_image));
+    CL_CHECK(clReleaseMemObject(hidden_half_image));
+    CL_CHECK(clReleaseMemObject(ids_sub_buffer));
+    CL_CHECK(clReleaseMemObject(dst_sub_buffer));
+    return true;
+#else
+    GGML_UNUSED(backend);
+    GGML_UNUSED(src0);
+    GGML_UNUSED(src1);
     GGML_UNUSED(dst);
     return false;
 #endif
@@ -8393,16 +8920,16 @@ static bool ggml_cl_can_mul_mat_q4_0_f32_v_trans(
         return false;
     }
 
-    const int64_t ts_src0 = (int64_t) ggml_type_size(src0->type);
+    const size_t ts_src0 = ggml_type_size(src0->type);
     if (src0->nb[1] != ts_src0) {
         return false;
     }
 
-    if (src0->nb[2] != (int64_t) ggml_row_size(src0->type, src0->ne[1])) {
+    if (src0->nb[2] != ggml_row_size(src0->type, src0->ne[1])) {
         return false;
     }
 
-    if (src0->nb[0] != (int64_t) ggml_row_size(src0->type, src0->ne[1] * src0->ne[2])) {
+    if (src0->nb[0] != ggml_row_size(src0->type, src0->ne[1] * src0->ne[2])) {
         return false;
     }
 
@@ -9529,6 +10056,10 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     GGML_ASSERT(src1->extra);
     GGML_ASSERT(dst);
     GGML_ASSERT(dst->extra);
+
+    if (ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(backend, src0, src1, dst)) {
+        return;
+    }
 
     const ggml_tensor * src2 = dst->src[2];
     GGML_ASSERT(src2);

@@ -283,6 +283,22 @@ static bool reduced_lm_head_opencl_device_i32_buffer_from_host(
 #endif
 }
 
+static bool reduced_lm_head_opencl_device_i32_buffer_write_from_host(
+        ggml_backend_t backend,
+        void * device_buffer,
+        const int32_t * values,
+        int32_t count) {
+#ifdef GGML_USE_OPENCL
+    return ggml_backend_opencl_device_i32_buffer_write_from_host(backend, device_buffer, values, count);
+#else
+    (void) backend;
+    (void) device_buffer;
+    (void) values;
+    (void) count;
+    return false;
+#endif
+}
+
 static bool reduced_lm_head_opencl_device_i32_buffer_sort_asc_inplace(
         ggml_backend_t backend,
         void * device_buffer,
@@ -355,6 +371,42 @@ static bool reduced_lm_head_opencl_gather_rows_q4_0_device_i32_padded(
 #endif
 }
 
+static bool reduced_lm_head_opencl_supports_indexed_mul_mat_q4_0(
+        ggml_backend_t backend,
+        const ggml_tensor * src,
+        int32_t n_rows,
+        int32_t batch_size) {
+#ifdef GGML_USE_OPENCL
+    return ggml_backend_opencl_supports_indexed_mul_mat_q4_0(backend, src, n_rows, batch_size);
+#else
+    (void) backend;
+    (void) src;
+    (void) n_rows;
+    (void) batch_size;
+    return false;
+#endif
+}
+
+static bool reduced_lm_head_opencl_indexed_mul_mat_q4_0(
+        ggml_backend_t backend,
+        const ggml_tensor * src,
+        void * device_row_indices,
+        int32_t n_rows,
+        const ggml_tensor * hidden,
+        ggml_tensor * dst) {
+#ifdef GGML_USE_OPENCL
+    return ggml_backend_opencl_indexed_mul_mat_q4_0(backend, src, device_row_indices, n_rows, hidden, dst);
+#else
+    (void) backend;
+    (void) src;
+    (void) device_row_indices;
+    (void) n_rows;
+    (void) hidden;
+    (void) dst;
+    return false;
+#endif
+}
+
 struct DynamicSelectorConfig {
     int top_k = kDefaultSelectorTopK;
     int debug_log_level = 0;
@@ -377,6 +429,10 @@ struct DynamicSelectorConfig {
     bool selector_launch_after_recompute = false;
     int projector_cache_limit = 1;
     bool opencl_padded_device_ids = false;
+    bool opencl_indexed_lmhead = true;
+    bool opencl_indexed_lmhead_in_graph = false;
+    bool selector_force_cpu_softmax_threshold = false;
+    bool selector_force_opencl_softmax_threshold = false;
 };
 
 struct RuntimeRowBucketState {
@@ -446,6 +502,7 @@ struct OpenclI32BufferHandle {
     ggml_backend_t backend = nullptr;
     void * device_buffer = nullptr;
     int32_t count = 0;
+    int32_t capacity = 0;
 
     ~OpenclI32BufferHandle() {
         if (device_buffer != nullptr) {
@@ -570,7 +627,12 @@ struct DebugTrimmedLmHeadReference {
 class CandidateSelector {
 public:
     virtual ~CandidateSelector() = default;
-    virtual SelectorResult run(const float * hidden, int hidden_dim, int top_k, SelectorExecProfile * profile = nullptr) = 0;
+    virtual SelectorResult run(
+            const float * hidden,
+            int hidden_dim,
+            int top_k,
+            SelectorExecProfile * profile = nullptr,
+            bool need_scores = false) = 0;
     virtual const char * name() const = 0;
 };
 
@@ -739,6 +801,8 @@ static SelectorResult softmax_threshold_from_full_scores(
         const std::vector<float> & full_scores,
         float threshold,
         int max_count,
+        bool need_token_ids = true,
+        bool need_scores = true,
         bool * truncated = nullptr,
         int * n_above_threshold = nullptr) {
     SelectorResult result;
@@ -777,16 +841,25 @@ static SelectorResult softmax_threshold_from_full_scores(
     }
     if (!(sum_exp > 0.0) || !std::isfinite(sum_exp)) {
         result.output_indices.push_back(max_idx);
-        result.token_ids.push_back(static_cast<llama_token>(max_idx));
-        result.scores.push_back(max_score);
+        if (need_token_ids) {
+            result.token_ids.push_back(static_cast<llama_token>(max_idx));
+        }
+        if (need_scores) {
+            result.scores.push_back(max_score);
+        }
         return result;
     }
 
     const size_t output_limit = std::min<size_t>(static_cast<size_t>(max_count), full_scores.size());
     result.output_indices.reserve(output_limit);
-    result.token_ids.reserve(output_limit);
-    result.scores.reserve(output_limit);
+    if (need_token_ids) {
+        result.token_ids.reserve(output_limit);
+    }
+    if (need_scores) {
+        result.scores.reserve(output_limit);
+    }
 
+    const double cutoff = static_cast<double>(max_score) + std::log(static_cast<double>(threshold) * sum_exp);
     int selected_count = 0;
     for (size_t i = 0; i < full_scores.size(); ++i) {
         const float score = full_scores[i];
@@ -794,8 +867,7 @@ static SelectorResult softmax_threshold_from_full_scores(
             continue;
         }
 
-        const double prob = std::exp(static_cast<double>(score - max_score)) / sum_exp;
-        if (prob < static_cast<double>(threshold)) {
+        if (static_cast<double>(score) < cutoff) {
             continue;
         }
 
@@ -805,8 +877,12 @@ static SelectorResult softmax_threshold_from_full_scores(
         }
 
         result.output_indices.push_back(static_cast<int32_t>(i));
-        result.token_ids.push_back(static_cast<llama_token>(i));
-        result.scores.push_back(score);
+        if (need_token_ids) {
+            result.token_ids.push_back(static_cast<llama_token>(i));
+        }
+        if (need_scores) {
+            result.scores.push_back(score);
+        }
     }
 
     if (n_above_threshold != nullptr) {
@@ -818,8 +894,12 @@ static SelectorResult softmax_threshold_from_full_scores(
 
     if (result.output_indices.empty()) {
         result.output_indices.push_back(max_idx);
-        result.token_ids.push_back(static_cast<llama_token>(max_idx));
-        result.scores.push_back(max_score);
+        if (need_token_ids) {
+            result.token_ids.push_back(static_cast<llama_token>(max_idx));
+        }
+        if (need_scores) {
+            result.scores.push_back(max_score);
+        }
     }
 
     return result;
@@ -836,6 +916,7 @@ public:
             ggml_backend_t opencl_topk_backend = nullptr,
             bool enable_opencl_topk = true,
             bool sort_topk_ids_for_gather = false,
+            bool prefer_cpu_softmax_threshold = false,
             bool softmax_threshold_enabled = false,
             float softmax_threshold = 0.0f)
         : json_path_(std::move(json_path)),
@@ -847,13 +928,21 @@ public:
           use_opencl_topk_(enable_opencl_topk && reduced_lm_head_opencl_supports_top_k_f32(opencl_topk_backend)),
           use_opencl_softmax_threshold_(
                   softmax_threshold_enabled &&
+                  enable_opencl_topk &&
+                  !prefer_cpu_softmax_threshold &&
                   reduced_lm_head_opencl_supports_softmax_threshold_f32(opencl_topk_backend)),
+          output_idx_matches_token_id_(enable_opencl_topk),
           sort_topk_ids_for_gather_(sort_topk_ids_for_gather),
           softmax_threshold_enabled_(softmax_threshold_enabled),
           softmax_threshold_(softmax_threshold) {
     }
 
-    SelectorResult run(const float * hidden, int hidden_dim, int top_k, SelectorExecProfile * profile = nullptr) override {
+    SelectorResult run(
+            const float * hidden,
+            int hidden_dim,
+            int top_k,
+            SelectorExecProfile * profile = nullptr,
+            bool need_scores = false) override {
         const auto run_start = ggml_time_us();
         if (!initialized_) {
             const auto init_start = ggml_time_us();
@@ -933,6 +1022,7 @@ public:
                         handle->backend = opencl_topk_backend_;
                         handle->device_buffer = device_buffer;
                         handle->count = output_count;
+                        handle->capacity = top_k;
 
                         result.output_indices.resize(output_count, -1);
                         if (reduced_lm_head_opencl_device_i32_buffer_copy_to_host(
@@ -953,14 +1043,14 @@ public:
                                 handle->count = padded_count;
                             }
                             result.opencl_output_indices_device = std::move(handle);
-                            result.token_ids.reserve(result.output_indices.size());
-                            result.scores.reserve(result.output_indices.size());
-                            for (const int32_t token_id : result.output_indices) {
-                                if (token_id < 0 || token_id >= static_cast<int32_t>(full_scores.size())) {
-                                    continue;
+                            if (need_scores) {
+                                result.scores.reserve(result.output_indices.size());
+                                for (const int32_t token_id : result.output_indices) {
+                                    result.scores.push_back(
+                                            token_id >= 0 && token_id < static_cast<int32_t>(full_scores.size())
+                                                    ? full_scores[(size_t) token_id]
+                                                    : 0.0f);
                                 }
-                                result.token_ids.push_back(static_cast<llama_token>(token_id));
-                                result.scores.push_back(full_scores[(size_t) token_id]);
                             }
                             if (selected_above_threshold > output_count &&
                                 !softmax_threshold_truncation_logged_ &&
@@ -986,10 +1076,13 @@ public:
                 if (result.output_indices.empty() && result.token_ids.empty()) {
                     bool truncated = false;
                     int selected_above_threshold = 0;
+                    const bool need_token_ids = !output_idx_matches_token_id_;
                     result = softmax_threshold_from_full_scores(
                             full_scores,
                             softmax_threshold_,
                             top_k,
+                            need_token_ids,
+                            need_scores,
                             &truncated,
                             &selected_above_threshold);
                     if (truncated && !softmax_threshold_truncation_logged_ && qnn_log_level_ >= 1) {
@@ -1011,9 +1104,10 @@ public:
                             &device_buffer) &&
                     device_buffer != nullptr) {
                     auto handle = std::make_shared<OpenclI32BufferHandle>();
-                    handle->backend = opencl_topk_backend_;
-                    handle->device_buffer = device_buffer;
-                    handle->count = output_count;
+                        handle->backend = opencl_topk_backend_;
+                        handle->device_buffer = device_buffer;
+                        handle->count = output_count;
+                        handle->capacity = output_count;
 
                     result.output_indices.resize(output_count, -1);
                     if (!reduced_lm_head_opencl_device_i32_buffer_copy_to_host(
@@ -1037,14 +1131,14 @@ public:
                             result.opencl_output_indices_device = std::move(handle);
                         }
                     }
-                    result.token_ids.reserve(result.output_indices.size());
-                    result.scores.reserve(result.output_indices.size());
-                    for (const int32_t token_id : result.output_indices) {
-                        if (token_id < 0 || token_id >= static_cast<int32_t>(full_scores.size())) {
-                            continue;
+                    if (need_scores) {
+                        result.scores.reserve(result.output_indices.size());
+                        for (const int32_t token_id : result.output_indices) {
+                            result.scores.push_back(
+                                    token_id >= 0 && token_id < static_cast<int32_t>(full_scores.size())
+                                            ? full_scores[(size_t) token_id]
+                                            : 0.0f);
                         }
-                        result.token_ids.push_back(static_cast<llama_token>(token_id));
-                        result.scores.push_back(full_scores[(size_t) token_id]);
                     }
                     if (result.output_indices.empty()) {
                         if (!opencl_topk_fallback_logged_ && qnn_log_level_ >= 1) {
@@ -1075,7 +1169,9 @@ public:
                     ? std::min<size_t>(static_cast<size_t>(top_k), output_token_ids.size())
                     : output_token_ids.size();
             result.token_ids.assign(output_token_ids.begin(), output_token_ids.begin() + limit);
-            result.scores.assign(limit, 0.0f);
+            if (need_scores) {
+                result.scores.assign(limit, 0.0f);
+            }
         }
         const auto topk_end = ggml_time_us();
         if (profile != nullptr) {
@@ -1207,7 +1303,7 @@ private:
         if (qnn_tensor_is_float16(*output_desc_) || qnn_tensor_is_float32(*output_desc_)) {
             output_mode_ = OutputMode::FULL_SCORES;
             if (use_opencl_topk_ && qnn_log_level_ >= 1) {
-                LOG_INF("[selector-qnn] full-score artifact detected; using OpenCL exact top-k helper before reduced LM-head gather\n");
+                LOG_INF("[selector-qnn] full-score artifact detected; OpenCL top-k helper is available for shortlist projection\n");
             }
         } else if (qnn_tensor_is_int32(*output_desc_) || qnn_tensor_is_int64(*output_desc_)) {
             output_mode_ = OutputMode::TOPK_TOKEN_IDS;
@@ -1315,6 +1411,7 @@ private:
     ggml_backend_t opencl_topk_backend_ = nullptr;
     bool use_opencl_topk_ = false;
     bool use_opencl_softmax_threshold_ = false;
+    bool output_idx_matches_token_id_ = false;
     bool opencl_topk_fallback_logged_ = false;
     bool opencl_softmax_threshold_fallback_logged_ = false;
     bool sort_topk_ids_for_gather_ = false;
@@ -1348,6 +1445,9 @@ static std::unique_ptr<CandidateSelector> build_candidate_selector(
     if (!resolve_selector_artifact_paths(config, json_path, bin_path)) {
         return nullptr;
     }
+    const bool prefer_cpu_softmax_threshold =
+            config.selector_force_cpu_softmax_threshold ||
+            (config.opencl_indexed_lmhead && !config.selector_force_opencl_softmax_threshold);
     return std::make_unique<QnnRandomSelector>(
             json_path,
             bin_path,
@@ -1357,6 +1457,7 @@ static std::unique_ptr<CandidateSelector> build_candidate_selector(
             opencl_topk_backend,
             enable_opencl_topk,
             sort_topk_ids_for_gather,
+            prefer_cpu_softmax_threshold,
             config.selector_softmax_threshold_enabled,
             config.selector_softmax_threshold);
 }
@@ -1701,7 +1802,9 @@ public:
             bool force_packed = false,
             bool require_host_packed = false,
             int requested_storage_rows = 0,
-            bool use_opencl_padded_device_ids = false) {
+            bool use_opencl_padded_device_ids = false,
+            bool use_opencl_indexed_lmhead = true,
+            std::shared_ptr<OpenclI32BufferHandle> * reusable_upload_indices_device = nullptr) {
         if (lm_head_ctx.tensor == nullptr || lm_head_ctx.backend == nullptr) {
             error = "LM head tensor/backend is not initialized";
             return false;
@@ -1722,6 +1825,7 @@ public:
         output_indices_.clear();
         storage_output_indices_.clear();
         storage_to_output_pos_.clear();
+        storage_order_identity_ = true;
         storage_logits_scratch_.clear();
         opencl_output_indices_device_.reset();
         opencl_gather_indices_device_.reset();
@@ -1737,10 +1841,23 @@ public:
         weight_type_ = lm_head_ctx.tensor->type;
         source_weights_tensor_ = const_cast<ggml_tensor *>(lm_head_ctx.tensor);
         source_vocab_out_ = lm_head_ctx.vocab_out;
+        if (reusable_upload_indices_device != nullptr &&
+            *reusable_upload_indices_device != nullptr &&
+            (*reusable_upload_indices_device)->backend != backend_) {
+            reusable_upload_indices_device->reset();
+        }
+        if (reusable_upload_indices_device != nullptr &&
+            *reusable_upload_indices_device != nullptr) {
+            opencl_uploaded_indices_device_ = *reusable_upload_indices_device;
+        } else if (opencl_uploaded_indices_device_ != nullptr &&
+                   opencl_uploaded_indices_device_->backend != backend_) {
+            opencl_uploaded_indices_device_.reset();
+        }
         output_indices_ = output_indices;
         opencl_output_indices_device_ = std::move(opencl_output_indices_device);
         storage_shortlist_size_ = shortlist_size_;
         storage_output_indices_ = output_indices_;
+        storage_order_identity_ = true;
         emit_debug_logs_ = emit_debug_logs;
 
         for (const int32_t output_idx : output_indices_) {
@@ -1753,7 +1870,32 @@ public:
         }
 
         if (!require_host_packed) {
-            if (prepare_opencl_gather_mul_mat(emit_debug_logs, requested_storage_rows, use_opencl_padded_device_ids)) {
+            if (!force_packed &&
+                use_opencl_indexed_lmhead &&
+                prepare_opencl_indexed_mul_mat(
+                        emit_debug_logs,
+                        requested_storage_rows,
+                        use_opencl_padded_device_ids,
+                        reusable_upload_indices_device)) {
+                mode_ = Mode::OPENCL_INDEXED_MUL_MAT;
+                const bool can_reuse_opencl_indexed =
+                        prev_mode == Mode::OPENCL_INDEXED_MUL_MAT &&
+                        prev_backend == backend_ &&
+                        prev_weight_type == weight_type_ &&
+                        prev_hidden_dim == hidden_dim_ &&
+                        prev_source_vocab_out == source_vocab_out_ &&
+                        prev_storage_shortlist_size == storage_shortlist_size_;
+                if (!can_reuse_opencl_indexed) {
+                    clear_variants();
+                }
+                clear_shared_weights();
+                return true;
+            }
+            if (prepare_opencl_gather_mul_mat(
+                        emit_debug_logs,
+                        requested_storage_rows,
+                        use_opencl_padded_device_ids,
+                        reusable_upload_indices_device)) {
                 mode_ = Mode::OPENCL_GATHER_MUL_MAT;
                 const bool can_reuse_opencl_shared =
                         prev_mode == Mode::OPENCL_GATHER_MUL_MAT &&
@@ -1795,6 +1937,7 @@ public:
         mode_ = Mode::PACKED_MUL_MAT;
         storage_shortlist_size_ = shortlist_size_;
         storage_output_indices_ = output_indices_;
+        storage_order_identity_ = true;
         clear_variants();
         clear_shared_weights();
 
@@ -2020,6 +2163,57 @@ public:
             }
         }
 
+        if (mode_ == Mode::OPENCL_INDEXED_MUL_MAT) {
+            if (opencl_gather_indices_device_ == nullptr ||
+                opencl_gather_indices_device_->device_buffer == nullptr ||
+                opencl_gather_indices_device_->count < storage_shortlist_size_) {
+                error = "OpenCL indexed reduced LM head is missing device row ids";
+                return false;
+            }
+
+            GraphVariant * variant = get_or_create_variant(batch_size, storage_shortlist_size_, error);
+            if (variant == nullptr) {
+                return false;
+            }
+            if (variant->hidden_tensor == nullptr || variant->logits_tensor == nullptr) {
+                error = "OpenCL indexed projector variant is not initialized";
+                return false;
+            }
+
+            ggml_backend_tensor_set(
+                    variant->hidden_tensor,
+                    hidden_batch,
+                    0,
+                    sizeof(float) * hidden_dim_ * batch_size);
+
+            const auto t_begin = std::chrono::steady_clock::now();
+            const bool ok = reduced_lm_head_opencl_indexed_mul_mat_q4_0(
+                    backend_,
+                    source_weights_tensor_,
+                    opencl_gather_indices_device_->device_buffer,
+                    storage_shortlist_size_,
+                    variant->hidden_tensor,
+                    variant->logits_tensor);
+            const auto t_end = std::chrono::steady_clock::now();
+            if (compute_ms != nullptr) {
+                *compute_ms = std::chrono::duration<double, std::milli>(t_end - t_begin).count();
+            }
+            if (!ok) {
+                error = "OpenCL indexed reduced LM head matmul failed";
+                return false;
+            }
+
+            logits_out.resize(static_cast<size_t>(shortlist_size_) * batch_size);
+            storage_logits_scratch_.resize(static_cast<size_t>(storage_shortlist_size_) * batch_size);
+            ggml_backend_tensor_get(
+                    variant->logits_tensor,
+                    storage_logits_scratch_.data(),
+                    0,
+                    storage_logits_scratch_.size() * sizeof(float));
+            reorder_storage_logits_to_output_order(storage_logits_scratch_.data(), batch_size, logits_out);
+            return true;
+        }
+
         GraphVariant * variant = get_or_create_variant(batch_size, storage_shortlist_size_, error);
         if (variant == nullptr) {
             return false;
@@ -2176,6 +2370,8 @@ public:
                 return "packed_mul_mat";
             case Mode::OPENCL_GATHER_MUL_MAT:
                 return "opencl_gather_mul_mat";
+            case Mode::OPENCL_INDEXED_MUL_MAT:
+                return "opencl_indexed_mul_mat";
             case Mode::GATHER_MUL_MAT:
                 return "gather_mul_mat";
         }
@@ -2183,7 +2379,17 @@ public:
     }
 
     int runtime_output_row_capacity() const {
-        return mode_ == Mode::OPENCL_GATHER_MUL_MAT ? storage_shortlist_size_ : shortlist_size_;
+        return (mode_ == Mode::OPENCL_GATHER_MUL_MAT || mode_ == Mode::OPENCL_INDEXED_MUL_MAT)
+                ? storage_shortlist_size_
+                : shortlist_size_;
+    }
+
+    bool is_opencl_indexed_mode() const {
+        return mode_ == Mode::OPENCL_INDEXED_MUL_MAT;
+    }
+
+    const std::vector<int32_t> & runtime_output_indices() const {
+        return storage_output_indices_;
     }
 
 private:
@@ -2209,6 +2415,7 @@ private:
         PACKED_MUL_MAT,
         DIRECT_MUL_MAT_ID,
         OPENCL_GATHER_MUL_MAT,
+        OPENCL_INDEXED_MUL_MAT,
         GATHER_MUL_MAT,
     };
 
@@ -2401,10 +2608,177 @@ private:
         return supported;
     }
 
+    bool upload_opencl_indices_from_host(
+            const int32_t * indices,
+            int32_t count,
+            std::shared_ptr<OpenclI32BufferHandle> & out_handle,
+            const char ** source_label,
+            std::shared_ptr<OpenclI32BufferHandle> * reusable_upload_indices_device) {
+        if (indices == nullptr || count <= 0 || backend_ == nullptr) {
+            return false;
+        }
+
+        std::shared_ptr<OpenclI32BufferHandle> reusable =
+                reusable_upload_indices_device != nullptr ? *reusable_upload_indices_device : opencl_uploaded_indices_device_;
+
+        if (reusable != nullptr &&
+            reusable->backend == backend_ &&
+            reusable->device_buffer != nullptr &&
+            reusable->capacity >= count) {
+            if (reduced_lm_head_opencl_device_i32_buffer_write_from_host(
+                        backend_,
+                        reusable->device_buffer,
+                        indices,
+                        count)) {
+                reusable->count = count;
+                opencl_uploaded_indices_device_ = reusable;
+                out_handle = reusable;
+                if (source_label != nullptr) {
+                    *source_label = "host-upload-reuse";
+                }
+                return true;
+            }
+            if (reusable_upload_indices_device != nullptr && *reusable_upload_indices_device == reusable) {
+                reusable_upload_indices_device->reset();
+            }
+            if (opencl_uploaded_indices_device_ == reusable) {
+                opencl_uploaded_indices_device_.reset();
+            }
+        }
+
+        void * device_buffer = nullptr;
+        if (!reduced_lm_head_opencl_device_i32_buffer_from_host(
+                    backend_,
+                    indices,
+                    count,
+                    &device_buffer) ||
+            device_buffer == nullptr) {
+            return false;
+        }
+
+        auto handle = std::make_shared<OpenclI32BufferHandle>();
+        handle->backend = backend_;
+        handle->device_buffer = device_buffer;
+        handle->count = count;
+        handle->capacity = count;
+        opencl_uploaded_indices_device_ = handle;
+        if (reusable_upload_indices_device != nullptr) {
+            *reusable_upload_indices_device = handle;
+        }
+        out_handle = handle;
+        if (source_label != nullptr) {
+            *source_label = "host-upload";
+        }
+        return true;
+    }
+
+    bool prepare_opencl_indexed_mul_mat(
+            bool emit_debug_logs,
+            int requested_storage_rows,
+            bool /* use_opencl_padded_device_ids */,
+            std::shared_ptr<OpenclI32BufferHandle> * reusable_upload_indices_device) {
+        storage_shortlist_size_ = shortlist_size_;
+        storage_output_indices_ = output_indices_;
+        storage_to_output_pos_.resize(static_cast<size_t>(shortlist_size_));
+        std::iota(storage_to_output_pos_.begin(), storage_to_output_pos_.end(), 0);
+
+        if (backend_ == nullptr || !reduced_lm_head_backend_is_opencl(backend_)) {
+            return false;
+        }
+        if (weight_type_ != GGML_TYPE_Q4_0) {
+            if (emit_debug_logs) {
+                LOG_INF("[reduced-lmhead] opencl_indexed_mul_mat disabled: LM head type %s is not Q4_0\n",
+                        ggml_type_name(weight_type_));
+            }
+            return false;
+        }
+        if (source_weights_tensor_ == nullptr || source_weights_tensor_->buffer == nullptr) {
+            if (emit_debug_logs) {
+                LOG_INF("[reduced-lmhead] opencl_indexed_mul_mat disabled: LM head tensor has no live backend buffer\n");
+            }
+            return false;
+        }
+        if (!ggml_is_contiguous(source_weights_tensor_)) {
+            if (emit_debug_logs) {
+                LOG_INF("[reduced-lmhead] opencl_indexed_mul_mat disabled: LM head tensor is not contiguous\n");
+            }
+            return false;
+        }
+
+        const int requested_rows = requested_storage_rows > 0
+                ? std::max(requested_storage_rows, shortlist_size_)
+                : shortlist_size_;
+        const int padded_rows = opencl_gather_padded_rows(requested_rows);
+        if (!reduced_lm_head_opencl_supports_indexed_mul_mat_q4_0(
+                    backend_,
+                    source_weights_tensor_,
+                    padded_rows,
+                    8)) {
+            if (emit_debug_logs) {
+                LOG_INF("[reduced-lmhead] opencl_indexed_mul_mat unsupported on backend %s for logical=%d padded=%d\n",
+                        ggml_backend_name(backend_),
+                        shortlist_size_,
+                        padded_rows);
+            }
+            return false;
+        }
+
+        storage_shortlist_size_ = padded_rows;
+        storage_output_indices_.resize(static_cast<size_t>(storage_shortlist_size_));
+        std::copy(output_indices_.begin(), output_indices_.end(), storage_output_indices_.begin());
+        const int32_t pad_row = storage_output_indices_[shortlist_size_ - 1];
+        std::fill(
+                storage_output_indices_.begin() + shortlist_size_,
+                storage_output_indices_.end(),
+                pad_row);
+
+        const bool can_reuse_device_ids =
+                opencl_output_indices_device_ != nullptr &&
+                opencl_output_indices_device_->device_buffer != nullptr &&
+                opencl_output_indices_device_->count >= storage_shortlist_size_;
+
+        opencl_gather_indices_device_.reset();
+        opencl_gather_indices_padded_ = false;
+        opencl_gather_selected_count_ = 0;
+        opencl_gather_pad_row_ = -1;
+
+        const char * ids_source = "host-upload";
+        if (can_reuse_device_ids) {
+            opencl_gather_indices_device_ = opencl_output_indices_device_;
+            ids_source = "selector-device";
+        } else {
+            upload_opencl_indices_from_host(
+                    storage_output_indices_.data(),
+                    storage_shortlist_size_,
+                    opencl_gather_indices_device_,
+                    &ids_source,
+                    reusable_upload_indices_device);
+        }
+
+        if (opencl_gather_indices_device_ == nullptr ||
+            opencl_gather_indices_device_->device_buffer == nullptr) {
+            if (emit_debug_logs) {
+                LOG_INF("[reduced-lmhead] opencl_indexed_mul_mat disabled: failed to prepare device row ids\n");
+            }
+            return false;
+        }
+
+        if (emit_debug_logs) {
+            LOG_INF("[reduced-lmhead] opencl_indexed_mul_mat enabled on backend %s (logical_rows=%d padded_rows=%d ids=%s)\n",
+                    ggml_backend_name(backend_),
+                    shortlist_size_,
+                    storage_shortlist_size_,
+                    ids_source);
+        }
+
+        return true;
+    }
+
     bool prepare_opencl_gather_mul_mat(
             bool emit_debug_logs,
             int requested_storage_rows,
-            bool use_opencl_padded_device_ids) {
+            bool use_opencl_padded_device_ids,
+            std::shared_ptr<OpenclI32BufferHandle> * reusable_upload_indices_device) {
         storage_shortlist_size_ = shortlist_size_;
         storage_output_indices_ = output_indices_;
         storage_to_output_pos_.resize(static_cast<size_t>(shortlist_size_));
@@ -2453,7 +2827,9 @@ private:
         const bool already_sorted = std::is_sorted(output_indices_.begin(), output_indices_.end());
         if (already_sorted) {
             std::copy(output_indices_.begin(), output_indices_.end(), storage_output_indices_.begin());
+            storage_order_identity_ = true;
         } else {
+            storage_order_identity_ = false;
             std::vector<int32_t> original_to_sorted(static_cast<size_t>(shortlist_size_));
             std::iota(original_to_sorted.begin(), original_to_sorted.end(), 0);
             std::stable_sort(
@@ -2514,19 +2890,14 @@ private:
             return true;
         }
 
-        void * gather_device_buffer = nullptr;
-        if (reduced_lm_head_opencl_device_i32_buffer_from_host(
-                    backend_,
+        const char * ids_source = nullptr;
+        if (!upload_opencl_indices_from_host(
                     storage_output_indices_.data(),
                     storage_shortlist_size_,
-                    &gather_device_buffer) &&
-            gather_device_buffer != nullptr) {
-            auto handle = std::make_shared<OpenclI32BufferHandle>();
-            handle->backend = backend_;
-            handle->device_buffer = gather_device_buffer;
-            handle->count = storage_shortlist_size_;
-            opencl_gather_indices_device_ = handle;
-        } else if (emit_debug_logs) {
+                    opencl_gather_indices_device_,
+                    &ids_source,
+                    reusable_upload_indices_device) &&
+            emit_debug_logs) {
             LOG_INF("[reduced-lmhead] failed to pre-upload sorted gather ids; falling back to host-upload gather path\n");
         }
 
@@ -2603,8 +2974,12 @@ private:
         for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
             const float * src = storage_logits + static_cast<size_t>(batch_idx) * storage_shortlist_size_;
             float * dst = logits_out.data() + static_cast<size_t>(batch_idx) * shortlist_size_;
-            for (int storage_pos = 0; storage_pos < shortlist_size_; ++storage_pos) {
-                dst[storage_to_output_pos_[storage_pos]] = src[storage_pos];
+            if (storage_order_identity_) {
+                std::memcpy(dst, src, sizeof(float) * static_cast<size_t>(shortlist_size_));
+            } else {
+                for (int storage_pos = 0; storage_pos < shortlist_size_; ++storage_pos) {
+                    dst[storage_to_output_pos_[storage_pos]] = src[storage_pos];
+                }
             }
         }
     }
@@ -2666,6 +3041,12 @@ private:
             ggml_set_input(variant->ids_tensor);
             ggml_set_input(variant->hidden_tensor);
             ggml_set_output(variant->logits_tensor);
+        } else if (mode_ == Mode::OPENCL_INDEXED_MUL_MAT) {
+            variant->hidden_tensor = ggml_new_tensor_2d(variant->ctx, GGML_TYPE_F32, hidden_dim_, batch_size);
+            variant->logits_tensor = ggml_new_tensor_2d(variant->ctx, GGML_TYPE_F32, storage_shortlist_size_, batch_size);
+
+            ggml_set_input(variant->hidden_tensor);
+            ggml_set_output(variant->logits_tensor);
         } else {
             if (mode_ == Mode::OPENCL_GATHER_MUL_MAT) {
                 if (!ensure_opencl_gather_weights_ready(error)) {
@@ -2682,13 +3063,16 @@ private:
             ggml_set_output(variant->logits_tensor);
         }
 
-        variant->graph = ggml_new_graph_custom(variant->ctx, 8, false);
-        ggml_build_forward_expand(variant->graph, variant->logits_tensor);
+        if (mode_ != Mode::OPENCL_INDEXED_MUL_MAT) {
+            variant->graph = ggml_new_graph_custom(variant->ctx, 8, false);
+            ggml_build_forward_expand(variant->graph, variant->logits_tensor);
+        }
 
-        if (mode_ == Mode::OPENCL_GATHER_MUL_MAT && emit_debug_logs_) {
-            LOG_INF("[reduced-lmhead] creating OpenCL matmul variant batch=%d rows=%d (shared gather reused)\n",
+        if ((mode_ == Mode::OPENCL_GATHER_MUL_MAT || mode_ == Mode::OPENCL_INDEXED_MUL_MAT) && emit_debug_logs_) {
+            LOG_INF("[reduced-lmhead] creating OpenCL matmul variant batch=%d rows=%d (mode=%s)\n",
                     batch_size,
-                    storage_shortlist_size_);
+                    storage_shortlist_size_,
+                    mode_name());
         }
 
         variant->buffer = ggml_backend_alloc_ctx_tensors(variant->ctx, backend_);
@@ -2698,7 +3082,7 @@ private:
         }
         ggml_backend_buffer_set_usage(variant->buffer, GGML_BACKEND_BUFFER_USAGE_COMPUTE);
 
-        if (mode_ == Mode::OPENCL_GATHER_MUL_MAT && emit_debug_logs_) {
+        if ((mode_ == Mode::OPENCL_GATHER_MUL_MAT || mode_ == Mode::OPENCL_INDEXED_MUL_MAT) && emit_debug_logs_) {
             LOG_INF("[reduced-lmhead] OpenCL matmul variant buffer allocated\n");
         }
 
@@ -2711,6 +3095,9 @@ private:
             // Shared gathered weights were already materialized once in
             // ensure_opencl_gather_weights_ready() and are reused across all
             // batch-shape variants for this shortlist.
+        } else if (mode_ == Mode::OPENCL_INDEXED_MUL_MAT) {
+            // The source weights and device row ids are passed directly to the
+            // tuned OpenCL kernel at compute time; no packed tensor is stored here.
         } else {
             ggml_backend_tensor_set(variant->weights_tensor, packed_weights_.data(), 0, packed_weights_.size());
         }
@@ -2725,6 +3112,7 @@ private:
     ggml_tensor * source_weights_tensor_ = nullptr; // borrowed when direct mode is enabled
     std::shared_ptr<OpenclI32BufferHandle> opencl_output_indices_device_;
     std::shared_ptr<OpenclI32BufferHandle> opencl_gather_indices_device_;
+    std::shared_ptr<OpenclI32BufferHandle> opencl_uploaded_indices_device_;
     bool opencl_gather_indices_padded_ = false;
     int opencl_gather_selected_count_ = 0;
     int32_t opencl_gather_pad_row_ = -1;
@@ -2732,6 +3120,7 @@ private:
     std::vector<int32_t> output_indices_;
     std::vector<int32_t> storage_output_indices_;
     std::vector<int32_t> storage_to_output_pos_;
+    bool storage_order_identity_ = true;
     std::vector<float> storage_logits_scratch_;
     std::unordered_map<uint64_t, std::unique_ptr<GraphVariant>> variants_;
     Mode mode_ = Mode::PACKED_MUL_MAT;
@@ -3349,7 +3738,8 @@ static RoundSelection build_round_selection_from_selector_result(
         int runtime_output_rows = 0,
         const DynamicSelectorConfig * selector_config = nullptr,
         RuntimeRowBucketState * runtime_bucket_state = nullptr,
-        std::unordered_map<int, std::shared_ptr<ReducedLmHeadProjector>> * projector_cache = nullptr) {
+        std::unordered_map<int, std::shared_ptr<ReducedLmHeadProjector>> * projector_cache = nullptr,
+        std::shared_ptr<OpenclI32BufferHandle> * reusable_upload_indices_device = nullptr) {
     (void) dump_reduced_logits;
 
     RoundSelection round_selection;
@@ -3360,7 +3750,9 @@ static RoundSelection build_round_selection_from_selector_result(
     const auto shortlist_filter_start = ggml_time_us();
     if (!selector_result.output_indices.empty() && lm_head_ctx.output_idx_matches_token_id) {
         round_selection.token_ids.reserve(selector_result.output_indices.size());
-        round_selection.selector_scores.reserve(selector_result.output_indices.size());
+        if (dump_selector_scores) {
+            round_selection.selector_scores.reserve(selector_result.output_indices.size());
+        }
         round_selection.output_indices.reserve(selector_result.output_indices.size());
 
         for (size_t i = 0; i < selector_result.output_indices.size(); ++i) {
@@ -3372,14 +3764,18 @@ static RoundSelection build_round_selection_from_selector_result(
 
             round_selection.output_indices.push_back(output_idx);
             round_selection.token_ids.push_back(static_cast<llama_token>(output_idx));
-            round_selection.selector_scores.push_back(i < selector_result.scores.size() ? selector_result.scores[i] : 0.0f);
+            if (dump_selector_scores) {
+                round_selection.selector_scores.push_back(i < selector_result.scores.size() ? selector_result.scores[i] : 0.0f);
+            }
         }
         round_selection.opencl_output_indices_device = selector_result.opencl_output_indices_device;
     } else {
         std::unordered_set<llama_token> seen_tokens;
         seen_tokens.reserve(selector_result.token_ids.size());
         round_selection.token_ids.reserve(selector_result.token_ids.size());
-        round_selection.selector_scores.reserve(selector_result.scores.size());
+        if (dump_selector_scores) {
+            round_selection.selector_scores.reserve(selector_result.scores.size());
+        }
         round_selection.output_indices.reserve(selector_result.token_ids.size());
 
         for (size_t i = 0; i < selector_result.token_ids.size(); ++i) {
@@ -3395,7 +3791,9 @@ static RoundSelection build_round_selection_from_selector_result(
             }
 
             round_selection.token_ids.push_back(token_id);
-            round_selection.selector_scores.push_back(i < selector_result.scores.size() ? selector_result.scores[i] : 0.0f);
+            if (dump_selector_scores) {
+                round_selection.selector_scores.push_back(i < selector_result.scores.size() ? selector_result.scores[i] : 0.0f);
+            }
             round_selection.output_indices.push_back(it->second);
         }
     }
@@ -3417,8 +3815,14 @@ static RoundSelection build_round_selection_from_selector_result(
         return RoundSelection{};
     }
 
+    const bool prepare_indexed_graph_output =
+            !prepare_runtime_output &&
+            selector_config != nullptr &&
+            selector_config->opencl_indexed_lmhead &&
+            selector_config->opencl_indexed_lmhead_in_graph;
+
     int requested_runtime_output_rows = runtime_output_rows;
-    if (prepare_runtime_output &&
+    if ((prepare_runtime_output || prepare_indexed_graph_output) &&
         selector_config != nullptr &&
         selector_config->runtime_bucket_enabled) {
         const int bucket_rows = choose_runtime_bucket_rows(
@@ -3442,7 +3846,7 @@ static RoundSelection build_round_selection_from_selector_result(
     }
 
     const auto projector_init_start = ggml_time_us();
-    const int projector_cache_key = prepare_runtime_output && requested_runtime_output_rows > 0
+    const int projector_cache_key = (prepare_runtime_output || prepare_indexed_graph_output) && requested_runtime_output_rows > 0
             ? requested_runtime_output_rows
             : 0;
     const bool use_projector_cache =
@@ -3479,7 +3883,9 @@ static RoundSelection build_round_selection_from_selector_result(
                 force_packed,
                 false,
                 requested_runtime_output_rows,
-                selector_config != nullptr && selector_config->opencl_padded_device_ids)) {
+                selector_config != nullptr && selector_config->opencl_padded_device_ids,
+                selector_config == nullptr || selector_config->opencl_indexed_lmhead,
+                reusable_upload_indices_device)) {
         fprintf(stderr, "[reduced-lmhead] failed to initialize reduced projector: %s\n", projector_error.c_str());
         return RoundSelection{};
     }
@@ -3578,8 +3984,14 @@ static RoundSelection run_selector_then_reduced_lm_head(
         int runtime_output_rows = 0,
         const DynamicSelectorConfig * selector_config = nullptr,
         RuntimeRowBucketState * runtime_bucket_state = nullptr,
-        std::unordered_map<int, std::shared_ptr<ReducedLmHeadProjector>> * projector_cache = nullptr) {
-    const SelectorResult selector_result = selector.run(hidden, hidden_dim, selector_top_k, profile != nullptr ? &profile->selector : nullptr);
+        std::unordered_map<int, std::shared_ptr<ReducedLmHeadProjector>> * projector_cache = nullptr,
+        std::shared_ptr<OpenclI32BufferHandle> * reusable_upload_indices_device = nullptr) {
+    const SelectorResult selector_result = selector.run(
+            hidden,
+            hidden_dim,
+            selector_top_k,
+            profile != nullptr ? &profile->selector : nullptr,
+            dump_selector_scores);
     if (selector_result.token_ids.empty() && selector_result.output_indices.empty()) {
         fprintf(stderr, "[selector] selector '%s' returned no token ids\n", selector.name());
         return {};
@@ -3599,7 +4011,8 @@ static RoundSelection run_selector_then_reduced_lm_head(
             runtime_output_rows,
             selector_config,
             runtime_bucket_state,
-            projector_cache);
+            projector_cache,
+            reusable_upload_indices_device);
 }
 
 } // namespace
@@ -3805,6 +4218,20 @@ int main(int argc, char ** argv) {
             selector_config.selector_launch_after_recompute = false;
         } else if (arg == "--selector-opencl-padded-device-ids") {
             selector_config.opencl_padded_device_ids = true;
+        } else if (arg == "--selector-opencl-indexed-lmhead") {
+            selector_config.opencl_indexed_lmhead = true;
+        } else if (arg == "--selector-disable-opencl-indexed-lmhead") {
+            selector_config.opencl_indexed_lmhead = false;
+        } else if (arg == "--selector-opencl-indexed-lmhead-in-graph") {
+            selector_config.opencl_indexed_lmhead_in_graph = true;
+        } else if (arg == "--selector-opencl-indexed-lmhead-external") {
+            selector_config.opencl_indexed_lmhead_in_graph = false;
+        } else if (arg == "--selector-cpu-softmax-threshold") {
+            selector_config.selector_force_cpu_softmax_threshold = true;
+            selector_config.selector_force_opencl_softmax_threshold = false;
+        } else if (arg == "--selector-opencl-softmax-threshold") {
+            selector_config.selector_force_opencl_softmax_threshold = true;
+            selector_config.selector_force_cpu_softmax_threshold = false;
         } else if (arg == "--debug-compare-trimmed-gguf" && i + 1 < argc) {
             debug_compare_trimmed_gguf_path = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
@@ -3838,6 +4265,10 @@ int main(int argc, char ** argv) {
             printf("  --selector-launch-after-recompute       Launch async selector after hidden-only recompute to avoid GPU contention\n");
             printf("  --selector-launch-before-recompute      Launch async selector before recompute (default)\n\n");
             printf("  --selector-opencl-padded-device-ids     Experimental: reuse device ids with kernel-side runtime row padding\n\n");
+            printf("  --selector-opencl-indexed-lmhead-in-graph  Use graph-integrated indexed LMHead after root depth (experimental)\n");
+            printf("  --selector-opencl-indexed-lmhead-external  Use external indexed LMHead for every draft depth (default)\n\n");
+            printf("  --selector-cpu-softmax-threshold        Select softmax-threshold ids on CPU, then upload ids only\n");
+            printf("  --selector-opencl-softmax-threshold     Force OpenCL softmax-threshold helper\n\n");
             printf("  --debug-compare-trimmed-gguf FILE       Compare dynamic reduced logits against a trimmed EAGLE GGUF at root depth\n\n");
             new_argv.push_back(argv[i]); // pass to base parser
         } else {
@@ -4169,6 +4600,7 @@ int main(int argc, char ** argv) {
                 lm_head_ctx.tensor->type == GGML_TYPE_Q4_0 &&
                 lm_head_ctx.backend != nullptr &&
                 reduced_lm_head_backend_is_opencl(lm_head_ctx.backend) &&
+                !selector_config.opencl_indexed_lmhead &&
                 selector_output_limit >= 512 &&
                 (selector_output_limit % 8) == 0);
         if (candidate_selector == nullptr) {
@@ -4189,6 +4621,12 @@ int main(int argc, char ** argv) {
                         static_cast<double>(selector_config.selector_softmax_threshold),
                         selector_output_limit);
             }
+            const bool prefer_cpu_softmax_threshold =
+                    selector_config.selector_force_cpu_softmax_threshold ||
+                    (selector_config.opencl_indexed_lmhead && !selector_config.selector_force_opencl_softmax_threshold);
+            LOG_INF("[selector-qnn] selector softmax threshold backend: %s%s\n",
+                    prefer_cpu_softmax_threshold ? "cpu-host" : "opencl-helper",
+                    prefer_cpu_softmax_threshold ? " (ids uploaded to OpenCL LMHead)" : "");
         }
         if (selector_config.runtime_bucket_enabled) {
             const std::vector<int> runtime_buckets = selector_config.runtime_buckets.empty()
@@ -4204,6 +4642,13 @@ int main(int argc, char ** argv) {
                 selector_config.projector_cache_limit == 0 ? " (disabled)" : "");
         LOG_INF("[selector-qnn] OpenCL padded device ids: %s\n",
                 selector_config.opencl_padded_device_ids ? "enabled" : "disabled");
+        LOG_INF("[selector-qnn] OpenCL indexed reduced LMHead: %s%s\n",
+                selector_config.opencl_indexed_lmhead ? "enabled" : "disabled",
+                selector_config.opencl_indexed_lmhead
+                        ? (selector_config.opencl_indexed_lmhead_in_graph
+                                ? " (root external, tree graph-integrated)"
+                                : " (external-all-depths)")
+                        : "");
         LOG_INF("[selector-qnn] async selector launch timing: %s\n",
                 selector_config.selector_launch_after_recompute ? "after-recompute" : "before-recompute");
         LOG_INF("[reduced-lmhead] target verification stays on full target logits to match eagle-2-qnn vocab-trim behavior\n");
@@ -4312,6 +4757,7 @@ int main(int argc, char ** argv) {
     uint64_t current_round_selection_job_id = 0;
     uint64_t next_round_selection_job_id = 0;
     auto reusable_dynamic_projector = std::make_shared<ReducedLmHeadProjector>();
+    std::shared_ptr<OpenclI32BufferHandle> reusable_indexed_id_buffer;
     std::unordered_map<int, std::shared_ptr<ReducedLmHeadProjector>> runtime_projector_cache;
     RuntimeRowBucketState runtime_bucket_state;
     RoundSelectionWorkerState current_round_selection_worker_state;
@@ -4491,14 +4937,15 @@ int main(int argc, char ** argv) {
                             selector_config.dump_reduced_logits,
                             selector_config.debug_log_level >= 2,
                             ctx_dft,
-                            reusable_dynamic_projector,
+                            selector_config.opencl_indexed_lmhead ? nullptr : reusable_dynamic_projector,
                             &task_result.profile,
                             selector_config.force_packed_mul_mat,
-                            true,
+                            !selector_config.opencl_indexed_lmhead,
                             selector_config.selector_softmax_threshold_enabled ? 0 : selector_config.top_k,
                             &selector_config,
                             &runtime_bucket_state,
-                            &runtime_projector_cache);
+                            &runtime_projector_cache,
+                            selector_config.opencl_indexed_lmhead ? &reusable_indexed_id_buffer : nullptr);
                     task_result.profile.task_end_us = ggml_time_us();
                 } catch (...) {
                     task_error = std::current_exception();
@@ -4590,6 +5037,29 @@ int main(int argc, char ** argv) {
                 return false;
             }
             ++total_draft_runtime_output_copied;
+            llama_set_eagle_hidden_only(ctx_dft, false);
+            const auto runtime_upload_end = ggml_time_us();
+            total_draft_runtime_output_upload_us += (runtime_upload_end - runtime_upload_start);
+        } else if (selector_config.use_reduced_lmhead &&
+                   selector_config.opencl_indexed_lmhead &&
+                   selector_config.opencl_indexed_lmhead_in_graph &&
+                   current_round_selection.projector != nullptr &&
+                   current_round_selection.projector->is_opencl_indexed_mode()) {
+            const auto runtime_upload_start = ggml_time_us();
+            const auto & runtime_ids = current_round_selection.projector->runtime_output_indices();
+            const int runtime_rows = current_round_selection.projector->runtime_output_row_capacity();
+            if (runtime_rows <= 0 || runtime_ids.size() < static_cast<size_t>(runtime_rows)) {
+                LOG_ERR("%s: invalid indexed runtime output ids: rows=%d ids=%zu\n",
+                        __func__, runtime_rows, runtime_ids.size());
+                return false;
+            }
+            if (!llama_set_eagle_runtime_output_ids(
+                        ctx_dft,
+                        runtime_ids.data(),
+                        runtime_rows)) {
+                LOG_ERR("%s: failed to set indexed runtime EAGLE output ids\n", __func__);
+                return false;
+            }
             llama_set_eagle_hidden_only(ctx_dft, false);
             const auto runtime_upload_end = ggml_time_us();
             total_draft_runtime_output_upload_us += (runtime_upload_end - runtime_upload_start);
@@ -5220,7 +5690,7 @@ int main(int argc, char ** argv) {
                     active_batch_indices.push_back(drafts[s].i_batch_dft);
                     active_samplers.push_back(drafts[s].smpl);
                     compare_samplers.push_back(capture_compare_raw ? common_sampler_clone(drafts[s].smpl) : nullptr);
-                    if (i == 0) {
+                    if (i == 0 || selector_config.opencl_indexed_lmhead) {
                         const size_t hidden_offset = static_cast<size_t>(hidden_dim) * drafts[s].i_batch_dft;
                         if (hidden_offset + hidden_dim > cb_data.data.size()) {
                             LOG_ERR("%s: missing draft hidden for seq=%d i_batch_dft=%d (cb_data=%zu hidden_dim=%d)\n",
@@ -5239,7 +5709,16 @@ int main(int argc, char ** argv) {
                     std::vector<std::vector<float>> active_raw_logits;
                     ReducedDraftSamplingProfile reduced_sampling_profile = {};
                     std::string reduced_error;
-                    const bool reduced_ok = (i == 0)
+                    const bool indexed_graph_logits_active =
+                            selector_config.opencl_indexed_lmhead &&
+                            selector_config.opencl_indexed_lmhead_in_graph &&
+                            current_round_selection.projector != nullptr &&
+                            current_round_selection.projector->is_opencl_indexed_mode();
+                    const bool use_projector_logits =
+                            i == 0 ||
+                            (selector_config.opencl_indexed_lmhead &&
+                             !indexed_graph_logits_active);
+                    const bool reduced_ok = use_projector_logits
                             ? compute_candidates_from_projector_batch(
                                     hidden_batch.data(),
                                     static_cast<int>(active_seq_ids.size()),
@@ -5270,7 +5749,7 @@ int main(int argc, char ** argv) {
                     total_expansion_sampling_us += (t_samp_end - t_samp_start);
                     total_reduced_draft_logits_compute_us += reduced_sampling_profile.logits_compute_us;
                     total_reduced_fused_logits_fetch_us += reduced_sampling_profile.logits_fetch_us;
-                    if (i == 0) {
+                    if (use_projector_logits) {
                         total_reduced_draft_sampler_apply_us += reduced_sampling_profile.sampler_apply_us;
                     } else {
                         total_reduced_fused_sampler_apply_us += reduced_sampling_profile.sampler_apply_us;

@@ -71,6 +71,7 @@ set(GGML_OPENCL_KERNELS
     im2col_f32
     im2col_f16
     mul_mat_Ab_Bi_8x4
+    mul_mat_indexed_q4_0_Ab_Bi
     mul_mv_f16_f16
     mul_mv_f16_f32_1row
     mul_mv_f16_f32_l4

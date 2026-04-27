@@ -153,9 +153,31 @@ llm_build_eagle::llm_build_eagle(const llama_model & model, const llm_graph_para
     }
 
     // lm_head
-    cur = eagle_runtime_output != nullptr
-            ? ggml_mul_mat(ctx0, eagle_runtime_output, cur)
-            : build_lora_mm(model.output, cur);
+    if (eagle_runtime_output_ids != nullptr && eagle_runtime_output_rows > 0) {
+        GGML_ASSERT(model.output != nullptr);
+
+        auto inp = std::make_unique<llm_graph_input_eagle_runtime_output_ids>(
+                eagle_runtime_output_ids,
+                eagle_runtime_output_rows);
+        inp->ids = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, eagle_runtime_output_rows, n_tokens);
+        ggml_set_input(inp->ids);
+
+        ggml_tensor * output_3d = ggml_reshape_3d(
+                ctx0,
+                model.output,
+                model.output->ne[0],
+                1,
+                model.output->ne[1]);
+        ggml_tensor * cur_3d = ggml_reshape_3d(ctx0, cur, cur->ne[0], 1, cur->ne[1]);
+        cur = ggml_mul_mat_id(ctx0, output_3d, cur_3d, inp->ids);
+        cur = ggml_reshape_2d(ctx0, cur, eagle_runtime_output_rows, n_tokens);
+
+        res->add_input(std::move(inp));
+    } else {
+        cur = eagle_runtime_output != nullptr
+                ? ggml_mul_mat(ctx0, eagle_runtime_output, cur)
+                : build_lora_mm(model.output, cur);
+    }
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

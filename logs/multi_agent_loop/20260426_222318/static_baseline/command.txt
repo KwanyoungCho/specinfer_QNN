@@ -1,0 +1,27 @@
+cd /data/local/tmp/jongjip/executorch/QNN_test && export LD_LIBRARY_PATH=$PWD &&
+./llama-speculative-eagle-2-qnn \
+  --qnn \
+  --multi-context \
+  --ctx-dir ctx_out_0316 \
+  --tokenizer tokenizer.gguf \
+  --params params.json \
+  -md EAGLE-llama-vocab-trim-q4.gguf \
+  --log-level 1 \
+  -f prompt.txt \
+  --color \
+  --top-p 1.0 \
+  --min-p 0.0 \
+  --temp 0.0 \
+  --draft-max 500 \
+  --draft-min 1 \
+  -ngld 20 \
+  -np 500 \
+  -s 1234 \
+  -kvu \
+  --no-mmap \
+  -n 200 \
+  -fa off \
+  --deferred-kv \
+  --top-k 4 \
+  --n-depth 4 \
+  --rerank-k 15

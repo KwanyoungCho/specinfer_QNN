@@ -68,6 +68,33 @@ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+void llm_graph_input_eagle_runtime_output_ids::set_input(const llama_ubatch * ubatch) {
+    if (ids == nullptr || ids_src == nullptr || n_rows <= 0) {
+        return;
+    }
+
+    GGML_ASSERT((int64_t) ids_src->size() >= n_rows);
+
+    const int64_t n_tokens = ubatch->n_tokens;
+    ids_staging.resize((size_t) n_rows * (size_t) n_tokens);
+    for (int64_t t = 0; t < n_tokens; ++t) {
+        std::memcpy(
+                ids_staging.data() + (size_t) t * (size_t) n_rows,
+                ids_src->data(),
+                (size_t) n_rows * sizeof(int32_t));
+    }
+
+    ggml_backend_tensor_set(ids, ids_staging.data(), 0, ids_staging.size()*ggml_element_size(ids));
+}
+
+bool llm_graph_input_eagle_runtime_output_ids::can_reuse(const llm_graph_params & params) {
+    return params.eagle_runtime_output_ids != nullptr &&
+           params.eagle_runtime_output_rows == (uint32_t) n_rows &&
+           ids != nullptr &&
+           ids->ne[0] == n_rows &&
+           ids->ne[1] == params.ubatch.n_tokens;
+}
+
 void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && pos) {
         const int64_t n_tokens = ubatch->n_tokens;
@@ -619,6 +646,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     mctx             (params.mctx),
     cross            (params.cross),
     eagle_runtime_output(params.eagle_runtime_output),
+    eagle_runtime_output_ids(params.eagle_runtime_output_ids),
     eagle_runtime_output_rows(params.eagle_runtime_output_rows),
     cb_func          (params.cb),
     res              (params.res),

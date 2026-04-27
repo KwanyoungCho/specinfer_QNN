@@ -862,6 +862,13 @@ bool llama_context::set_eagle_runtime_output(const void * weights, size_t n_byte
         return false;
     }
 
+    if (eagle_runtime_output_ids_active) {
+        reset_eagle_runtime_output_graph_cache();
+        eagle_runtime_output_ids.clear();
+        n_eagle_runtime_output_ids = 0;
+        eagle_runtime_output_ids_active = false;
+    }
+
     const size_t row_bytes = model.output->nb[1];
     const size_t expected_nbytes = row_bytes * (size_t) n_rows;
     if (row_bytes == 0 || n_bytes != expected_nbytes) {
@@ -926,6 +933,41 @@ bool llama_context::set_eagle_runtime_output(const void * weights, size_t n_byte
     return true;
 }
 
+bool llama_context::set_eagle_runtime_output_ids(const int32_t * ids, int32_t n_rows) {
+    if (ids == nullptr || n_rows <= 0) {
+        LLAMA_LOG_ERROR("%s: invalid runtime output ids\n", __func__);
+        return false;
+    }
+    if (model.arch != LLM_ARCH_EAGLE) {
+        LLAMA_LOG_ERROR("%s: runtime EAGLE output ids are only supported for EAGLE models\n", __func__);
+        return false;
+    }
+    if (model.output == nullptr) {
+        LLAMA_LOG_ERROR("%s: model output tensor is null\n", __func__);
+        return false;
+    }
+
+    const bool topology_changed =
+            !eagle_runtime_output_ids_active ||
+            n_eagle_runtime_output_ids != (uint32_t) n_rows ||
+            t_eagle_runtime_output != nullptr;
+    if (topology_changed) {
+        reset_eagle_runtime_output_graph_cache();
+    }
+
+    t_eagle_runtime_output = nullptr;
+    n_eagle_runtime_output = 0;
+    eagle_runtime_output_borrowed = false;
+    eagle_runtime_output_owner.reset();
+    buf_eagle_runtime_output.reset();
+    ctx_eagle_runtime_output.reset();
+
+    eagle_runtime_output_ids.assign(ids, ids + n_rows);
+    n_eagle_runtime_output_ids = (uint32_t) n_rows;
+    eagle_runtime_output_ids_active = true;
+    return true;
+}
+
 bool llama_context::set_eagle_runtime_output_copy(ggml_tensor * src, int32_t n_rows) {
     if (src == nullptr || n_rows <= 0) {
         LLAMA_LOG_ERROR("%s: invalid runtime output source tensor\n", __func__);
@@ -956,6 +998,13 @@ bool llama_context::set_eagle_runtime_output_copy(ggml_tensor * src, int32_t n_r
     if (output_backend == nullptr) {
         LLAMA_LOG_ERROR("%s: failed to resolve output backend for runtime EAGLE head\n", __func__);
         return false;
+    }
+
+    if (eagle_runtime_output_ids_active) {
+        reset_eagle_runtime_output_graph_cache();
+        eagle_runtime_output_ids.clear();
+        n_eagle_runtime_output_ids = 0;
+        eagle_runtime_output_ids_active = false;
     }
 
     const bool need_realloc =
@@ -1030,6 +1079,13 @@ bool llama_context::set_eagle_runtime_output_borrowed(ggml_tensor * src, int32_t
         return false;
     }
 
+    if (eagle_runtime_output_ids_active) {
+        reset_eagle_runtime_output_graph_cache();
+        eagle_runtime_output_ids.clear();
+        n_eagle_runtime_output_ids = 0;
+        eagle_runtime_output_ids_active = false;
+    }
+
     const bool replacing_borrowed =
             eagle_runtime_output_borrowed &&
             (t_eagle_runtime_output != src || n_eagle_runtime_output != (uint32_t) n_rows);
@@ -1060,6 +1116,9 @@ void llama_context::clear_eagle_runtime_output() {
     n_eagle_runtime_output = 0;
     eagle_runtime_output_borrowed = false;
     eagle_runtime_output_owner.reset();
+    eagle_runtime_output_ids.clear();
+    n_eagle_runtime_output_ids = 0;
+    eagle_runtime_output_ids_active = false;
     buf_eagle_runtime_output.reset();
     ctx_eagle_runtime_output.reset();
 }
@@ -2200,6 +2259,16 @@ llm_graph_params llama_context::graph_params(
             const llama_memory_context_i * mctx,
             llm_graph_type   gtype) const {
     ggml_backend_sched_t sched_cur = graph_sched_for_current_mode();
+    const bool eagle_output_active = model.arch == LLM_ARCH_EAGLE && !cparams.eagle_hidden_only;
+    const bool eagle_indexed_output_active =
+            eagle_output_active &&
+            eagle_runtime_output_ids_active &&
+            n_eagle_runtime_output_ids > 0;
+    const bool eagle_dense_output_active =
+            eagle_output_active &&
+            !eagle_indexed_output_active &&
+            t_eagle_runtime_output != nullptr &&
+            n_eagle_runtime_output > 0;
     return {
         /*.arch        =*/ model.arch,
         /*.hparams     =*/ model.hparams,
@@ -2215,8 +2284,9 @@ llm_graph_params llama_context::graph_params(
         // When EAGLE runs in hidden-only mode, the runtime output tensor is not used by the graph.
         // Passing it through here would unnecessarily perturb the graph-cache key and increase
         // rebuild cost during recompute, even though the output path is disabled.
-        /*.eagle_runtime_output      =*/ (model.arch == LLM_ARCH_EAGLE && !cparams.eagle_hidden_only) ? t_eagle_runtime_output : nullptr,
-        /*.eagle_runtime_output_rows =*/ (model.arch == LLM_ARCH_EAGLE && !cparams.eagle_hidden_only) ? n_eagle_runtime_output : 0,
+        /*.eagle_runtime_output      =*/ eagle_dense_output_active ? t_eagle_runtime_output : nullptr,
+        /*.eagle_runtime_output_ids  =*/ eagle_indexed_output_active ? &eagle_runtime_output_ids : nullptr,
+        /*.eagle_runtime_output_rows =*/ eagle_indexed_output_active ? n_eagle_runtime_output_ids : (eagle_dense_output_active ? n_eagle_runtime_output : 0),
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
@@ -2293,7 +2363,7 @@ llm_graph_cb llama_context::graph_get_cb() const {
         }
 
         if (!cparams.eagle_hidden_only &&
-            t_eagle_runtime_output != nullptr &&
+            (t_eagle_runtime_output != nullptr || eagle_runtime_output_ids_active) &&
             strcmp(name, "result_output") == 0) {
             ggml_backend_t output_backend = resolve_output_backend();
             if (output_backend != nullptr && ggml_backend_supports_op(output_backend, cur)) {
@@ -2304,6 +2374,13 @@ llm_graph_cb llama_context::graph_get_cb() const {
 }
 
 uint32_t llama_context::output_n_vocab() const {
+    if (model.arch == LLM_ARCH_EAGLE &&
+        !cparams.eagle_hidden_only &&
+        eagle_runtime_output_ids_active &&
+        n_eagle_runtime_output_ids > 0) {
+        return n_eagle_runtime_output_ids;
+    }
+
     if (model.arch == LLM_ARCH_EAGLE &&
         !cparams.eagle_hidden_only &&
         t_eagle_runtime_output != nullptr &&
@@ -3305,6 +3382,13 @@ bool llama_set_eagle_runtime_output(
                size_t   n_bytes,
                int32_t  n_rows) {
     return ctx->set_eagle_runtime_output(weights, n_bytes, n_rows);
+}
+
+bool llama_set_eagle_runtime_output_ids(
+        llama_context * ctx,
+        const int32_t * ids,
+              int32_t   n_rows) {
+    return ctx->set_eagle_runtime_output_ids(ids, n_rows);
 }
 
 void llama_clear_eagle_runtime_output(llama_context * ctx) {

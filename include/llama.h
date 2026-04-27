@@ -953,6 +953,14 @@ extern "C" {
                    size_t          n_bytes,
                    int32_t         n_rows);
 
+    // Set a runtime EAGLE output shortlist by original LM-head row ids. When
+    // hidden-only mode is disabled, EAGLE decoder graphs will use the built-in
+    // LM head with these ids through an indexed matmul graph input.
+    LLAMA_API bool llama_set_eagle_runtime_output_ids(
+            struct llama_context * ctx,
+            const int32_t        * ids,
+                   int32_t         n_rows);
+
     // Restore the built-in EAGLE LM head and discard any runtime-uploaded output matrix.
     LLAMA_API void llama_clear_eagle_runtime_output(struct llama_context * ctx);
 

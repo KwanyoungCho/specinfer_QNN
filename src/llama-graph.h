@@ -115,6 +115,23 @@ public:
     ggml_tensor * embd   = nullptr; // F32 [n_embd, n_batch]
 };
 
+class llm_graph_input_eagle_runtime_output_ids : public llm_graph_input_i {
+public:
+    llm_graph_input_eagle_runtime_output_ids(const std::vector<int32_t> * ids_src, int64_t n_rows)
+        : ids_src(ids_src), n_rows(n_rows) {}
+    virtual ~llm_graph_input_eagle_runtime_output_ids() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * ids = nullptr; // I32 [n_rows, n_batch]
+
+    const std::vector<int32_t> * ids_src;
+    const int64_t n_rows;
+    std::vector<int32_t> ids_staging;
+};
+
 class llm_graph_input_pos : public llm_graph_input_i {
 public:
     llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
@@ -444,6 +461,7 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     ggml_tensor *                  eagle_runtime_output;
+    const std::vector<int32_t> *    eagle_runtime_output_ids;
     uint32_t                       eagle_runtime_output_rows;
 
     uint32_t n_outputs;
@@ -491,6 +509,7 @@ struct llm_graph_params {
             cparams.eagle_hidden_only == other.cparams.eagle_hidden_only &&
             (cparams.eagle_hidden_only || (
                 eagle_runtime_output      == other.eagle_runtime_output &&
+                (eagle_runtime_output_ids != nullptr) == (other.eagle_runtime_output_ids != nullptr) &&
                 eagle_runtime_output_rows == other.eagle_runtime_output_rows
             )) &&
             arch      == other.arch  &&
@@ -619,6 +638,7 @@ struct llm_graph_context {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     ggml_tensor * const            eagle_runtime_output;
+    const std::vector<int32_t> * const eagle_runtime_output_ids;
     const int64_t                  eagle_runtime_output_rows;
 
     const llm_graph_cb & cb_func;

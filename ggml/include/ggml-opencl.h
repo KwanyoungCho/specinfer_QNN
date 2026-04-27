@@ -102,6 +102,13 @@ GGML_BACKEND_API bool ggml_backend_opencl_device_i32_buffer_from_host(
         int32_t count,
         void ** out_device_buffer);
 
+// Updates an existing backend-owned int32 device buffer from host memory.
+GGML_BACKEND_API bool ggml_backend_opencl_device_i32_buffer_write_from_host(
+        ggml_backend_t backend,
+        void * device_buffer,
+        const int32_t * values,
+        int32_t count);
+
 // Sorts the first count int32 values in a backend-owned device buffer in
 // ascending order. The buffer contents are updated in place.
 GGML_BACKEND_API bool ggml_backend_opencl_device_i32_buffer_sort_asc_inplace(
@@ -135,6 +142,24 @@ GGML_BACKEND_API bool ggml_backend_opencl_gather_rows_q4_0_device_i32_padded(
         int32_t selected_rows,
         int32_t n_rows,
         int32_t pad_row_index,
+        struct ggml_tensor * dst);
+
+// Runs an indexed Q4_0 x F32 reduced-LMHead matmul directly from the original
+// source rows. device_row_indices must contain n_rows int32 row ids already on
+// the same OpenCL backend. hidden is F32 [hidden_dim x batch], dst is F32
+// [n_rows x batch].
+GGML_BACKEND_API bool ggml_backend_opencl_supports_indexed_mul_mat_q4_0(
+        ggml_backend_t backend,
+        const struct ggml_tensor * src,
+        int32_t n_rows,
+        int32_t batch_size);
+
+GGML_BACKEND_API bool ggml_backend_opencl_indexed_mul_mat_q4_0(
+        ggml_backend_t backend,
+        const struct ggml_tensor * src,
+        void * device_row_indices,
+        int32_t n_rows,
+        const struct ggml_tensor * hidden,
         struct ggml_tensor * dst);
 
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_opencl_buffer_type(void);
