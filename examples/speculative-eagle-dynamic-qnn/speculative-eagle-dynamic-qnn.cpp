@@ -418,6 +418,7 @@ struct DynamicSelectorConfig {
     std::string selector_bin_path;
     std::string selector_backend_so;
     std::string selector_system_so;
+    std::string selector_hot_vocab_json;
     bool dump_selector_scores = false;
     bool dump_reduced_logits = false;
     bool use_reduced_lmhead = false;
@@ -529,6 +530,8 @@ struct SelectorExecProfile {
 };
 
 struct RoundSelectionProfile {
+    int64_t launch_us = 0;
+    int64_t worker_dequeue_us = 0;
     int64_t task_start_us = 0;
     int64_t task_end_us = 0;
     SelectorExecProfile selector;
@@ -582,6 +585,7 @@ struct RoundSelectionWorkerState {
     bool has_ready_result = false;
     uint64_t pending_job_id = 0;
     uint64_t ready_job_id = 0;
+    int64_t pending_launch_us = 0;
     std::vector<float> hidden_input;
     RoundSelectionTaskResult result;
     std::exception_ptr error;
@@ -627,6 +631,10 @@ struct DebugTrimmedLmHeadReference {
 class CandidateSelector {
 public:
     virtual ~CandidateSelector() = default;
+    virtual bool warmup(std::string * error = nullptr) {
+        (void) error;
+        return true;
+    }
     virtual SelectorResult run(
             const float * hidden,
             int hidden_dim,
@@ -663,6 +671,77 @@ static std::string base_name(const std::string & path) {
 static bool file_exists_readable(const std::string & path) {
     std::ifstream input(path, std::ios::binary);
     return input.good();
+}
+
+static bool load_token_id_json_array(
+        const std::string & path,
+        std::vector<llama_token> & token_ids,
+        std::string & error) {
+    token_ids.clear();
+
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        error = "failed to open token id JSON: " + path;
+        return false;
+    }
+
+    char ch = 0;
+    bool in_number = false;
+    bool negative = false;
+    int64_t value = 0;
+    auto finish_number = [&]() -> bool {
+        if (!in_number) {
+            return true;
+        }
+        if (negative || value > std::numeric_limits<int32_t>::max()) {
+            std::ostringstream oss;
+            oss << "invalid token id " << (negative ? -value : value) << " in " << path;
+            error = oss.str();
+            return false;
+        }
+        token_ids.push_back(static_cast<llama_token>(value));
+        in_number = false;
+        negative = false;
+        value = 0;
+        return true;
+    };
+
+    while (input.get(ch)) {
+        if (ch == '-' && !in_number) {
+            in_number = true;
+            negative = true;
+            value = 0;
+            continue;
+        }
+        if (ch >= '0' && ch <= '9') {
+            if (!in_number) {
+                in_number = true;
+                negative = false;
+                value = 0;
+            }
+            value = value * 10 + static_cast<int64_t>(ch - '0');
+            if (value > std::numeric_limits<int32_t>::max()) {
+                error = "token id exceeds int32 range in " + path;
+                return false;
+            }
+            continue;
+        }
+        if (!finish_number()) {
+            return false;
+        }
+    }
+    if (!finish_number()) {
+        return false;
+    }
+
+    std::sort(token_ids.begin(), token_ids.end());
+    token_ids.erase(std::unique(token_ids.begin(), token_ids.end()), token_ids.end());
+    if (token_ids.empty()) {
+        error = "token id JSON did not contain any ids: " + path;
+        return false;
+    }
+
+    return true;
 }
 
 static bool resolve_selector_artifact_paths(
@@ -965,19 +1044,8 @@ public:
             profile->input_write_us += (input_write_end - input_write_start);
         }
 
-        std::vector<Qnn_Tensor_t> inputs;
-        std::vector<Qnn_Tensor_t> outputs;
-        inputs.reserve(input_holders_.size());
-        outputs.reserve(output_holders_.size());
-        for (const auto & holder : input_holders_) {
-            inputs.push_back(holder->tensor());
-        }
-        for (const auto & holder : output_holders_) {
-            outputs.push_back(holder->tensor());
-        }
-
         const auto graph_execute_start = ggml_time_us();
-        if (!loader_.execute_graph(0, graph_.graph_name, inputs, outputs)) {
+        if (!loader_.execute_graph(0, graph_.graph_name, input_tensors_, output_tensors_)) {
             error_ = "QNN graphExecute failed for selector graph";
             fprintf(stderr, "[selector-qnn] %s\n", error_.c_str());
             return {};
@@ -987,10 +1055,8 @@ public:
             profile->graph_execute_us += (graph_execute_end - graph_execute_start);
         }
 
-        std::vector<float> full_scores;
-        std::vector<llama_token> output_token_ids;
         const auto output_read_start = ggml_time_us();
-        if (!read_output(full_scores, output_token_ids)) {
+        if (!read_output(scratch_full_scores_, scratch_output_token_ids_)) {
             fprintf(stderr, "[selector-qnn] output read failed: %s\n", error_.c_str());
             return {};
         }
@@ -998,6 +1064,8 @@ public:
         if (profile != nullptr) {
             profile->output_read_us += (output_read_end - output_read_start);
         }
+        const std::vector<float> & full_scores = scratch_full_scores_;
+        const std::vector<llama_token> & output_token_ids = scratch_output_token_ids_;
 
         const auto topk_start = ggml_time_us();
         SelectorResult result;
@@ -1181,6 +1249,19 @@ public:
         return result;
     }
 
+    bool warmup(std::string * error = nullptr) override {
+        if (initialized_) {
+            return true;
+        }
+        if (initialize()) {
+            return true;
+        }
+        if (error != nullptr) {
+            *error = error_;
+        }
+        return false;
+    }
+
     const char * name() const override {
         return "qnn_random";
     }
@@ -1291,6 +1372,17 @@ private:
                 return false;
             }
             output_holders_.push_back(std::move(holder));
+        }
+
+        input_tensors_.clear();
+        input_tensors_.reserve(input_holders_.size());
+        for (const auto & holder : input_holders_) {
+            input_tensors_.push_back(holder->tensor());
+        }
+        output_tensors_.clear();
+        output_tensors_.reserve(output_holders_.size());
+        for (const auto & holder : output_holders_) {
+            output_tensors_.push_back(holder->tensor());
         }
 
         input_desc_ = &graph_.inputs.front();
@@ -1425,7 +1517,11 @@ private:
     llama_qnn::QNNIOAllocator alloc_;
     std::vector<std::unique_ptr<llama_qnn::QnnTensorHolder>> input_holders_;
     std::vector<std::unique_ptr<llama_qnn::QnnTensorHolder>> output_holders_;
+    std::vector<Qnn_Tensor_t> input_tensors_;
+    std::vector<Qnn_Tensor_t> output_tensors_;
     std::vector<uint8_t> context_binary_;
+    std::vector<float> scratch_full_scores_;
+    std::vector<llama_token> scratch_output_token_ids_;
     const llama_qnn::QnnJsonTensorDesc * input_desc_ = nullptr;
     const llama_qnn::QnnJsonTensorDesc * output_desc_ = nullptr;
     void * input_buffer_ = nullptr;
@@ -1856,7 +1952,6 @@ public:
         output_indices_ = output_indices;
         opencl_output_indices_device_ = std::move(opencl_output_indices_device);
         storage_shortlist_size_ = shortlist_size_;
-        storage_output_indices_ = output_indices_;
         storage_order_identity_ = true;
         emit_debug_logs_ = emit_debug_logs;
 
@@ -2678,9 +2773,8 @@ private:
             bool /* use_opencl_padded_device_ids */,
             std::shared_ptr<OpenclI32BufferHandle> * reusable_upload_indices_device) {
         storage_shortlist_size_ = shortlist_size_;
-        storage_output_indices_ = output_indices_;
-        storage_to_output_pos_.resize(static_cast<size_t>(shortlist_size_));
-        std::iota(storage_to_output_pos_.begin(), storage_to_output_pos_.end(), 0);
+        storage_to_output_pos_.clear();
+        storage_order_identity_ = true;
 
         if (backend_ == nullptr || !reduced_lm_head_backend_is_opencl(backend_)) {
             return false;
@@ -2780,9 +2874,6 @@ private:
             bool use_opencl_padded_device_ids,
             std::shared_ptr<OpenclI32BufferHandle> * reusable_upload_indices_device) {
         storage_shortlist_size_ = shortlist_size_;
-        storage_output_indices_ = output_indices_;
-        storage_to_output_pos_.resize(static_cast<size_t>(shortlist_size_));
-        std::iota(storage_to_output_pos_.begin(), storage_to_output_pos_.end(), 0);
 
         if (backend_ == nullptr || !reduced_lm_head_backend_is_opencl(backend_)) {
             return false;
@@ -2828,8 +2919,10 @@ private:
         if (already_sorted) {
             std::copy(output_indices_.begin(), output_indices_.end(), storage_output_indices_.begin());
             storage_order_identity_ = true;
+            storage_to_output_pos_.clear();
         } else {
             storage_order_identity_ = false;
+            storage_to_output_pos_.resize(static_cast<size_t>(shortlist_size_));
             std::vector<int32_t> original_to_sorted(static_cast<size_t>(shortlist_size_));
             std::iota(original_to_sorted.begin(), original_to_sorted.end(), 0);
             std::stable_sort(
@@ -2968,7 +3061,7 @@ private:
             int batch_size,
             std::vector<float> & logits_out) const {
         GGML_ASSERT(storage_logits != nullptr);
-        GGML_ASSERT(storage_to_output_pos_.size() == static_cast<size_t>(shortlist_size_));
+        GGML_ASSERT(storage_order_identity_ || storage_to_output_pos_.size() == static_cast<size_t>(shortlist_size_));
         GGML_ASSERT(logits_out.size() == static_cast<size_t>(shortlist_size_) * batch_size);
 
         for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
@@ -4204,6 +4297,8 @@ int main(int argc, char ** argv) {
             selector_config.selector_backend_so = argv[++i];
         } else if (arg == "--selector-system-so" && i + 1 < argc) {
             selector_config.selector_system_so = argv[++i];
+        } else if (arg == "--selector-hot-vocab-json" && i + 1 < argc) {
+            selector_config.selector_hot_vocab_json = argv[++i];
         } else if (arg == "--dump-selector-scores") {
             selector_config.dump_selector_scores = true;
         } else if (arg == "--dump-reduced-logits") {
@@ -4258,6 +4353,7 @@ int main(int argc, char ** argv) {
             printf("  --selector-bin FILE                     Explicit selector QNN context binary path\n");
             printf("  --selector-backend-so FNAME             Override QNN backend .so for selector graph\n");
             printf("  --selector-system-so FNAME              Override QNN system .so for selector graph\n");
+            printf("  --selector-hot-vocab-json FILE          Diagnostic: report selector hot/cold coverage against token-id JSON array\n");
             printf("  --dump-selector-scores                  Print selector shortlist for each round\n");
             printf("  --dump-reduced-logits                   Print reduced LM head logits for each round\n");
             printf("  --use-reduced-lmhead                    Use shortlist gather + reduced LM head for draft expansion\n");
@@ -4566,6 +4662,45 @@ int main(int argc, char ** argv) {
     // target model sampling context (reuse the llama_context's sampling instance)
     struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
 
+    std::vector<uint8_t> selector_hot_vocab_mask;
+    int64_t selector_hot_vocab_unique_ids = 0;
+    if (!selector_config.selector_hot_vocab_json.empty()) {
+        std::vector<llama_token> hot_token_ids;
+        std::string hot_vocab_error;
+        if (!load_token_id_json_array(
+                    selector_config.selector_hot_vocab_json,
+                    hot_token_ids,
+                    hot_vocab_error)) {
+            LOG_ERR("%s: failed to load --selector-hot-vocab-json: %s\n",
+                    __func__, hot_vocab_error.c_str());
+            return 1;
+        }
+
+        const int vocab_token_count = llama_vocab_n_tokens(vocab_dft);
+        selector_hot_vocab_mask.assign(static_cast<size_t>(std::max(0, vocab_token_count)), 0);
+        int64_t ignored_ids = 0;
+        for (llama_token token_id : hot_token_ids) {
+            if (token_id < 0 || token_id >= vocab_token_count) {
+                ++ignored_ids;
+                continue;
+            }
+            if (selector_hot_vocab_mask[static_cast<size_t>(token_id)] == 0) {
+                selector_hot_vocab_mask[static_cast<size_t>(token_id)] = 1;
+                ++selector_hot_vocab_unique_ids;
+            }
+        }
+        if (selector_hot_vocab_unique_ids <= 0) {
+            LOG_ERR("%s: --selector-hot-vocab-json contained no token ids valid for draft vocab size %d\n",
+                    __func__, vocab_token_count);
+            return 1;
+        }
+        LOG_INF("[selector-hot-vocab] coverage diagnostics enabled: '%s' unique_ids=%lld ignored=%lld vocab=%d\n",
+                selector_config.selector_hot_vocab_json.c_str(),
+                (long long) selector_hot_vocab_unique_ids,
+                (long long) ignored_ids,
+                vocab_token_count);
+    }
+
     const bool selector_softmax_uncapped =
             selector_config.selector_softmax_threshold_enabled &&
             selector_config.top_k == 0;
@@ -4574,6 +4709,7 @@ int main(int argc, char ** argv) {
             : selector_config.top_k;
 
     std::unique_ptr<CandidateSelector> candidate_selector;
+    int64_t selector_predecode_init_us = 0;
     if (selector_config.use_reduced_lmhead) {
         if (selector_output_limit <= 0) {
             LOG_ERR("%s: selector output limit is invalid: %d\n", __func__, selector_output_limit);
@@ -4606,6 +4742,18 @@ int main(int argc, char ** argv) {
         if (candidate_selector == nullptr) {
             LOG_ERR("%s: failed to build QNN candidate selector\n", __func__);
             return 1;
+        }
+        {
+            std::string warmup_error;
+            const int64_t warmup_start_us = ggml_time_us();
+            if (!candidate_selector->warmup(&warmup_error)) {
+                LOG_ERR("%s: failed to initialize selector before decode: %s\n",
+                        __func__, warmup_error.c_str());
+                return 1;
+            }
+            selector_predecode_init_us = ggml_time_us() - warmup_start_us;
+            LOG_INF("[selector-qnn] selector context preloaded before decode in %.3f ms\n",
+                    selector_predecode_init_us / 1000.0);
         }
         LOG_INF("[reduced-lmhead] enabled with QNN selector selector_limit=%d output_vocab=%d hidden_dim=%d\n",
                 selector_output_limit,
@@ -4751,7 +4899,6 @@ int main(int argc, char ** argv) {
     std::vector<float> column_scores(n_seq_dft, 0.0f);
     std::vector<size_t> topk_indices = { 0, };
     std::vector<size_t> expandk_indices = { 0, };
-    std::vector<float> current_round_root_hidden;
     RoundSelection current_round_selection;
     bool current_round_selection_future_pending = false;
     uint64_t current_round_selection_job_id = 0;
@@ -4815,16 +4962,28 @@ int main(int argc, char ** argv) {
     int64_t total_main_selector_runtime_rows = 0;
     int64_t max_main_selector_selected_rows = 0;
     int64_t max_main_selector_runtime_rows = 0;
+    int64_t total_main_selector_hot_vocab_rows = 0;
+    int64_t total_main_selector_cold_vocab_rows = 0;
+    int64_t max_main_selector_cold_vocab_rows = 0;
     int64_t total_main_selector_runtime_row_switches = 0;
     int32_t prev_main_selector_runtime_rows = -1;
     int64_t total_main_selector_window_to_lmhead_us = 0;
     int64_t total_main_selector_exposed_after_lmhead_us = 0;
     int64_t max_main_selector_exposed_after_lmhead_us = 0;
+    int64_t total_main_selector_launch_submit_us = 0;
+    int64_t total_main_selector_launch_to_dequeue_us = 0;
+    int64_t total_main_selector_dequeue_to_start_us = 0;
+    int64_t total_main_selector_launch_to_start_us = 0;
+    int64_t total_main_selector_launch_to_end_us = 0;
+    int64_t total_main_selector_task_start_to_lmhead_us = 0;
+    int64_t max_main_selector_launch_to_start_us = 0;
+    int64_t max_main_selector_launch_to_end_us = 0;
     int main_selector_rounds_launched = 0;
     int main_selector_rounds_completed = 0;
     int main_selector_rounds_with_lmhead_window = 0;
     int main_selector_rounds_hidden_before_lmhead = 0;
     int64_t current_round_selection_launch_us = 0;
+    int64_t current_round_selection_task_start_us = 0;
     int64_t current_round_selection_task_end_us = 0;
     bool current_round_selection_lmhead_window_recorded = false;
     
@@ -4897,38 +5056,44 @@ int main(int argc, char ** argv) {
 
     common_sampler_profile_reset();
 
-    if (selector_config.use_reduced_lmhead) {
-        current_round_selection_worker = std::thread([&]() {
-            for (;;) {
-                std::vector<float> hidden_copy;
-                uint64_t job_id = 0;
+	    if (selector_config.use_reduced_lmhead) {
+	        current_round_selection_worker = std::thread([&]() {
+	            for (;;) {
+	                std::vector<float> hidden_copy;
+	                uint64_t job_id = 0;
+                    int64_t job_launch_us = 0;
+                    int64_t worker_dequeue_us = 0;
 
-                {
-                    std::unique_lock<std::mutex> lock(current_round_selection_worker_state.mutex);
-                    current_round_selection_worker_state.cv.wait(lock, [&]() {
-                        return current_round_selection_worker_state.stop ||
+	                {
+	                    std::unique_lock<std::mutex> lock(current_round_selection_worker_state.mutex);
+	                    current_round_selection_worker_state.cv.wait(lock, [&]() {
+	                        return current_round_selection_worker_state.stop ||
                                current_round_selection_worker_state.has_pending_job;
                     });
 
-                    if (current_round_selection_worker_state.stop &&
-                        !current_round_selection_worker_state.has_pending_job) {
-                        break;
-                    }
+	                    if (current_round_selection_worker_state.stop &&
+	                        !current_round_selection_worker_state.has_pending_job) {
+	                        break;
+	                    }
 
-                    hidden_copy = std::move(current_round_selection_worker_state.hidden_input);
-                    job_id = current_round_selection_worker_state.pending_job_id;
-                    current_round_selection_worker_state.has_pending_job = false;
-                    current_round_selection_worker_state.has_ready_result = false;
-                    current_round_selection_worker_state.error = nullptr;
-                }
+                        worker_dequeue_us = ggml_time_us();
+	                    hidden_copy = std::move(current_round_selection_worker_state.hidden_input);
+	                    job_id = current_round_selection_worker_state.pending_job_id;
+                        job_launch_us = current_round_selection_worker_state.pending_launch_us;
+	                    current_round_selection_worker_state.has_pending_job = false;
+	                    current_round_selection_worker_state.has_ready_result = false;
+	                    current_round_selection_worker_state.error = nullptr;
+	                }
 
                 RoundSelectionTaskResult task_result;
-                std::exception_ptr task_error;
+	                std::exception_ptr task_error;
 
-                try {
-                    task_result.profile.task_start_us = ggml_time_us();
-                    task_result.selection = run_selector_then_reduced_lm_head(
-                            *candidate_selector,
+	                try {
+                        task_result.profile.launch_us = job_launch_us;
+                        task_result.profile.worker_dequeue_us = worker_dequeue_us;
+	                    task_result.profile.task_start_us = ggml_time_us();
+	                    task_result.selection = run_selector_then_reduced_lm_head(
+	                            *candidate_selector,
                             lm_head_ctx,
                             hidden_copy.data(),
                             hidden_dim,
@@ -4963,16 +5128,33 @@ int main(int argc, char ** argv) {
         });
     }
 
-    auto finalize_current_round_selection_task = [&](RoundSelectionTaskResult && task_result, int64_t wait_stall_us) -> bool {
-        current_round_selection = std::move(task_result.selection);
-        current_round_selection_future_pending = false;
-        current_round_selection_task_end_us = task_result.profile.task_end_us;
-        current_round_selection_lmhead_window_recorded = false;
+	    auto finalize_current_round_selection_task = [&](RoundSelectionTaskResult && task_result, int64_t wait_stall_us) -> bool {
+	        current_round_selection = std::move(task_result.selection);
+	        current_round_selection_future_pending = false;
+            current_round_selection_task_start_us = task_result.profile.task_start_us;
+	        current_round_selection_task_end_us = task_result.profile.task_end_us;
+	        current_round_selection_lmhead_window_recorded = false;
 
-        ++main_selector_rounds_completed;
-        total_main_selector_total_us += (task_result.profile.task_end_us - task_result.profile.task_start_us);
-        total_main_selector_run_us += task_result.profile.selector.total_us;
-        total_main_selector_init_us += task_result.profile.selector.init_us;
+	        ++main_selector_rounds_completed;
+	        total_main_selector_total_us += (task_result.profile.task_end_us - task_result.profile.task_start_us);
+            if (task_result.profile.launch_us > 0) {
+                const int64_t launch_to_dequeue_us = std::max<int64_t>(
+                        0, task_result.profile.worker_dequeue_us - task_result.profile.launch_us);
+                const int64_t dequeue_to_start_us = std::max<int64_t>(
+                        0, task_result.profile.task_start_us - task_result.profile.worker_dequeue_us);
+                const int64_t launch_to_start_us = std::max<int64_t>(
+                        0, task_result.profile.task_start_us - task_result.profile.launch_us);
+                const int64_t launch_to_end_us = std::max<int64_t>(
+                        0, task_result.profile.task_end_us - task_result.profile.launch_us);
+                total_main_selector_launch_to_dequeue_us += launch_to_dequeue_us;
+                total_main_selector_dequeue_to_start_us += dequeue_to_start_us;
+                total_main_selector_launch_to_start_us += launch_to_start_us;
+                total_main_selector_launch_to_end_us += launch_to_end_us;
+                max_main_selector_launch_to_start_us = std::max(max_main_selector_launch_to_start_us, launch_to_start_us);
+                max_main_selector_launch_to_end_us = std::max(max_main_selector_launch_to_end_us, launch_to_end_us);
+            }
+	        total_main_selector_run_us += task_result.profile.selector.total_us;
+	        total_main_selector_init_us += task_result.profile.selector.init_us;
         total_main_selector_input_write_us += task_result.profile.selector.input_write_us;
         total_main_selector_graph_execute_us += task_result.profile.selector.graph_execute_us;
         total_main_selector_output_read_us += task_result.profile.selector.output_read_us;
@@ -4982,6 +5164,21 @@ int main(int argc, char ** argv) {
         total_main_selector_wait_stall_us += wait_stall_us;
         total_main_selector_selected_rows += static_cast<int64_t>(current_round_selection.token_ids.size());
         total_main_selector_runtime_rows += current_round_selection.runtime_output_rows;
+        if (!selector_hot_vocab_mask.empty()) {
+            int64_t hot_rows = 0;
+            for (const llama_token token_id : current_round_selection.token_ids) {
+                if (token_id >= 0 &&
+                    static_cast<size_t>(token_id) < selector_hot_vocab_mask.size() &&
+                    selector_hot_vocab_mask[static_cast<size_t>(token_id)] != 0) {
+                    ++hot_rows;
+                }
+            }
+            const int64_t selected_rows = static_cast<int64_t>(current_round_selection.token_ids.size());
+            const int64_t cold_rows = selected_rows - hot_rows;
+            total_main_selector_hot_vocab_rows += hot_rows;
+            total_main_selector_cold_vocab_rows += cold_rows;
+            max_main_selector_cold_vocab_rows = std::max(max_main_selector_cold_vocab_rows, cold_rows);
+        }
         max_main_selector_selected_rows = std::max<int64_t>(
                 max_main_selector_selected_rows,
                 static_cast<int64_t>(current_round_selection.token_ids.size()));
@@ -5076,19 +5273,23 @@ int main(int argc, char ** argv) {
         return true;
     };
 
-    auto record_current_round_selection_lmhead_window = [&](int64_t lmhead_start_us) {
-        if (current_round_selection_lmhead_window_recorded ||
-            current_round_selection_launch_us <= 0 ||
-            current_round_selection_task_end_us <= 0) {
-            return;
+	    auto record_current_round_selection_lmhead_window = [&](int64_t lmhead_start_us) {
+	        if (current_round_selection_lmhead_window_recorded ||
+	            current_round_selection_launch_us <= 0 ||
+	            current_round_selection_task_end_us <= 0) {
+	            return;
         }
 
-        const int64_t window_to_lmhead_us = std::max<int64_t>(0, lmhead_start_us - current_round_selection_launch_us);
-        const int64_t exposed_after_lmhead_us = std::max<int64_t>(0, current_round_selection_task_end_us - lmhead_start_us);
-        total_main_selector_window_to_lmhead_us += window_to_lmhead_us;
-        total_main_selector_exposed_after_lmhead_us += exposed_after_lmhead_us;
-        max_main_selector_exposed_after_lmhead_us = std::max(max_main_selector_exposed_after_lmhead_us, exposed_after_lmhead_us);
-        ++main_selector_rounds_with_lmhead_window;
+	        const int64_t window_to_lmhead_us = std::max<int64_t>(0, lmhead_start_us - current_round_selection_launch_us);
+	        const int64_t exposed_after_lmhead_us = std::max<int64_t>(0, current_round_selection_task_end_us - lmhead_start_us);
+            const int64_t task_start_to_lmhead_us = current_round_selection_task_start_us > 0
+                    ? std::max<int64_t>(0, lmhead_start_us - current_round_selection_task_start_us)
+                    : 0;
+	        total_main_selector_window_to_lmhead_us += window_to_lmhead_us;
+	        total_main_selector_exposed_after_lmhead_us += exposed_after_lmhead_us;
+            total_main_selector_task_start_to_lmhead_us += task_start_to_lmhead_us;
+	        max_main_selector_exposed_after_lmhead_us = std::max(max_main_selector_exposed_after_lmhead_us, exposed_after_lmhead_us);
+	        ++main_selector_rounds_with_lmhead_window;
         if (exposed_after_lmhead_us == 0) {
             ++main_selector_rounds_hidden_before_lmhead;
         }
@@ -5188,17 +5389,19 @@ int main(int argc, char ** argv) {
         return true;
     };
 
-    auto launch_current_round_selection = [&](const std::vector<float> & hidden_input) {
-        current_round_selection = RoundSelection{};
+	    auto launch_current_round_selection = [&](const std::vector<float> & hidden_input) {
+	        current_round_selection = RoundSelection{};
 
         if (!selector_config.use_reduced_lmhead) {
             current_round_selection_future_pending = false;
             return;
         }
 
-        current_round_selection_launch_us = ggml_time_us();
-        current_round_selection_task_end_us = 0;
-        current_round_selection_lmhead_window_recorded = false;
+            const int64_t launch_submit_start_us = ggml_time_us();
+	        current_round_selection_launch_us = launch_submit_start_us;
+            current_round_selection_task_start_us = 0;
+	        current_round_selection_task_end_us = 0;
+	        current_round_selection_lmhead_window_recorded = false;
 
         {
             std::lock_guard<std::mutex> lock(current_round_selection_worker_state.mutex);
@@ -5209,14 +5412,16 @@ int main(int argc, char ** argv) {
                 return;
             }
 
-            current_round_selection_job_id = ++next_round_selection_job_id;
-            current_round_selection_worker_state.pending_job_id = current_round_selection_job_id;
-            current_round_selection_worker_state.hidden_input = hidden_input;
-            current_round_selection_worker_state.error = nullptr;
-            current_round_selection_worker_state.has_pending_job = true;
-        }
+	            current_round_selection_job_id = ++next_round_selection_job_id;
+	            current_round_selection_worker_state.pending_job_id = current_round_selection_job_id;
+                current_round_selection_worker_state.pending_launch_us = current_round_selection_launch_us;
+	            current_round_selection_worker_state.hidden_input = hidden_input;
+	            current_round_selection_worker_state.error = nullptr;
+	            current_round_selection_worker_state.has_pending_job = true;
+	        }
 
-        current_round_selection_worker_state.cv.notify_one();
+            total_main_selector_launch_submit_us += ggml_time_us() - launch_submit_start_us;
+	        current_round_selection_worker_state.cv.notify_one();
         current_round_selection_future_pending = true;
         ++main_selector_rounds_launched;
     };
@@ -5475,9 +5680,8 @@ int main(int argc, char ** argv) {
                     __func__, backup_data.size(), hidden_dim);
             return 1;
         }
-        current_round_root_hidden = temp3;
         if (!selector_config.selector_launch_after_recompute) {
-            launch_current_round_selection(current_round_root_hidden);
+            launch_current_round_selection(temp3);
         }
         int recompute_point = n_past_dft - i_dft;
 
@@ -5570,7 +5774,7 @@ int main(int argc, char ** argv) {
 
         const auto step_draft_setup_start = ggml_time_us();
         if (selector_config.selector_launch_after_recompute) {
-            launch_current_round_selection(current_round_root_hidden);
+            launch_current_round_selection(temp3);
         }
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
             break;
@@ -5997,7 +6201,7 @@ int main(int argc, char ** argv) {
 
                 const float * parent_hidden = nullptr;
                 if (selector_config.use_reduced_lmhead && i == 0) {
-                    parent_hidden = current_round_root_hidden.data();
+                    parent_hidden = temp3.data();
                 } else {
                     const size_t hidden_offset = static_cast<size_t>(hidden_dim) * temp_i_batch_dft[s];
                     if (hidden_offset + hidden_dim > cb_data.data.size()) {
@@ -6553,7 +6757,11 @@ int main(int argc, char ** argv) {
                     avg_ms_per(total_main_selector_total_us, main_selector_rounds_completed));
             LOG_INF("    * Selector Run Total        : %8.3f ms / selector round\n",
                     avg_ms_per(total_main_selector_run_us, main_selector_rounds_completed));
-            LOG_INF("      - Selector Init           : %8.3f ms / selector round (%8.3f ms total)\n",
+            if (selector_predecode_init_us > 0) {
+                LOG_INF("      - Selector Init Preload   : %8.3f ms one-time (outside decode loop)\n",
+                        selector_predecode_init_us / 1000.0);
+            }
+            LOG_INF("      - Selector Init Lazy      : %8.3f ms / selector round (%8.3f ms total)\n",
                     avg_ms_per(total_main_selector_init_us, main_selector_rounds_completed),
                     total_main_selector_init_us / 1000.0);
             LOG_INF("    * Selector QNN              : %8.3f ms / selector round\n",
@@ -6580,6 +6788,16 @@ int main(int argc, char ** argv) {
             LOG_INF("    * Selected Rows             : %8.3f / round (max %lld)\n",
                     avg_per(total_main_selector_selected_rows, main_selector_rounds_completed),
                     (long long) max_main_selector_selected_rows);
+            if (!selector_hot_vocab_mask.empty()) {
+                LOG_INF("    * Hot Vocab Coverage        : hot %8.3f / round (%6.2f%%), cold %8.3f / round (max %lld)\n",
+                        avg_per(total_main_selector_hot_vocab_rows, main_selector_rounds_completed),
+                        total_main_selector_selected_rows > 0
+                                ? 100.0 * static_cast<double>(total_main_selector_hot_vocab_rows) /
+                                          static_cast<double>(total_main_selector_selected_rows)
+                                : 0.0,
+                        avg_per(total_main_selector_cold_vocab_rows, main_selector_rounds_completed),
+                        (long long) max_main_selector_cold_vocab_rows);
+            }
             LOG_INF("    * Runtime Output Rows       : %8.3f / round (max %lld)\n",
                     avg_per(total_main_selector_runtime_rows, main_selector_rounds_completed),
                     (long long) max_main_selector_runtime_rows);
@@ -6596,11 +6814,30 @@ int main(int argc, char ** argv) {
             }
             LOG_INF("    * Selector Launch Timing    : %s\n",
                     selector_config.selector_launch_after_recompute ? "after-recompute" : "before-recompute");
+            if (main_selector_rounds_launched > 0) {
+                LOG_INF("    * Launch Submit Cost        : %8.3f ms / launch\n",
+                        avg_ms_per(total_main_selector_launch_submit_us, main_selector_rounds_launched));
+            }
+            LOG_INF("    * Launch -> Worker Start    : %8.3f ms / round (max %8.3f)\n",
+                    avg_ms_per(total_main_selector_launch_to_start_us, main_selector_rounds_completed),
+                    max_main_selector_launch_to_start_us / 1000.0);
+            LOG_INF("      - Launch -> Dequeue       : %8.3f ms / round\n",
+                    avg_ms_per(total_main_selector_launch_to_dequeue_us, main_selector_rounds_completed));
+            LOG_INF("      - Dequeue -> Task Start   : %8.3f ms / round\n",
+                    avg_ms_per(total_main_selector_dequeue_to_start_us, main_selector_rounds_completed));
+            LOG_INF("    * Launch -> Task End        : %8.3f ms / round (max %8.3f)\n",
+                    avg_ms_per(total_main_selector_launch_to_end_us, main_selector_rounds_completed),
+                    max_main_selector_launch_to_end_us / 1000.0);
             if (main_selector_rounds_with_lmhead_window > 0) {
                 LOG_INF("    * Window -> LMHead          : %8.3f ms / window\n",
                         avg_ms_per(total_main_selector_window_to_lmhead_us, main_selector_rounds_with_lmhead_window));
+                LOG_INF("    * TaskStart -> LMHead       : %8.3f ms / window\n",
+                        avg_ms_per(total_main_selector_task_start_to_lmhead_us, main_selector_rounds_with_lmhead_window));
                 LOG_INF("    * Exposed After LMHead      : %8.3f ms / window\n",
                         avg_ms_per(total_main_selector_exposed_after_lmhead_us, main_selector_rounds_with_lmhead_window));
+                LOG_INF("    * Hidden Before LMHead      : %8d / %d windows\n",
+                        main_selector_rounds_hidden_before_lmhead,
+                        main_selector_rounds_with_lmhead_window);
                 LOG_INF("    * Overlap Before LMHead     : %8.2f %%\n", main_selector_overlap_before_lmhead_pct);
             }
         }
@@ -6715,6 +6952,16 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "  Avg selected rows     : %.3f / round (max %lld)\n",
                     static_cast<double>(total_main_selector_selected_rows) / static_cast<double>(main_selector_rounds_completed),
                     (long long) max_main_selector_selected_rows);
+            if (!selector_hot_vocab_mask.empty()) {
+                fprintf(stderr, "  Hot vocab coverage    : hot %.3f / round (%.2f%%), cold %.3f / round (max %lld)\n",
+                        static_cast<double>(total_main_selector_hot_vocab_rows) / static_cast<double>(main_selector_rounds_completed),
+                        total_main_selector_selected_rows > 0
+                                ? 100.0 * static_cast<double>(total_main_selector_hot_vocab_rows) /
+                                          static_cast<double>(total_main_selector_selected_rows)
+                                : 0.0,
+                        static_cast<double>(total_main_selector_cold_vocab_rows) / static_cast<double>(main_selector_rounds_completed),
+                        (long long) max_main_selector_cold_vocab_rows);
+            }
             fprintf(stderr, "  Avg runtime rows      : %.3f / round (max %lld)\n",
                     static_cast<double>(total_main_selector_runtime_rows) / static_cast<double>(main_selector_rounds_completed),
                     (long long) max_main_selector_runtime_rows);
@@ -6755,6 +7002,16 @@ int main(int argc, char ** argv) {
         LOG_INF("  Avg selected rows: %.3f / round (max %lld)\n",
                 static_cast<double>(total_main_selector_selected_rows) / static_cast<double>(main_selector_rounds_completed),
                 (long long) max_main_selector_selected_rows);
+        if (!selector_hot_vocab_mask.empty()) {
+            LOG_INF("  Hot vocab coverage: hot %.3f / round (%.2f%%), cold %.3f / round (max %lld)\n",
+                    static_cast<double>(total_main_selector_hot_vocab_rows) / static_cast<double>(main_selector_rounds_completed),
+                    total_main_selector_selected_rows > 0
+                            ? 100.0 * static_cast<double>(total_main_selector_hot_vocab_rows) /
+                                      static_cast<double>(total_main_selector_selected_rows)
+                            : 0.0,
+                    static_cast<double>(total_main_selector_cold_vocab_rows) / static_cast<double>(main_selector_rounds_completed),
+                    (long long) max_main_selector_cold_vocab_rows);
+        }
         LOG_INF("  Avg runtime rows : %.3f / round (max %lld)\n",
                 static_cast<double>(total_main_selector_runtime_rows) / static_cast<double>(main_selector_rounds_completed),
                 (long long) max_main_selector_runtime_rows);

@@ -1237,6 +1237,8 @@ struct selector_data_config {
     int lookahead_depth = 5;
     int top_k = 2048;
     int64_t max_samples = -1;
+    int samples_per_prompt = -1;
+    uint32_t random_seed = 0;
     bool save_hidden_fp16 = true;
     bool save_logits_fp16 = true;
 };
@@ -1250,6 +1252,13 @@ struct selector_cached_row {
     std::vector<float> hidden;
     std::vector<int32_t> top_ids;
     std::vector<float> top_logits;
+};
+
+struct selector_sample_record {
+    std::vector<float> hidden;
+    std::vector<int32_t> top_ids;
+    std::vector<float> top_logits;
+    std::vector<int32_t> gold_ids;
 };
 
 static bool write_float_record(
@@ -1447,6 +1456,8 @@ public:
             << "  \"vocab_size\": " << vocab_size_ << ",\n"
             << "  \"lookahead_depth\": " << cfg_.lookahead_depth << ",\n"
             << "  \"top_k\": " << cfg_.top_k << ",\n"
+            << "  \"samples_per_prompt\": " << cfg_.samples_per_prompt << ",\n"
+            << "  \"random_seed\": " << cfg_.random_seed << ",\n"
             << "  \"hidden_dtype\": \"" << (cfg_.save_hidden_fp16 ? "fp16" : "f32") << "\",\n"
             << "  \"top_logits_dtype\": \"" << (cfg_.save_logits_fp16 ? "fp16" : "f32") << "\",\n"
             << "  \"top_ids_dtype\": \"i32\",\n"
@@ -1485,6 +1496,28 @@ private:
     std::ofstream gold_ids_;
     std::vector<ggml_fp16_t> fp16_scratch_;
 };
+
+static bool selector_write_sample_record(
+    SelectorDataWriter & writer,
+    const selector_sample_record & sample,
+    int hidden_dim,
+    int vocab_size);
+
+static void selector_reservoir_add(
+    std::vector<selector_sample_record> & reservoir,
+    int64_t & candidates_seen,
+    int max_samples_per_prompt,
+    selector_sample_record && sample,
+    std::mt19937 & rng);
+
+static bool selector_flush_prompt_reservoir(
+    const selector_data_config & cfg,
+    SelectorDataWriter & writer,
+    const std::vector<selector_sample_record> & reservoir,
+    int hidden_dim,
+    int vocab_size,
+    int64_t & token_positions_processed,
+    bool & prompt_wrote_sample);
 
 static int collect_selector_prompt_data(
     const selector_data_config & cfg,
@@ -1529,14 +1562,16 @@ static int collect_selector_prompt_data(
     int64_t token_positions_processed = 0;
     int prompts_processed = 0;
     int prompts_with_samples = 0;
+    std::mt19937 selector_rng(cfg.random_seed);
 
     fprintf(stderr,
-            "[%s] Selector data collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64 "\n",
+            "[%s] Selector data collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64 " samples_per_prompt=%d\n",
             SPEC_BENCH_BACKEND_LABEL,
             cfg.data_dir.c_str(),
             cfg.lookahead_depth,
             cfg.top_k,
-            cfg.max_samples);
+            cfg.max_samples,
+            cfg.samples_per_prompt);
 
     for (size_t prompt_idx = idx_start; prompt_idx < idx_end; ++prompt_idx) {
         if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
@@ -1649,9 +1684,14 @@ static int collect_selector_prompt_data(
 
         const int n_valid_positions = n_tokens - cfg.lookahead_depth;
         bool prompt_wrote_sample = false;
+        std::vector<selector_sample_record> prompt_reservoir;
+        int64_t prompt_candidates_seen = 0;
         std::vector<int32_t> sample_top_ids;
         std::vector<float> sample_top_logits;
         std::vector<int32_t> sample_gold_ids;
+        if (cfg.samples_per_prompt > 0) {
+            prompt_reservoir.reserve(cfg.samples_per_prompt);
+        }
         sample_top_ids.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
         sample_top_logits.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
         sample_gold_ids.reserve(cfg.lookahead_depth);
@@ -1672,15 +1712,42 @@ static int collect_selector_prompt_data(
                 sample_gold_ids.push_back((int32_t) tokens[t + d + 1]);
             }
 
-            const float * hidden = hiddens.data() + (size_t) t * (size_t) hidden_dim;
-            if (!writer.write_sample(hidden, hidden_dim, vocab_size,
-                                     sample_top_ids, sample_top_logits, sample_gold_ids)) {
+            if (cfg.samples_per_prompt > 0) {
+                selector_sample_record sample;
+                const float * hidden = hiddens.data() + (size_t) t * (size_t) hidden_dim;
+                sample.hidden.assign(hidden, hidden + hidden_dim);
+                sample.top_ids = sample_top_ids;
+                sample.top_logits = sample_top_logits;
+                sample.gold_ids = sample_gold_ids;
+                selector_reservoir_add(prompt_reservoir,
+                                       prompt_candidates_seen,
+                                       cfg.samples_per_prompt,
+                                       std::move(sample),
+                                       selector_rng);
+            } else {
+                const float * hidden = hiddens.data() + (size_t) t * (size_t) hidden_dim;
+                if (!writer.write_sample(hidden, hidden_dim, vocab_size,
+                                         sample_top_ids, sample_top_logits, sample_gold_ids)) {
+                    writer.close();
+                    return 1;
+                }
+
+                ++token_positions_processed;
+                prompt_wrote_sample = true;
+            }
+        }
+
+        if (cfg.samples_per_prompt > 0) {
+            if (!selector_flush_prompt_reservoir(cfg,
+                                                 writer,
+                                                 prompt_reservoir,
+                                                 hidden_dim,
+                                                 vocab_size,
+                                                 token_positions_processed,
+                                                 prompt_wrote_sample)) {
                 writer.close();
                 return 1;
             }
-
-            ++token_positions_processed;
-            prompt_wrote_sample = true;
         }
 
         if (prompt_wrote_sample) {
@@ -1718,6 +1785,66 @@ static int collect_selector_prompt_data(
     return 0;
 }
 
+static bool selector_write_sample_record(
+    SelectorDataWriter & writer,
+    const selector_sample_record & sample,
+    int hidden_dim,
+    int vocab_size) {
+    return writer.write_sample(sample.hidden.data(),
+                               hidden_dim,
+                               vocab_size,
+                               sample.top_ids,
+                               sample.top_logits,
+                               sample.gold_ids);
+}
+
+static void selector_reservoir_add(
+    std::vector<selector_sample_record> & reservoir,
+    int64_t & candidates_seen,
+    int max_samples_per_prompt,
+    selector_sample_record && sample,
+    std::mt19937 & rng) {
+    ++candidates_seen;
+    if (max_samples_per_prompt <= 0) {
+        return;
+    }
+
+    if ((int) reservoir.size() < max_samples_per_prompt) {
+        reservoir.push_back(std::move(sample));
+        return;
+    }
+
+    std::uniform_int_distribution<int64_t> dist(0, candidates_seen - 1);
+    const int64_t slot = dist(rng);
+    if (slot < max_samples_per_prompt) {
+        reservoir[(size_t) slot] = std::move(sample);
+    }
+}
+
+static bool selector_flush_prompt_reservoir(
+    const selector_data_config & cfg,
+    SelectorDataWriter & writer,
+    const std::vector<selector_sample_record> & reservoir,
+    int hidden_dim,
+    int vocab_size,
+    int64_t & token_positions_processed,
+    bool & prompt_wrote_sample) {
+    for (const auto & sample : reservoir) {
+        if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
+            return true;
+        }
+
+        if (!selector_write_sample_record(writer, sample, hidden_dim, vocab_size)) {
+            return false;
+        }
+
+        ++token_positions_processed;
+        prompt_wrote_sample = true;
+    }
+
+    return true;
+}
+
 static bool selector_try_emit_generated_samples(
     const selector_data_config & cfg,
     SelectorDataWriter & writer,
@@ -1725,32 +1852,43 @@ static bool selector_try_emit_generated_samples(
     std::deque<llama_token> & tokens,
     int hidden_dim,
     int vocab_size,
-    int64_t & token_positions_processed) {
+    int64_t & token_positions_processed,
+    bool & prompt_wrote_sample,
+    std::vector<selector_sample_record> * prompt_reservoir,
+    int64_t & prompt_candidates_seen,
+    std::mt19937 & rng) {
     while ((int) rows.size() >= cfg.lookahead_depth &&
            (int) tokens.size() >= cfg.lookahead_depth + 1) {
         if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
             return true;
         }
 
-        std::vector<int32_t> sample_top_ids;
-        std::vector<float> sample_top_logits;
-        std::vector<int32_t> sample_gold_ids;
-        sample_top_ids.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
-        sample_top_logits.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
-        sample_gold_ids.reserve(cfg.lookahead_depth);
+        selector_sample_record sample;
+        sample.hidden = rows.front().hidden;
+        sample.top_ids.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
+        sample.top_logits.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
+        sample.gold_ids.reserve(cfg.lookahead_depth);
 
         for (int d = 0; d < cfg.lookahead_depth; ++d) {
-            sample_top_ids.insert(sample_top_ids.end(), rows[d].top_ids.begin(), rows[d].top_ids.end());
-            sample_top_logits.insert(sample_top_logits.end(), rows[d].top_logits.begin(), rows[d].top_logits.end());
-            sample_gold_ids.push_back((int32_t) tokens[d + 1]);
+            sample.top_ids.insert(sample.top_ids.end(), rows[d].top_ids.begin(), rows[d].top_ids.end());
+            sample.top_logits.insert(sample.top_logits.end(), rows[d].top_logits.begin(), rows[d].top_logits.end());
+            sample.gold_ids.push_back((int32_t) tokens[d + 1]);
         }
 
-        if (!writer.write_sample(rows.front().hidden.data(), hidden_dim, vocab_size,
-                                 sample_top_ids, sample_top_logits, sample_gold_ids)) {
-            return false;
+        if (prompt_reservoir) {
+            selector_reservoir_add(*prompt_reservoir,
+                                   prompt_candidates_seen,
+                                   cfg.samples_per_prompt,
+                                   std::move(sample),
+                                   rng);
+        } else {
+            if (!selector_write_sample_record(writer, sample, hidden_dim, vocab_size)) {
+                return false;
+            }
+            ++token_positions_processed;
+            prompt_wrote_sample = true;
         }
 
-        ++token_positions_processed;
         rows.pop_front();
         tokens.pop_front();
     }
@@ -1809,14 +1947,16 @@ static int collect_selector_generated_data(
     int64_t token_positions_processed = 0;
     int prompts_processed = 0;
     int prompts_with_samples = 0;
+    std::mt19937 selector_rng(cfg.random_seed);
 
     fprintf(stderr,
-            "[%s] Selector generated-output collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64 "\n",
+            "[%s] Selector generated-output collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64 " samples_per_prompt=%d\n",
             SPEC_BENCH_BACKEND_LABEL,
             cfg.data_dir.c_str(),
             cfg.lookahead_depth,
             cfg.top_k,
-            cfg.max_samples);
+            cfg.max_samples,
+            cfg.samples_per_prompt);
 
     for (size_t prompt_idx = idx_start; prompt_idx < idx_end; ++prompt_idx) {
         if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
@@ -1905,8 +2045,13 @@ static int collect_selector_generated_data(
 
         std::deque<selector_cached_row> pending_rows;
         std::deque<llama_token> token_window;
+        std::vector<selector_sample_record> prompt_reservoir;
+        int64_t prompt_candidates_seen = 0;
         int n_generated = 0;
         bool prompt_wrote_sample = false;
+        if (cfg.samples_per_prompt > 0) {
+            prompt_reservoir.reserve(cfg.samples_per_prompt);
+        }
 
         if (ok && has_prompt_boundary_row && !has_eos) {
             pending_rows.push_back(std::move(prompt_boundary_row));
@@ -1955,15 +2100,15 @@ static int collect_selector_generated_data(
             common_sampler_accept(smpl, next_token, true);
             token_window.push_back(next_token);
 
-            const int64_t before = writer.num_samples();
             if (!selector_try_emit_generated_samples(cfg, writer, pending_rows, token_window,
                                                      hidden_dim, vocab_size,
-                                                     token_positions_processed)) {
+                                                     token_positions_processed,
+                                                     prompt_wrote_sample,
+                                                     cfg.samples_per_prompt > 0 ? &prompt_reservoir : nullptr,
+                                                     prompt_candidates_seen,
+                                                     selector_rng)) {
                 ok = false;
                 break;
-            }
-            if (writer.num_samples() > before) {
-                prompt_wrote_sample = true;
             }
 
             if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
@@ -1983,6 +2128,18 @@ static int collect_selector_generated_data(
 
         common_sampler_free(smpl);
         llama_batch_free(batch);
+
+        if (ok && cfg.samples_per_prompt > 0) {
+            if (!selector_flush_prompt_reservoir(cfg,
+                                                 writer,
+                                                 prompt_reservoir,
+                                                 hidden_dim,
+                                                 vocab_size,
+                                                 token_positions_processed,
+                                                 prompt_wrote_sample)) {
+                ok = false;
+            }
+        }
 
         if (prompt_wrote_sample) {
             ++prompts_with_samples;
@@ -2212,6 +2369,8 @@ int main(int argc, char ** argv) {
             selector_cfg.top_k = std::atoi(argv[++i]);
         } else if (arg == "--selector-max-samples" && i + 1 < argc) {
             selector_cfg.max_samples = std::atoll(argv[++i]);
+        } else if (arg == "--selector-samples-per-prompt" && i + 1 < argc) {
+            selector_cfg.samples_per_prompt = std::atoi(argv[++i]);
         } else if (arg == "--selector-save-hidden-fp16") {
             selector_cfg.save_hidden_fp16 = true;
         } else if (arg == "--selector-save-logits-fp16") {
@@ -2240,6 +2399,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  --selector-lookahead-depth N  Future target distributions per hidden (default: 5)\n");
         fprintf(stderr, "  --selector-top-k N       Top target logits/token ids per future step (default: 2048)\n");
         fprintf(stderr, "  --selector-max-samples N Optional sample limit (-1 = no limit)\n");
+        fprintf(stderr, "  --selector-samples-per-prompt N  Random windows to save per prompt (-1 = all)\n");
         return 1;
     }
 
@@ -2275,6 +2435,10 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "Error: --selector-max-samples must be -1 or >= 0\n");
             return 1;
         }
+        if (selector_cfg.samples_per_prompt < -1 || selector_cfg.samples_per_prompt == 0) {
+            fprintf(stderr, "Error: --selector-samples-per-prompt must be -1 or > 0\n");
+            return 1;
+        }
         if (selector_cfg.source != "generated" && selector_cfg.source != "prompt") {
             fprintf(stderr, "Error: unknown selector source '%s'. Use: generated, prompt\n", selector_cfg.source.c_str());
             return 1;
@@ -2299,6 +2463,8 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Error: --n-predict must be >= -1\n");
         return 1;
     }
+    selector_cfg.random_seed = params.sampling.seed == LLAMA_DEFAULT_SEED ?
+        (uint32_t) std::random_device{}() : (uint32_t) params.sampling.seed;
 
     common_init();
 
