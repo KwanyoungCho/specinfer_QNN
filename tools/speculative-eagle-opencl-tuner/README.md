@@ -76,6 +76,17 @@ Useful variants:
   --lmhead-batch 4 \
   --allow-non-power-local
 
+# Compare against a real shortlist id distribution instead of synthetic top-k ids
+/data/jongjip/specinfer_QNN/build/bin/speculative-eagle-opencl-tuner \
+  --search indexed \
+  --n-scores 128256 \
+  --src-rows 128256 \
+  --top-k 32000 \
+  --gather-rows 32000 \
+  --hidden-dim 4096 \
+  --lmhead-batch 4 \
+  --ids-file /data/jongjip/specinfer_QNN/data/shortlists/prefix_survival_32k/shortlist_global_topK.json
+
 # Heavier run for stabler numbers
 /data/jongjip/specinfer_QNN/build/bin/speculative-eagle-opencl-tuner --iters 20 --warmup 3
 ```

@@ -1234,10 +1234,14 @@ struct selector_data_config {
     bool collect = false;
     std::string data_dir;
     std::string source = "generated";
+    std::string sampling_mode = "all";
     int lookahead_depth = 5;
     int top_k = 2048;
     int64_t max_samples = -1;
     int samples_per_prompt = -1;
+    int sample_stride = 64;
+    int min_samples_per_prompt = 8;
+    int max_samples_per_prompt = 64;
     uint32_t random_seed = 0;
     bool save_hidden_fp16 = true;
     bool save_logits_fp16 = true;
@@ -1456,7 +1460,11 @@ public:
             << "  \"vocab_size\": " << vocab_size_ << ",\n"
             << "  \"lookahead_depth\": " << cfg_.lookahead_depth << ",\n"
             << "  \"top_k\": " << cfg_.top_k << ",\n"
+            << "  \"sampling_mode\": \"" << json_escape(cfg_.sampling_mode) << "\",\n"
             << "  \"samples_per_prompt\": " << cfg_.samples_per_prompt << ",\n"
+            << "  \"sample_stride\": " << cfg_.sample_stride << ",\n"
+            << "  \"min_samples_per_prompt\": " << cfg_.min_samples_per_prompt << ",\n"
+            << "  \"max_samples_per_prompt\": " << cfg_.max_samples_per_prompt << ",\n"
             << "  \"random_seed\": " << cfg_.random_seed << ",\n"
             << "  \"hidden_dtype\": \"" << (cfg_.save_hidden_fp16 ? "fp16" : "f32") << "\",\n"
             << "  \"top_logits_dtype\": \"" << (cfg_.save_logits_fp16 ? "fp16" : "f32") << "\",\n"
@@ -1519,6 +1527,21 @@ static bool selector_flush_prompt_reservoir(
     int64_t & token_positions_processed,
     bool & prompt_wrote_sample);
 
+static bool selector_mode_is_stratified(const selector_data_config & cfg);
+static bool selector_mode_is_delayed(const selector_data_config & cfg);
+static int selector_target_samples_for_prompt(const selector_data_config & cfg, int n_valid_positions);
+static std::vector<int> selector_make_stratified_indices(int n_valid_positions, int target_samples, std::mt19937 & rng);
+
+static bool selector_flush_prompt_samples(
+    const selector_data_config & cfg,
+    SelectorDataWriter & writer,
+    const std::vector<selector_sample_record> & samples,
+    int hidden_dim,
+    int vocab_size,
+    int64_t & token_positions_processed,
+    bool & prompt_wrote_sample,
+    std::mt19937 & rng);
+
 static int collect_selector_prompt_data(
     const selector_data_config & cfg,
     const std::vector<bench_prompt> & prompts,
@@ -1565,13 +1588,18 @@ static int collect_selector_prompt_data(
     std::mt19937 selector_rng(cfg.random_seed);
 
     fprintf(stderr,
-            "[%s] Selector data collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64 " samples_per_prompt=%d\n",
+            "[%s] Selector data collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64
+            " sampling_mode=%s samples_per_prompt=%d stride=%d min=%d max=%d\n",
             SPEC_BENCH_BACKEND_LABEL,
             cfg.data_dir.c_str(),
             cfg.lookahead_depth,
             cfg.top_k,
             cfg.max_samples,
-            cfg.samples_per_prompt);
+            cfg.sampling_mode.c_str(),
+            cfg.samples_per_prompt,
+            cfg.sample_stride,
+            cfg.min_samples_per_prompt,
+            cfg.max_samples_per_prompt);
 
     for (size_t prompt_idx = idx_start; prompt_idx < idx_end; ++prompt_idx) {
         if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
@@ -1684,19 +1712,26 @@ static int collect_selector_prompt_data(
 
         const int n_valid_positions = n_tokens - cfg.lookahead_depth;
         bool prompt_wrote_sample = false;
+        const bool delayed_random = cfg.sampling_mode == "random";
+        const bool stratified = selector_mode_is_stratified(cfg);
+        const int target_samples = selector_target_samples_for_prompt(cfg, n_valid_positions);
+        const std::vector<int> selected_positions =
+            stratified ? selector_make_stratified_indices(n_valid_positions, target_samples, selector_rng) : std::vector<int>();
         std::vector<selector_sample_record> prompt_reservoir;
         int64_t prompt_candidates_seen = 0;
         std::vector<int32_t> sample_top_ids;
         std::vector<float> sample_top_logits;
         std::vector<int32_t> sample_gold_ids;
-        if (cfg.samples_per_prompt > 0) {
-            prompt_reservoir.reserve(cfg.samples_per_prompt);
+        if (delayed_random) {
+            prompt_reservoir.reserve(target_samples);
         }
         sample_top_ids.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
         sample_top_logits.reserve((size_t) cfg.lookahead_depth * (size_t) cfg.top_k);
         sample_gold_ids.reserve(cfg.lookahead_depth);
 
-        for (int t = 0; t < n_valid_positions; ++t) {
+        const int loop_count = stratified ? (int) selected_positions.size() : n_valid_positions;
+        for (int pos_idx = 0; pos_idx < loop_count; ++pos_idx) {
+            const int t = stratified ? selected_positions[pos_idx] : pos_idx;
             if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
                 break;
             }
@@ -1712,7 +1747,7 @@ static int collect_selector_prompt_data(
                 sample_gold_ids.push_back((int32_t) tokens[t + d + 1]);
             }
 
-            if (cfg.samples_per_prompt > 0) {
+            if (delayed_random) {
                 selector_sample_record sample;
                 const float * hidden = hiddens.data() + (size_t) t * (size_t) hidden_dim;
                 sample.hidden.assign(hidden, hidden + hidden_dim);
@@ -1721,7 +1756,7 @@ static int collect_selector_prompt_data(
                 sample.gold_ids = sample_gold_ids;
                 selector_reservoir_add(prompt_reservoir,
                                        prompt_candidates_seen,
-                                       cfg.samples_per_prompt,
+                                       target_samples,
                                        std::move(sample),
                                        selector_rng);
             } else {
@@ -1737,7 +1772,7 @@ static int collect_selector_prompt_data(
             }
         }
 
-        if (cfg.samples_per_prompt > 0) {
+        if (delayed_random) {
             if (!selector_flush_prompt_reservoir(cfg,
                                                  writer,
                                                  prompt_reservoir,
@@ -1845,6 +1880,93 @@ static bool selector_flush_prompt_reservoir(
     return true;
 }
 
+static bool selector_mode_is_stratified(const selector_data_config & cfg) {
+    return cfg.sampling_mode == "stratified" || cfg.sampling_mode == "length-stratified";
+}
+
+static bool selector_mode_is_delayed(const selector_data_config & cfg) {
+    return cfg.sampling_mode == "random" || selector_mode_is_stratified(cfg);
+}
+
+static int selector_target_samples_for_prompt(const selector_data_config & cfg, int n_valid_positions) {
+    if (n_valid_positions <= 0) {
+        return 0;
+    }
+
+    int target = n_valid_positions;
+    if (cfg.sampling_mode == "length-stratified") {
+        target = n_valid_positions / cfg.sample_stride;
+        target = std::max(target, cfg.min_samples_per_prompt);
+        target = std::min(target, cfg.max_samples_per_prompt);
+    } else if (cfg.sampling_mode == "random" || cfg.sampling_mode == "stratified") {
+        target = cfg.samples_per_prompt;
+    }
+
+    target = std::max(target, 0);
+    return std::min(target, n_valid_positions);
+}
+
+static std::vector<int> selector_make_stratified_indices(
+    int n_valid_positions,
+    int target_samples,
+    std::mt19937 & rng) {
+    std::vector<int> indices;
+    if (n_valid_positions <= 0 || target_samples <= 0) {
+        return indices;
+    }
+
+    target_samples = std::min(target_samples, n_valid_positions);
+    indices.reserve(target_samples);
+    for (int i = 0; i < target_samples; ++i) {
+        const int start = (int) ((int64_t) i * n_valid_positions / target_samples);
+        int end = (int) ((int64_t) (i + 1) * n_valid_positions / target_samples);
+        end = std::max(end, start + 1);
+        std::uniform_int_distribution<int> dist(start, end - 1);
+        indices.push_back(dist(rng));
+    }
+
+    return indices;
+}
+
+static bool selector_flush_prompt_samples(
+    const selector_data_config & cfg,
+    SelectorDataWriter & writer,
+    const std::vector<selector_sample_record> & samples,
+    int hidden_dim,
+    int vocab_size,
+    int64_t & token_positions_processed,
+    bool & prompt_wrote_sample,
+    std::mt19937 & rng) {
+    if (cfg.sampling_mode == "random") {
+        return selector_flush_prompt_reservoir(cfg,
+                                               writer,
+                                               samples,
+                                               hidden_dim,
+                                               vocab_size,
+                                               token_positions_processed,
+                                               prompt_wrote_sample);
+    }
+
+    if (selector_mode_is_stratified(cfg)) {
+        const int target_samples = selector_target_samples_for_prompt(cfg, (int) samples.size());
+        const std::vector<int> indices = selector_make_stratified_indices((int) samples.size(), target_samples, rng);
+        for (const int idx : indices) {
+            if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
+                return true;
+            }
+
+            if (!selector_write_sample_record(writer, samples[(size_t) idx], hidden_dim, vocab_size)) {
+                return false;
+            }
+
+            ++token_positions_processed;
+            prompt_wrote_sample = true;
+        }
+    }
+
+    return true;
+}
+
 static bool selector_try_emit_generated_samples(
     const selector_data_config & cfg,
     SelectorDataWriter & writer,
@@ -1876,11 +1998,15 @@ static bool selector_try_emit_generated_samples(
         }
 
         if (prompt_reservoir) {
-            selector_reservoir_add(*prompt_reservoir,
-                                   prompt_candidates_seen,
-                                   cfg.samples_per_prompt,
-                                   std::move(sample),
-                                   rng);
+            if (cfg.sampling_mode == "random") {
+                selector_reservoir_add(*prompt_reservoir,
+                                       prompt_candidates_seen,
+                                       selector_target_samples_for_prompt(cfg, std::numeric_limits<int>::max()),
+                                       std::move(sample),
+                                       rng);
+            } else {
+                prompt_reservoir->push_back(std::move(sample));
+            }
         } else {
             if (!selector_write_sample_record(writer, sample, hidden_dim, vocab_size)) {
                 return false;
@@ -1950,13 +2076,18 @@ static int collect_selector_generated_data(
     std::mt19937 selector_rng(cfg.random_seed);
 
     fprintf(stderr,
-            "[%s] Selector generated-output collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64 " samples_per_prompt=%d\n",
+            "[%s] Selector generated-output collection enabled: dir=%s D=%d K=%d max_samples=%" PRId64
+            " sampling_mode=%s samples_per_prompt=%d stride=%d min=%d max=%d\n",
             SPEC_BENCH_BACKEND_LABEL,
             cfg.data_dir.c_str(),
             cfg.lookahead_depth,
             cfg.top_k,
             cfg.max_samples,
-            cfg.samples_per_prompt);
+            cfg.sampling_mode.c_str(),
+            cfg.samples_per_prompt,
+            cfg.sample_stride,
+            cfg.min_samples_per_prompt,
+            cfg.max_samples_per_prompt);
 
     for (size_t prompt_idx = idx_start; prompt_idx < idx_end; ++prompt_idx) {
         if (cfg.max_samples >= 0 && writer.num_samples() >= cfg.max_samples) {
@@ -2045,12 +2176,14 @@ static int collect_selector_generated_data(
 
         std::deque<selector_cached_row> pending_rows;
         std::deque<llama_token> token_window;
-        std::vector<selector_sample_record> prompt_reservoir;
+        std::vector<selector_sample_record> prompt_samples;
         int64_t prompt_candidates_seen = 0;
         int n_generated = 0;
         bool prompt_wrote_sample = false;
-        if (cfg.samples_per_prompt > 0) {
-            prompt_reservoir.reserve(cfg.samples_per_prompt);
+        if (selector_mode_is_delayed(cfg)) {
+            const int reserve_samples = cfg.sampling_mode == "length-stratified" ?
+                cfg.max_samples_per_prompt : std::max(cfg.samples_per_prompt, 0);
+            prompt_samples.reserve(reserve_samples);
         }
 
         if (ok && has_prompt_boundary_row && !has_eos) {
@@ -2104,7 +2237,7 @@ static int collect_selector_generated_data(
                                                      hidden_dim, vocab_size,
                                                      token_positions_processed,
                                                      prompt_wrote_sample,
-                                                     cfg.samples_per_prompt > 0 ? &prompt_reservoir : nullptr,
+                                                     selector_mode_is_delayed(cfg) ? &prompt_samples : nullptr,
                                                      prompt_candidates_seen,
                                                      selector_rng)) {
                 ok = false;
@@ -2129,14 +2262,15 @@ static int collect_selector_generated_data(
         common_sampler_free(smpl);
         llama_batch_free(batch);
 
-        if (ok && cfg.samples_per_prompt > 0) {
-            if (!selector_flush_prompt_reservoir(cfg,
-                                                 writer,
-                                                 prompt_reservoir,
-                                                 hidden_dim,
-                                                 vocab_size,
-                                                 token_positions_processed,
-                                                 prompt_wrote_sample)) {
+        if (ok && selector_mode_is_delayed(cfg)) {
+            if (!selector_flush_prompt_samples(cfg,
+                                               writer,
+                                               prompt_samples,
+                                               hidden_dim,
+                                               vocab_size,
+                                               token_positions_processed,
+                                               prompt_wrote_sample,
+                                               selector_rng)) {
                 ok = false;
             }
         }
@@ -2363,6 +2497,8 @@ int main(int argc, char ** argv) {
             selector_cfg.data_dir = argv[++i];
         } else if (arg == "--selector-source" && i + 1 < argc) {
             selector_cfg.source = argv[++i];
+        } else if (arg == "--selector-sampling-mode" && i + 1 < argc) {
+            selector_cfg.sampling_mode = argv[++i];
         } else if (arg == "--selector-lookahead-depth" && i + 1 < argc) {
             selector_cfg.lookahead_depth = std::atoi(argv[++i]);
         } else if (arg == "--selector-top-k" && i + 1 < argc) {
@@ -2371,6 +2507,12 @@ int main(int argc, char ** argv) {
             selector_cfg.max_samples = std::atoll(argv[++i]);
         } else if (arg == "--selector-samples-per-prompt" && i + 1 < argc) {
             selector_cfg.samples_per_prompt = std::atoi(argv[++i]);
+        } else if (arg == "--selector-sample-stride" && i + 1 < argc) {
+            selector_cfg.sample_stride = std::atoi(argv[++i]);
+        } else if (arg == "--selector-min-samples-per-prompt" && i + 1 < argc) {
+            selector_cfg.min_samples_per_prompt = std::atoi(argv[++i]);
+        } else if (arg == "--selector-max-samples-per-prompt" && i + 1 < argc) {
+            selector_cfg.max_samples_per_prompt = std::atoi(argv[++i]);
         } else if (arg == "--selector-save-hidden-fp16") {
             selector_cfg.save_hidden_fp16 = true;
         } else if (arg == "--selector-save-logits-fp16") {
@@ -2396,10 +2538,14 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  --collect-selector-data  Collect dynamic vocab selector training data\n");
         fprintf(stderr, "  --selector-data-dir DIR  Output directory for selector data\n");
         fprintf(stderr, "  --selector-source MODE   generated (default) or prompt\n");
+        fprintf(stderr, "  --selector-sampling-mode MODE  all (default), random, stratified, length-stratified\n");
         fprintf(stderr, "  --selector-lookahead-depth N  Future target distributions per hidden (default: 5)\n");
         fprintf(stderr, "  --selector-top-k N       Top target logits/token ids per future step (default: 2048)\n");
         fprintf(stderr, "  --selector-max-samples N Optional sample limit (-1 = no limit)\n");
         fprintf(stderr, "  --selector-samples-per-prompt N  Random windows to save per prompt (-1 = all)\n");
+        fprintf(stderr, "  --selector-sample-stride N  Length-aware target uses valid_windows / N (default: 64)\n");
+        fprintf(stderr, "  --selector-min-samples-per-prompt N  Length-aware clamp minimum (default: 8)\n");
+        fprintf(stderr, "  --selector-max-samples-per-prompt N  Length-aware clamp maximum (default: 64)\n");
         return 1;
     }
 
@@ -2431,12 +2577,42 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "Error: --selector-top-k must be > 0\n");
             return 1;
         }
+        if (selector_cfg.sampling_mode == "all" && selector_cfg.samples_per_prompt > 0) {
+            selector_cfg.sampling_mode = "random";
+        }
+        if (selector_cfg.sampling_mode != "all" &&
+            selector_cfg.sampling_mode != "random" &&
+            selector_cfg.sampling_mode != "stratified" &&
+            selector_cfg.sampling_mode != "length-stratified") {
+            fprintf(stderr,
+                    "Error: unknown selector sampling mode '%s'. Use: all, random, stratified, length-stratified\n",
+                    selector_cfg.sampling_mode.c_str());
+            return 1;
+        }
         if (selector_cfg.max_samples < -1) {
             fprintf(stderr, "Error: --selector-max-samples must be -1 or >= 0\n");
             return 1;
         }
         if (selector_cfg.samples_per_prompt < -1 || selector_cfg.samples_per_prompt == 0) {
             fprintf(stderr, "Error: --selector-samples-per-prompt must be -1 or > 0\n");
+            return 1;
+        }
+        if ((selector_cfg.sampling_mode == "random" || selector_cfg.sampling_mode == "stratified") &&
+            selector_cfg.samples_per_prompt <= 0) {
+            fprintf(stderr,
+                    "Error: --selector-samples-per-prompt must be > 0 with selector sampling mode '%s'\n",
+                    selector_cfg.sampling_mode.c_str());
+            return 1;
+        }
+        if (selector_cfg.sample_stride <= 0) {
+            fprintf(stderr, "Error: --selector-sample-stride must be > 0\n");
+            return 1;
+        }
+        if (selector_cfg.min_samples_per_prompt <= 0 ||
+            selector_cfg.max_samples_per_prompt <= 0 ||
+            selector_cfg.min_samples_per_prompt > selector_cfg.max_samples_per_prompt) {
+            fprintf(stderr,
+                    "Error: selector per-prompt clamp must satisfy 0 < min <= max\n");
             return 1;
         }
         if (selector_cfg.source != "generated" && selector_cfg.source != "prompt") {

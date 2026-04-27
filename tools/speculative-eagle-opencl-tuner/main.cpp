@@ -43,6 +43,7 @@ struct Options {
     int iters = 5;
     int seed = 42;
     std::string kernel_dir;
+    std::string ids_file;
     bool tune_topk = true;
     bool tune_bucket_topk = true;
     bool tune_id_sort = true;
@@ -91,6 +92,7 @@ struct IndexedMatvecTuningConfig {
     bool abi_no_split = false;
     int abi_m_tile = 4;
     bool abi_local_b = false;
+    bool abi_prefetch = false;
 };
 
 struct MatvecResult {
@@ -1121,6 +1123,166 @@ kernel void kernel_indexed_q4_0_matvec_Ab_Bi_8x4_nosplit(
 #ifdef cl_qcom_reqd_sub_group_size
 REQD_SUBGROUP_SIZE_128
 #endif
+kernel void kernel_indexed_q4_0_matvec_Ab_Bi_8x4_nosplit_prefetch(
+    global const ushort * q,
+    global const half   * d,
+    __read_only image1d_buffer_t src1,
+    global const int    * ids,
+    global float        * dst,
+    int                   src_rows,
+    int                   out_rows,
+    int                   hidden_dim,
+    int                   n_rows) {
+    const int gid_n = get_global_id(0);
+    const int gid_m = get_group_id(1);
+    const int lid_m = get_local_id(1);
+    const int lsz_m = get_local_size(1);
+
+    const int k4_count = hidden_dim >> 2;
+    const int out_b_idx = gid_n << 3;
+    const int out4 = (gid_m * lsz_m + lid_m) << 2;
+    const int out_off = out4 + out_b_idx * out_rows;
+#ifndef INDEXED_AB_BI_ASSUME_N8
+    const int compute_hi_n = n_rows > out_b_idx + 4;
+#endif
+
+    const int row0 = out4 + 0 < out_rows ? ids[out4 + 0] : 0;
+    const int row1 = out4 + 1 < out_rows ? ids[out4 + 1] : 0;
+    const int row2 = out4 + 2 < out_rows ? ids[out4 + 2] : 0;
+    const int row3 = out4 + 3 < out_rows ? ids[out4 + 3] : 0;
+
+    const int b_row0_pix = out_b_idx * k4_count;
+
+    half4 acc0 = (half4)0, acc1 = (half4)0, acc2 = (half4)0, acc3 = (half4)0;
+    half4 acc4 = (half4)0, acc5 = (half4)0, acc6 = (half4)0, acc7 = (half4)0;
+
+    #define INDEXED_AB_BI_PREFETCH_Q4(k4_value) do { \
+        const ulong q_base_pf = (ulong) (k4_value) * (ulong) src_rows; \
+        prefetch(q + q_base_pf + row0, 1); \
+        prefetch(q + q_base_pf + row1, 1); \
+        prefetch(q + q_base_pf + row2, 1); \
+        prefetch(q + q_base_pf + row3, 1); \
+    } while (0)
+
+    #define INDEXED_AB_BI_PREFETCH_ACCUM_K4(k4_value, sc_value) do { \
+        const int k4_idx = (k4_value); \
+        const half4 sc4 = (sc_value); \
+        const ulong q_base = (ulong) k4_idx * (ulong) src_rows; \
+        const ushort4 bits4 = (ushort4)( \
+            q[q_base + row0], \
+            q[q_base + row1], \
+            q[q_base + row2], \
+            q[q_base + row3]); \
+        const int p = b_row0_pix + k4_idx; \
+        const half4 in0 = read_imageh(src1, p + 0*k4_count); \
+        const half4 in1 = read_imageh(src1, p + 1*k4_count); \
+        const half4 in2 = read_imageh(src1, p + 2*k4_count); \
+        const half4 in3 = read_imageh(src1, p + 3*k4_count); \
+        half4 in4, in5, in6, in7; \
+        INDEXED_AB_BI_IF_HI_N { \
+            in4 = read_imageh(src1, p + 4*k4_count); \
+            in5 = read_imageh(src1, p + 5*k4_count); \
+            in6 = read_imageh(src1, p + 6*k4_count); \
+            in7 = read_imageh(src1, p + 7*k4_count); \
+        } \
+        half4 w; \
+        w.s0 = ((bits4.s0 & 0x000F) - 8) * sc4.s0; \
+        w.s1 = ((bits4.s1 & 0x000F) - 8) * sc4.s1; \
+        w.s2 = ((bits4.s2 & 0x000F) - 8) * sc4.s2; \
+        w.s3 = ((bits4.s3 & 0x000F) - 8) * sc4.s3; \
+        acc0 += (half4)(in0.s0) * w; \
+        acc1 += (half4)(in1.s0) * w; \
+        acc2 += (half4)(in2.s0) * w; \
+        acc3 += (half4)(in3.s0) * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += (half4)(in4.s0) * w; \
+            acc5 += (half4)(in5.s0) * w; \
+            acc6 += (half4)(in6.s0) * w; \
+            acc7 += (half4)(in7.s0) * w; \
+        } \
+        w.s0 = (((bits4.s0 & 0x00F0) >> 4) - 8) * sc4.s0; \
+        w.s1 = (((bits4.s1 & 0x00F0) >> 4) - 8) * sc4.s1; \
+        w.s2 = (((bits4.s2 & 0x00F0) >> 4) - 8) * sc4.s2; \
+        w.s3 = (((bits4.s3 & 0x00F0) >> 4) - 8) * sc4.s3; \
+        acc0 += (half4)(in0.s1) * w; \
+        acc1 += (half4)(in1.s1) * w; \
+        acc2 += (half4)(in2.s1) * w; \
+        acc3 += (half4)(in3.s1) * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += (half4)(in4.s1) * w; \
+            acc5 += (half4)(in5.s1) * w; \
+            acc6 += (half4)(in6.s1) * w; \
+            acc7 += (half4)(in7.s1) * w; \
+        } \
+        w.s0 = (((bits4.s0 & 0x0F00) >> 8) - 8) * sc4.s0; \
+        w.s1 = (((bits4.s1 & 0x0F00) >> 8) - 8) * sc4.s1; \
+        w.s2 = (((bits4.s2 & 0x0F00) >> 8) - 8) * sc4.s2; \
+        w.s3 = (((bits4.s3 & 0x0F00) >> 8) - 8) * sc4.s3; \
+        acc0 += (half4)(in0.s2) * w; \
+        acc1 += (half4)(in1.s2) * w; \
+        acc2 += (half4)(in2.s2) * w; \
+        acc3 += (half4)(in3.s2) * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += (half4)(in4.s2) * w; \
+            acc5 += (half4)(in5.s2) * w; \
+            acc6 += (half4)(in6.s2) * w; \
+            acc7 += (half4)(in7.s2) * w; \
+        } \
+        w.s0 = (((bits4.s0 & 0xF000) >> 12) - 8) * sc4.s0; \
+        w.s1 = (((bits4.s1 & 0xF000) >> 12) - 8) * sc4.s1; \
+        w.s2 = (((bits4.s2 & 0xF000) >> 12) - 8) * sc4.s2; \
+        w.s3 = (((bits4.s3 & 0xF000) >> 12) - 8) * sc4.s3; \
+        acc0 += (half4)(in0.s3) * w; \
+        acc1 += (half4)(in1.s3) * w; \
+        acc2 += (half4)(in2.s3) * w; \
+        acc3 += (half4)(in3.s3) * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += (half4)(in4.s3) * w; \
+            acc5 += (half4)(in5.s3) * w; \
+            acc6 += (half4)(in6.s3) * w; \
+            acc7 += (half4)(in7.s3) * w; \
+        } \
+    } while (0)
+
+    const int kb_count = hidden_dim >> 5;
+    if (k4_count > 0) {
+        INDEXED_AB_BI_PREFETCH_Q4(0);
+    }
+    if (k4_count > 1) {
+        INDEXED_AB_BI_PREFETCH_Q4(1);
+    }
+    for (int kb = 0; kb < kb_count; ++kb) {
+        const ulong d_base = (ulong) kb * (ulong) src_rows;
+        const half4 sc = (half4)(d[d_base + row0], d[d_base + row1], d[d_base + row2], d[d_base + row3]);
+        const int k4_base = kb << 3;
+        for (int kk = 0; kk < 8; ++kk) {
+            const int pf_k4 = k4_base + kk + 2;
+            if (pf_k4 < k4_count) {
+                INDEXED_AB_BI_PREFETCH_Q4(pf_k4);
+            }
+            INDEXED_AB_BI_PREFETCH_ACCUM_K4(k4_base + kk, sc);
+        }
+    }
+
+    #undef INDEXED_AB_BI_PREFETCH_ACCUM_K4
+    #undef INDEXED_AB_BI_PREFETCH_Q4
+
+    if (out4 + 3 < out_rows) {
+        __global float * outp = dst + out_off;
+        if (out_b_idx + 0 < n_rows) vstore4(convert_float4(acc0), 0, outp + 0*out_rows);
+        if (out_b_idx + 1 < n_rows) vstore4(convert_float4(acc1), 0, outp + 1*out_rows);
+        if (out_b_idx + 2 < n_rows) vstore4(convert_float4(acc2), 0, outp + 2*out_rows);
+        if (out_b_idx + 3 < n_rows) vstore4(convert_float4(acc3), 0, outp + 3*out_rows);
+        INDEXED_AB_BI_STORE_HI(4, acc4, outp);
+        INDEXED_AB_BI_STORE_HI(5, acc5, outp);
+        INDEXED_AB_BI_STORE_HI(6, acc6, outp);
+        INDEXED_AB_BI_STORE_HI(7, acc7, outp);
+    }
+}
+
+#ifdef cl_qcom_reqd_sub_group_size
+REQD_SUBGROUP_SIZE_128
+#endif
 kernel void kernel_indexed_q4_0_matvec_Ab_Bi_4x4(
     global const ushort * q,
     global const half   * d,
@@ -1357,6 +1519,216 @@ kernel void kernel_indexed_q4_0_matvec_Ab_Bi_4x4_nosplit(
         if (out_b_idx + 1 < n_rows) vstore4(convert_float4(acc1), 0, outp + 1*out_rows);
         if (out_b_idx + 2 < n_rows) vstore4(convert_float4(acc2), 0, outp + 2*out_rows);
         if (out_b_idx + 3 < n_rows) vstore4(convert_float4(acc3), 0, outp + 3*out_rows);
+    }
+}
+
+#ifdef cl_qcom_reqd_sub_group_size
+REQD_SUBGROUP_SIZE_128
+#endif
+kernel void kernel_indexed_q4_0_matvec_Ab_Bi_4x2_nosplit(
+    global const ushort * q,
+    global const half   * d,
+    __read_only image1d_buffer_t src1,
+    global const int    * ids,
+    global float        * dst,
+    int                   src_rows,
+    int                   out_rows,
+    int                   hidden_dim,
+    int                   n_rows) {
+    const int gid_n = get_global_id(0);
+    const int gid_m = get_group_id(1);
+    const int lid_m = get_local_id(1);
+    const int lsz_m = get_local_size(1);
+
+    const int k4_count = hidden_dim >> 2;
+    const int out_b_idx = gid_n << 2;
+    const int out2 = (gid_m * lsz_m + lid_m) << 1;
+    const int out_off = out2 + out_b_idx * out_rows;
+
+    const int row0 = out2 + 0 < out_rows ? ids[out2 + 0] : 0;
+    const int row1 = out2 + 1 < out_rows ? ids[out2 + 1] : 0;
+
+    const int b_row0_pix = out_b_idx * k4_count;
+
+    half2 acc0 = (half2)0, acc1 = (half2)0, acc2 = (half2)0, acc3 = (half2)0;
+
+    #define INDEXED_AB_BI4X2_NOSPLIT_ACCUM_K4(k4_value, sc_value) do { \
+        const int k4_idx = (k4_value); \
+        const half2 sc2 = (sc_value); \
+        const ulong q_base = (ulong) k4_idx * (ulong) src_rows; \
+        const ushort2 bits2 = (ushort2)(q[q_base + row0], q[q_base + row1]); \
+        const int p = b_row0_pix + k4_idx; \
+        const half4 in0 = read_imageh(src1, p + 0*k4_count); \
+        const half4 in1 = read_imageh(src1, p + 1*k4_count); \
+        const half4 in2 = read_imageh(src1, p + 2*k4_count); \
+        const half4 in3 = read_imageh(src1, p + 3*k4_count); \
+        half2 w; \
+        w.s0 = ((bits2.s0 & 0x000F) - 8) * sc2.s0; \
+        w.s1 = ((bits2.s1 & 0x000F) - 8) * sc2.s1; \
+        acc0 += (half2)(in0.s0) * w; \
+        acc1 += (half2)(in1.s0) * w; \
+        acc2 += (half2)(in2.s0) * w; \
+        acc3 += (half2)(in3.s0) * w; \
+        w.s0 = (((bits2.s0 & 0x00F0) >> 4) - 8) * sc2.s0; \
+        w.s1 = (((bits2.s1 & 0x00F0) >> 4) - 8) * sc2.s1; \
+        acc0 += (half2)(in0.s1) * w; \
+        acc1 += (half2)(in1.s1) * w; \
+        acc2 += (half2)(in2.s1) * w; \
+        acc3 += (half2)(in3.s1) * w; \
+        w.s0 = (((bits2.s0 & 0x0F00) >> 8) - 8) * sc2.s0; \
+        w.s1 = (((bits2.s1 & 0x0F00) >> 8) - 8) * sc2.s1; \
+        acc0 += (half2)(in0.s2) * w; \
+        acc1 += (half2)(in1.s2) * w; \
+        acc2 += (half2)(in2.s2) * w; \
+        acc3 += (half2)(in3.s2) * w; \
+        w.s0 = (((bits2.s0 & 0xF000) >> 12) - 8) * sc2.s0; \
+        w.s1 = (((bits2.s1 & 0xF000) >> 12) - 8) * sc2.s1; \
+        acc0 += (half2)(in0.s3) * w; \
+        acc1 += (half2)(in1.s3) * w; \
+        acc2 += (half2)(in2.s3) * w; \
+        acc3 += (half2)(in3.s3) * w; \
+    } while (0)
+
+    const int kb_count = hidden_dim >> 5;
+    for (int kb = 0; kb < kb_count; ++kb) {
+        const ulong d_base = (ulong) kb * (ulong) src_rows;
+        const half2 sc = (half2)(d[d_base + row0], d[d_base + row1]);
+        const int k4_base = kb << 3;
+        for (int kk = 0; kk < 8; ++kk) {
+            INDEXED_AB_BI4X2_NOSPLIT_ACCUM_K4(k4_base + kk, sc);
+        }
+    }
+
+    #undef INDEXED_AB_BI4X2_NOSPLIT_ACCUM_K4
+
+    if (out2 + 1 < out_rows) {
+        __global float * outp = dst + out_off;
+        if (out_b_idx + 0 < n_rows) vstore2(convert_float2(acc0), 0, outp + 0*out_rows);
+        if (out_b_idx + 1 < n_rows) vstore2(convert_float2(acc1), 0, outp + 1*out_rows);
+        if (out_b_idx + 2 < n_rows) vstore2(convert_float2(acc2), 0, outp + 2*out_rows);
+        if (out_b_idx + 3 < n_rows) vstore2(convert_float2(acc3), 0, outp + 3*out_rows);
+    }
+}
+
+#ifdef cl_qcom_reqd_sub_group_size
+REQD_SUBGROUP_SIZE_128
+#endif
+kernel void kernel_indexed_q4_0_matvec_Ab_Bi_8x1_nosplit(
+    global const ushort * q,
+    global const half   * d,
+    __read_only image1d_buffer_t src1,
+    global const int    * ids,
+    global float        * dst,
+    int                   src_rows,
+    int                   out_rows,
+    int                   hidden_dim,
+    int                   n_rows) {
+    const int gid_n = get_global_id(0);
+    const int gid_m = get_group_id(1);
+    const int lid_m = get_local_id(1);
+    const int lsz_m = get_local_size(1);
+
+    const int k4_count = hidden_dim >> 2;
+    const int out_b_idx = gid_n << 3;
+    const int out = gid_m * lsz_m + lid_m;
+    const int out_off = out + out_b_idx * out_rows;
+
+    const int row = out < out_rows ? ids[out] : 0;
+
+    const int b_row0_pix = out_b_idx * k4_count;
+#ifndef INDEXED_AB_BI_ASSUME_N8
+    const int compute_hi_n = n_rows > out_b_idx + 4;
+#endif
+
+    half acc0 = (half)0, acc1 = (half)0, acc2 = (half)0, acc3 = (half)0;
+    half acc4 = (half)0, acc5 = (half)0, acc6 = (half)0, acc7 = (half)0;
+
+    #define INDEXED_AB_BI1_NOSPLIT_ACCUM_K4(k4_value, sc_value) do { \
+        const int k4_idx = (k4_value); \
+        const half sc1 = (sc_value); \
+        const ulong q_base = (ulong) k4_idx * (ulong) src_rows; \
+        const ushort bits = q[q_base + row]; \
+        const int p = b_row0_pix + k4_idx; \
+        const half4 in0 = read_imageh(src1, p + 0*k4_count); \
+        const half4 in1 = read_imageh(src1, p + 1*k4_count); \
+        const half4 in2 = read_imageh(src1, p + 2*k4_count); \
+        const half4 in3 = read_imageh(src1, p + 3*k4_count); \
+        half4 in4, in5, in6, in7; \
+        INDEXED_AB_BI_IF_HI_N { \
+            in4 = read_imageh(src1, p + 4*k4_count); \
+            in5 = read_imageh(src1, p + 5*k4_count); \
+            in6 = read_imageh(src1, p + 6*k4_count); \
+            in7 = read_imageh(src1, p + 7*k4_count); \
+        } \
+        half w; \
+        w = ((bits & 0x000F) - 8) * sc1; \
+        acc0 += in0.s0 * w; \
+        acc1 += in1.s0 * w; \
+        acc2 += in2.s0 * w; \
+        acc3 += in3.s0 * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += in4.s0 * w; \
+            acc5 += in5.s0 * w; \
+            acc6 += in6.s0 * w; \
+            acc7 += in7.s0 * w; \
+        } \
+        w = (((bits & 0x00F0) >> 4) - 8) * sc1; \
+        acc0 += in0.s1 * w; \
+        acc1 += in1.s1 * w; \
+        acc2 += in2.s1 * w; \
+        acc3 += in3.s1 * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += in4.s1 * w; \
+            acc5 += in5.s1 * w; \
+            acc6 += in6.s1 * w; \
+            acc7 += in7.s1 * w; \
+        } \
+        w = (((bits & 0x0F00) >> 8) - 8) * sc1; \
+        acc0 += in0.s2 * w; \
+        acc1 += in1.s2 * w; \
+        acc2 += in2.s2 * w; \
+        acc3 += in3.s2 * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += in4.s2 * w; \
+            acc5 += in5.s2 * w; \
+            acc6 += in6.s2 * w; \
+            acc7 += in7.s2 * w; \
+        } \
+        w = (((bits & 0xF000) >> 12) - 8) * sc1; \
+        acc0 += in0.s3 * w; \
+        acc1 += in1.s3 * w; \
+        acc2 += in2.s3 * w; \
+        acc3 += in3.s3 * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += in4.s3 * w; \
+            acc5 += in5.s3 * w; \
+            acc6 += in6.s3 * w; \
+            acc7 += in7.s3 * w; \
+        } \
+    } while (0)
+
+    const int kb_count = hidden_dim >> 5;
+    for (int kb = 0; kb < kb_count; ++kb) {
+        const ulong d_base = (ulong) kb * (ulong) src_rows;
+        const half sc = d[d_base + row];
+        const int k4_base = kb << 3;
+        for (int kk = 0; kk < 8; ++kk) {
+            INDEXED_AB_BI1_NOSPLIT_ACCUM_K4(k4_base + kk, sc);
+        }
+    }
+
+    #undef INDEXED_AB_BI1_NOSPLIT_ACCUM_K4
+
+    if (out < out_rows) {
+        __global float * outp = dst + out_off;
+        if (out_b_idx + 0 < n_rows) outp[0*out_rows] = convert_float(acc0);
+        if (out_b_idx + 1 < n_rows) outp[1*out_rows] = convert_float(acc1);
+        if (out_b_idx + 2 < n_rows) outp[2*out_rows] = convert_float(acc2);
+        if (out_b_idx + 3 < n_rows) outp[3*out_rows] = convert_float(acc3);
+        if (out_b_idx + 4 < n_rows) outp[4*out_rows] = convert_float(acc4);
+        if (out_b_idx + 5 < n_rows) outp[5*out_rows] = convert_float(acc5);
+        if (out_b_idx + 6 < n_rows) outp[6*out_rows] = convert_float(acc6);
+        if (out_b_idx + 7 < n_rows) outp[7*out_rows] = convert_float(acc7);
     }
 }
 
@@ -1806,6 +2178,46 @@ bool try_read_text_file(const std::string & path, std::string & out) {
     return true;
 }
 
+std::vector<int32_t> read_i32_list_file(const std::string & path) {
+    const std::string text = read_text_file(path);
+    std::vector<int32_t> values;
+
+    size_t i = 0;
+    while (i < text.size()) {
+        while (i < text.size() && text[i] != '-' && (text[i] < '0' || text[i] > '9')) {
+            ++i;
+        }
+        if (i >= text.size()) {
+            break;
+        }
+
+        int sign = 1;
+        if (text[i] == '-') {
+            sign = -1;
+            ++i;
+        }
+        if (i >= text.size() || text[i] < '0' || text[i] > '9') {
+            continue;
+        }
+
+        int64_t value = 0;
+        while (i < text.size() && text[i] >= '0' && text[i] <= '9') {
+            value = value * 10 + static_cast<int64_t>(text[i] - '0');
+            if (value > static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 1) {
+                fail("integer out of int32 range in ids file: " + path);
+            }
+            ++i;
+        }
+        value *= sign;
+        if (value < std::numeric_limits<int32_t>::min() || value > std::numeric_limits<int32_t>::max()) {
+            fail("integer out of int32 range in ids file: " + path);
+        }
+        values.push_back(static_cast<int32_t>(value));
+    }
+
+    return values;
+}
+
 std::string format_bytes(size_t bytes) {
     static const char * suffixes[] = { "B", "KiB", "MiB", "GiB" };
     double value = static_cast<double>(bytes);
@@ -1866,6 +2278,9 @@ std::string format_indexed_config(const IndexedMatvecTuningConfig & config) {
         if (config.abi_local_b) {
             oss << " localB";
         }
+        if (config.abi_prefetch) {
+            oss << " prefetch";
+        }
     } else {
         oss << "lws=" << config.local_size
             << " rows/sg=" << config.rows_per_subgroup;
@@ -1920,6 +2335,7 @@ void print_usage(const char * argv0) {
         << "                        k4/thread={1,2,4}, and ids staging={global,local}.\n"
         << "  --seed N              RNG seed for synthetic score generation (default: 42)\n"
         << "  --kernel-dir PATH     Optional directory containing argsort.cl and set_rows.cl\n"
+        << "  --ids-file PATH       Optional JSON/text int list to use as gather/indexed row ids\n"
         << "  --search MODE         all | topk | bucket-topk | id-sort | gather | indexed (default: all)\n"
         << "  --allow-non-power-local\n"
         << "                        Also try exploratory non-power-of-two indexed Ab_Bi local sizes\n"
@@ -1988,6 +2404,8 @@ Options parse_options(int argc, char ** argv) {
             options.seed = parse_int_arg(argv[0], "--seed", argc, argv, i);
         } else if (arg == "--kernel-dir") {
             options.kernel_dir = parse_string_arg(argv[0], "--kernel-dir", argc, argv, i);
+        } else if (arg == "--ids-file") {
+            options.ids_file = parse_string_arg(argv[0], "--ids-file", argc, argv, i);
         } else if (arg == "--allow-non-power-local") {
             options.allow_non_power_of_two_local = true;
         } else if (arg == "--search") {
@@ -2148,7 +2566,10 @@ public:
         release_cl_handle(indexed_abi4_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi_nosplit_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi4_nosplit_matvec_kernel_, clReleaseKernel);
+        release_cl_handle(indexed_abi4_n2_nosplit_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi_lbtile_matvec_kernel_, clReleaseKernel);
+        release_cl_handle(indexed_abi_prefetch_matvec_kernel_, clReleaseKernel);
+        release_cl_handle(indexed_abi_n8m1_nosplit_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi_n8m2_nosplit_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi_n8m8_nosplit_matvec_kernel_, clReleaseKernel);
         release_cl_handle(dense_matvec_kernel_, clReleaseKernel);
@@ -2195,7 +2616,11 @@ public:
                   << " hidden_dim=" << options_.hidden_dim
                   << " lmhead_batch=" << options_.lmhead_batch
                   << " k4_count=" << k4_count_
-                  << " kb_count=" << kb_count_ << "\n";
+                  << " kb_count=" << kb_count_;
+        if (!options_.ids_file.empty()) {
+            std::cout << " ids_file=" << options_.ids_file;
+        }
+        std::cout << "\n";
         std::cout << "Buffer sizes    : scores=" << format_bytes(score_bytes)
                   << " src_q=" << format_bytes(src_q_bytes)
                   << " src_d=" << format_bytes(src_d_bytes)
@@ -2210,7 +2635,10 @@ public:
                   << " indexed-Ab_Bi4=" << indexed_abi4_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi-nosplit=" << indexed_abi_nosplit_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi4-nosplit=" << indexed_abi4_nosplit_matvec_kernel_max_wgs_
+                  << " indexed-Ab_Bi4-n2-nosplit=" << indexed_abi4_n2_nosplit_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi-localB=" << indexed_abi_lbtile_matvec_kernel_max_wgs_
+                  << " indexed-Ab_Bi-prefetch=" << indexed_abi_prefetch_matvec_kernel_max_wgs_
+                  << " indexed-Ab_Bi-n8m1-nosplit=" << indexed_abi_n8m1_nosplit_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi-n8m2-nosplit=" << indexed_abi_n8m2_nosplit_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi-n8m8-nosplit=" << indexed_abi_n8m8_nosplit_matvec_kernel_max_wgs_
                   << " preferred-multiple=" << gather_kernel_preferred_multiple_ << "\n";
@@ -2527,12 +2955,32 @@ private:
         topk_asc_ref_ = topk_desc_ref_;
         std::sort(topk_asc_ref_.begin(), topk_asc_ref_.end());
 
+        std::vector<int32_t> source_ids = topk_asc_ref_;
+        if (!options_.ids_file.empty()) {
+            source_ids = read_i32_list_file(options_.ids_file);
+            if (static_cast<int>(source_ids.size()) < output_count_) {
+                std::ostringstream oss;
+                oss << "--ids-file contains " << source_ids.size()
+                    << " ids, but --top-k requires " << output_count_;
+                fail(oss.str());
+            }
+            for (int i = 0; i < output_count_; ++i) {
+                const int32_t id = source_ids[static_cast<size_t>(i)];
+                if (id < 0 || id >= src_rows_) {
+                    std::ostringstream oss;
+                    oss << "--ids-file id out of range at position " << i
+                        << ": " << id << " (src_rows=" << src_rows_ << ")";
+                    fail(oss.str());
+                }
+            }
+        }
+
         gather_ids_.resize(static_cast<size_t>(gather_rows_));
         for (int i = 0; i < output_count_; ++i) {
-            gather_ids_[static_cast<size_t>(i)] = topk_asc_ref_[static_cast<size_t>(i)];
+            gather_ids_[static_cast<size_t>(i)] = source_ids[static_cast<size_t>(i)];
         }
         for (int i = output_count_; i < gather_rows_; ++i) {
-            gather_ids_[static_cast<size_t>(i)] = topk_asc_ref_.back();
+            gather_ids_[static_cast<size_t>(i)] = source_ids[static_cast<size_t>(output_count_ - 1)];
         }
 
         hidden_.resize(static_cast<size_t>(options_.hidden_dim) * static_cast<size_t>(options_.lmhead_batch));
@@ -2660,7 +3108,10 @@ private:
         indexed_abi4_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_4x4");
         indexed_abi_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_8x4_nosplit");
         indexed_abi4_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_4x4_nosplit");
+        indexed_abi4_n2_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_4x2_nosplit");
         indexed_abi_lbtile_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_8x4_lbtile");
+        indexed_abi_prefetch_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_8x4_nosplit_prefetch");
+        indexed_abi_n8m1_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_8x1_nosplit");
         indexed_abi_n8m2_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_8x2_nosplit");
         indexed_abi_n8m8_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_8x8_nosplit");
         production_dense_matvec_kernel_ = create_kernel(production_dense_matvec_program_, "kernel_mul_mat_Ab_Bi_8x4");
@@ -2677,7 +3128,10 @@ private:
         indexed_abi4_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi4_matvec_kernel_);
         indexed_abi_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi_nosplit_matvec_kernel_);
         indexed_abi4_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi4_nosplit_matvec_kernel_);
+        indexed_abi4_n2_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi4_n2_nosplit_matvec_kernel_);
         indexed_abi_lbtile_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi_lbtile_matvec_kernel_);
+        indexed_abi_prefetch_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi_prefetch_matvec_kernel_);
+        indexed_abi_n8m1_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi_n8m1_nosplit_matvec_kernel_);
         indexed_abi_n8m2_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi_n8m2_nosplit_matvec_kernel_);
         indexed_abi_n8m8_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi_n8m8_nosplit_matvec_kernel_);
         production_dense_matvec_kernel_max_wgs_ = query_kernel_wgs(production_dense_matvec_kernel_);
@@ -3276,14 +3730,20 @@ private:
         cl_kernel kernel = nullptr;
         if (config.abi_local_b) {
             kernel = indexed_abi_lbtile_matvec_kernel_;
+        } else if (config.abi_prefetch) {
+            kernel = indexed_abi_prefetch_matvec_kernel_;
         } else if (config.abi_no_split) {
-            kernel = config.abi_m_tile == 8
+            kernel = config.abi_n_tile == 4 && config.abi_m_tile == 2
+                    ? indexed_abi4_n2_nosplit_matvec_kernel_
+                    : (config.abi_m_tile == 8
                     ? indexed_abi_n8m8_nosplit_matvec_kernel_
+                    : (config.abi_m_tile == 1
+                    ? indexed_abi_n8m1_nosplit_matvec_kernel_
                     : (config.abi_m_tile == 2
                     ? indexed_abi_n8m2_nosplit_matvec_kernel_
                     : (config.abi_n_tile == 4
                     ? indexed_abi4_nosplit_matvec_kernel_
-                    : indexed_abi_nosplit_matvec_kernel_));
+                    : indexed_abi_nosplit_matvec_kernel_))));
         } else {
             kernel = config.abi_n_tile == 4
                     ? indexed_abi4_matvec_kernel_
@@ -3309,7 +3769,7 @@ private:
             fail("indexed Ab_Bi work size collapsed; rows must be at least one full 4xWI_M tile");
         }
 
-        if (config.abi_no_split) {
+        if (config.abi_no_split || config.abi_prefetch) {
             const size_t local[] = { 1, config.wi_m };
             const size_t global[] = { wg_n, wg_m * config.wi_m };
 
@@ -3674,6 +4134,48 @@ private:
             }
         }
 
+        if (std::find(n_tiles.begin(), n_tiles.end(), 4) != n_tiles.end()) {
+            const size_t limit = std::min({ indexed_abi4_n2_nosplit_matvec_kernel_max_wgs_,
+                                            device_max_work_group_size_,
+                                            size_t(512) });
+            const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
+            const size_t max_wi_m = std::min(limit, max_m);
+            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
+                    ? make_linear_values(max_wi_m)
+                    : make_power_of_two_values(max_wi_m);
+            for (size_t wi_m : wi_m_values) {
+                configs.push_back({ wi_m, 0, true, wi_m, 1, 4, true, 2 });
+            }
+        }
+
+        if (std::find(n_tiles.begin(), n_tiles.end(), 8) != n_tiles.end()) {
+            const size_t limit = std::min({ indexed_abi_prefetch_matvec_kernel_max_wgs_,
+                                            device_max_work_group_size_,
+                                            size_t(512) });
+            const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
+            const size_t max_wi_m = std::min(limit, max_m);
+            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
+                    ? make_linear_values(max_wi_m)
+                    : make_power_of_two_values(max_wi_m);
+            for (size_t wi_m : wi_m_values) {
+                configs.push_back({ wi_m, 0, true, wi_m, 1, 8, true, 4, false, true });
+            }
+        }
+
+        if (std::find(n_tiles.begin(), n_tiles.end(), 8) != n_tiles.end()) {
+            const size_t limit = std::min({ indexed_abi_n8m1_nosplit_matvec_kernel_max_wgs_,
+                                            device_max_work_group_size_,
+                                            size_t(512) });
+            const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
+            const size_t max_wi_m = std::min(limit, max_m);
+            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
+                    ? make_linear_values(max_wi_m)
+                    : make_power_of_two_values(max_wi_m);
+            for (size_t wi_m : wi_m_values) {
+                configs.push_back({ wi_m, 0, true, wi_m, 1, 8, true, 1 });
+            }
+        }
+
         if (std::find(n_tiles.begin(), n_tiles.end(), 8) != n_tiles.end()) {
             const size_t limit = std::min({ indexed_abi_n8m2_nosplit_matvec_kernel_max_wgs_,
                                             device_max_work_group_size_,
@@ -3726,6 +4228,12 @@ private:
             }
             if (lhs.abi_no_split != rhs.abi_no_split) {
                 return lhs.abi_no_split < rhs.abi_no_split;
+            }
+            if (lhs.abi_prefetch != rhs.abi_prefetch) {
+                return lhs.abi_prefetch < rhs.abi_prefetch;
+            }
+            if (lhs.abi_local_b != rhs.abi_local_b) {
+                return lhs.abi_local_b < rhs.abi_local_b;
             }
             if (lhs.wi_k != rhs.wi_k) {
                 return lhs.wi_k < rhs.wi_k;
@@ -3939,17 +4447,23 @@ private:
     MatvecResult benchmark_indexed_abi_matvec_config(const IndexedMatvecTuningConfig & config) {
         const size_t kernel_limit = config.abi_local_b
                 ? indexed_abi_lbtile_matvec_kernel_max_wgs_
+                : (config.abi_prefetch
+                ? indexed_abi_prefetch_matvec_kernel_max_wgs_
                 : (config.abi_no_split
-                ? (config.abi_m_tile == 8
+                ? (config.abi_n_tile == 4 && config.abi_m_tile == 2
+                    ? indexed_abi4_n2_nosplit_matvec_kernel_max_wgs_
+                    : (config.abi_m_tile == 8
                     ? indexed_abi_n8m8_nosplit_matvec_kernel_max_wgs_
+                    : (config.abi_m_tile == 1
+                    ? indexed_abi_n8m1_nosplit_matvec_kernel_max_wgs_
                     : (config.abi_m_tile == 2
                     ? indexed_abi_n8m2_nosplit_matvec_kernel_max_wgs_
                     : (config.abi_n_tile == 4
                     ? indexed_abi4_nosplit_matvec_kernel_max_wgs_
-                    : indexed_abi_nosplit_matvec_kernel_max_wgs_)))
+                    : indexed_abi_nosplit_matvec_kernel_max_wgs_)))))
                 : (config.abi_n_tile == 4
                 ? indexed_abi4_matvec_kernel_max_wgs_
-                : indexed_abi_matvec_kernel_max_wgs_));
+                : indexed_abi_matvec_kernel_max_wgs_)));
         if (config.wi_m * config.wi_k > kernel_limit) {
             std::ostringstream oss;
             oss << "local_size " << (config.wi_m * config.wi_k)
@@ -3965,10 +4479,12 @@ private:
         validate_indexed_matvec_output(dense_out_buffer_, "dense-Ab_Bi", 16.0f, options_.lmhead_batch);
 
         return { config.abi_local_b ? "indexed-Ab_Bi-8x4-localB" :
+                 (config.abi_prefetch ? "indexed-Ab_Bi-8x4-nosplit-prefetch" :
                  (config.abi_no_split ? (config.abi_m_tile == 8 ? "indexed-Ab_Bi-8x8-nosplit" :
-                                        (config.abi_m_tile == 2 ? "indexed-Ab_Bi-8x2-nosplit" :
-                                        (config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x4-nosplit" : "indexed-Ab_Bi-8x4-nosplit")))
-                                     : (config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x4" : "indexed-Ab_Bi-8x4")),
+                                        (config.abi_m_tile == 1 ? "indexed-Ab_Bi-8x1-nosplit" :
+                                        (config.abi_m_tile == 2 ? (config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x2-nosplit" : "indexed-Ab_Bi-8x2-nosplit") :
+                                        (config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x4-nosplit" : "indexed-Ab_Bi-8x4-nosplit"))))
+                                     : (config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x4" : "indexed-Ab_Bi-8x4"))),
                  config, avg_ms, min_ms };
     }
 
@@ -4082,7 +4598,10 @@ private:
     cl_kernel indexed_abi4_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi_nosplit_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi4_nosplit_matvec_kernel_ = nullptr;
+    cl_kernel indexed_abi4_n2_nosplit_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi_lbtile_matvec_kernel_ = nullptr;
+    cl_kernel indexed_abi_prefetch_matvec_kernel_ = nullptr;
+    cl_kernel indexed_abi_n8m1_nosplit_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi_n8m2_nosplit_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi_n8m8_nosplit_matvec_kernel_ = nullptr;
     cl_kernel production_dense_matvec_kernel_ = nullptr;
@@ -4099,7 +4618,10 @@ private:
     size_t indexed_abi4_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi_nosplit_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi4_nosplit_matvec_kernel_max_wgs_ = 0;
+    size_t indexed_abi4_n2_nosplit_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi_lbtile_matvec_kernel_max_wgs_ = 0;
+    size_t indexed_abi_prefetch_matvec_kernel_max_wgs_ = 0;
+    size_t indexed_abi_n8m1_nosplit_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi_n8m2_nosplit_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi_n8m8_nosplit_matvec_kernel_max_wgs_ = 0;
     size_t production_dense_matvec_kernel_max_wgs_ = 0;

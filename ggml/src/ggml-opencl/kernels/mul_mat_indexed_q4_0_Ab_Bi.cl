@@ -159,6 +159,214 @@ kernel void kernel_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit(
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_128
 #endif
+kernel void kernel_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit(
+    global const ushort * q,
+    global const half   * d,
+    __read_only image1d_buffer_t src1,
+    global const int    * ids,
+    global float        * dst,
+    int                   src_rows,
+    int                   out_rows,
+    int                   hidden_dim,
+    int                   n_rows) {
+    const int gid_n = get_global_id(0);
+    const int gid_m = get_group_id(1);
+    const int lid_m = get_local_id(1);
+    const int lsz_m = get_local_size(1);
+
+    const int k4_count = hidden_dim >> 2;
+    const int out_b_idx = gid_n << 2;
+    const int out2 = (gid_m * lsz_m + lid_m) << 1;
+    const int out_off = out2 + out_b_idx * out_rows;
+
+    const int row0 = out2 + 0 < out_rows ? ids[out2 + 0] : 0;
+    const int row1 = out2 + 1 < out_rows ? ids[out2 + 1] : 0;
+
+    const int b_row0_pix = out_b_idx * k4_count;
+
+    half2 acc0 = (half2)0, acc1 = (half2)0, acc2 = (half2)0, acc3 = (half2)0;
+
+#define INDEXED_AB_BI_4X2_ACCUM_K4(k4_value, sc_value) do { \
+        const int k4_idx = (k4_value); \
+        const half2 sc2 = (sc_value); \
+        const ulong q_base = (ulong) k4_idx * (ulong) src_rows; \
+        const ushort2 bits2 = (ushort2)(q[q_base + row0], q[q_base + row1]); \
+        const int p = b_row0_pix + k4_idx; \
+        const half4 in0 = read_imageh(src1, p + 0*k4_count); \
+        const half4 in1 = read_imageh(src1, p + 1*k4_count); \
+        const half4 in2 = read_imageh(src1, p + 2*k4_count); \
+        const half4 in3 = read_imageh(src1, p + 3*k4_count); \
+        half2 w; \
+        w.s0 = ((bits2.s0 & 0x000F) - 8) * sc2.s0; \
+        w.s1 = ((bits2.s1 & 0x000F) - 8) * sc2.s1; \
+        acc0 += (half2)(in0.s0) * w; \
+        acc1 += (half2)(in1.s0) * w; \
+        acc2 += (half2)(in2.s0) * w; \
+        acc3 += (half2)(in3.s0) * w; \
+        w.s0 = (((bits2.s0 & 0x00F0) >> 4) - 8) * sc2.s0; \
+        w.s1 = (((bits2.s1 & 0x00F0) >> 4) - 8) * sc2.s1; \
+        acc0 += (half2)(in0.s1) * w; \
+        acc1 += (half2)(in1.s1) * w; \
+        acc2 += (half2)(in2.s1) * w; \
+        acc3 += (half2)(in3.s1) * w; \
+        w.s0 = (((bits2.s0 & 0x0F00) >> 8) - 8) * sc2.s0; \
+        w.s1 = (((bits2.s1 & 0x0F00) >> 8) - 8) * sc2.s1; \
+        acc0 += (half2)(in0.s2) * w; \
+        acc1 += (half2)(in1.s2) * w; \
+        acc2 += (half2)(in2.s2) * w; \
+        acc3 += (half2)(in3.s2) * w; \
+        w.s0 = (((bits2.s0 & 0xF000) >> 12) - 8) * sc2.s0; \
+        w.s1 = (((bits2.s1 & 0xF000) >> 12) - 8) * sc2.s1; \
+        acc0 += (half2)(in0.s3) * w; \
+        acc1 += (half2)(in1.s3) * w; \
+        acc2 += (half2)(in2.s3) * w; \
+        acc3 += (half2)(in3.s3) * w; \
+    } while (0)
+
+    const int kb_count = hidden_dim >> 5;
+    for (int kb = 0; kb < kb_count; ++kb) {
+        const ulong d_base = (ulong) kb * (ulong) src_rows;
+        const half2 sc = (half2)(d[d_base + row0], d[d_base + row1]);
+        const int k4_base = kb << 3;
+        for (int kk = 0; kk < 8; ++kk) {
+            INDEXED_AB_BI_4X2_ACCUM_K4(k4_base + kk, sc);
+        }
+    }
+
+#undef INDEXED_AB_BI_4X2_ACCUM_K4
+
+    if (out2 + 1 < out_rows) {
+        __global float * outp = dst + out_off;
+        if (out_b_idx + 0 < n_rows) vstore2(convert_float2(acc0), 0, outp + 0*out_rows);
+        if (out_b_idx + 1 < n_rows) vstore2(convert_float2(acc1), 0, outp + 1*out_rows);
+        if (out_b_idx + 2 < n_rows) vstore2(convert_float2(acc2), 0, outp + 2*out_rows);
+        if (out_b_idx + 3 < n_rows) vstore2(convert_float2(acc3), 0, outp + 3*out_rows);
+    }
+}
+
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_128
+#endif
+kernel void kernel_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit(
+    global const ushort * q,
+    global const half   * d,
+    __read_only image1d_buffer_t src1,
+    global const int    * ids,
+    global float        * dst,
+    int                   src_rows,
+    int                   out_rows,
+    int                   hidden_dim,
+    int                   n_rows) {
+    const int gid_n = get_global_id(0);
+    const int gid_m = get_group_id(1);
+    const int lid_m = get_local_id(1);
+    const int lsz_m = get_local_size(1);
+
+    const int k4_count = hidden_dim >> 2;
+    const int out_b_idx = gid_n << 3;
+    const int out = gid_m * lsz_m + lid_m;
+    const int out_off = out + out_b_idx * out_rows;
+    const int compute_hi_n = n_rows > out_b_idx + 4;
+
+    const int row = out < out_rows ? ids[out] : 0;
+
+    const int b_row0_pix = out_b_idx * k4_count;
+
+    half acc0 = (half)0, acc1 = (half)0, acc2 = (half)0, acc3 = (half)0;
+    half acc4 = (half)0, acc5 = (half)0, acc6 = (half)0, acc7 = (half)0;
+
+#define INDEXED_AB_BI_8X1_ACCUM_K4(k4_value, sc_value) do { \
+        const int k4_idx = (k4_value); \
+        const half sc1 = (sc_value); \
+        const ulong q_base = (ulong) k4_idx * (ulong) src_rows; \
+        const ushort bits = q[q_base + row]; \
+        const int p = b_row0_pix + k4_idx; \
+        const half4 in0 = read_imageh(src1, p + 0*k4_count); \
+        const half4 in1 = read_imageh(src1, p + 1*k4_count); \
+        const half4 in2 = read_imageh(src1, p + 2*k4_count); \
+        const half4 in3 = read_imageh(src1, p + 3*k4_count); \
+        half4 in4, in5, in6, in7; \
+        INDEXED_AB_BI_IF_HI_N { \
+            in4 = read_imageh(src1, p + 4*k4_count); \
+            in5 = read_imageh(src1, p + 5*k4_count); \
+            in6 = read_imageh(src1, p + 6*k4_count); \
+            in7 = read_imageh(src1, p + 7*k4_count); \
+        } \
+        half w; \
+        w = ((bits & 0x000F) - 8) * sc1; \
+        acc0 += in0.s0 * w; \
+        acc1 += in1.s0 * w; \
+        acc2 += in2.s0 * w; \
+        acc3 += in3.s0 * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += in4.s0 * w; \
+            acc5 += in5.s0 * w; \
+            acc6 += in6.s0 * w; \
+            acc7 += in7.s0 * w; \
+        } \
+        w = (((bits & 0x00F0) >> 4) - 8) * sc1; \
+        acc0 += in0.s1 * w; \
+        acc1 += in1.s1 * w; \
+        acc2 += in2.s1 * w; \
+        acc3 += in3.s1 * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += in4.s1 * w; \
+            acc5 += in5.s1 * w; \
+            acc6 += in6.s1 * w; \
+            acc7 += in7.s1 * w; \
+        } \
+        w = (((bits & 0x0F00) >> 8) - 8) * sc1; \
+        acc0 += in0.s2 * w; \
+        acc1 += in1.s2 * w; \
+        acc2 += in2.s2 * w; \
+        acc3 += in3.s2 * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += in4.s2 * w; \
+            acc5 += in5.s2 * w; \
+            acc6 += in6.s2 * w; \
+            acc7 += in7.s2 * w; \
+        } \
+        w = (((bits & 0xF000) >> 12) - 8) * sc1; \
+        acc0 += in0.s3 * w; \
+        acc1 += in1.s3 * w; \
+        acc2 += in2.s3 * w; \
+        acc3 += in3.s3 * w; \
+        INDEXED_AB_BI_IF_HI_N { \
+            acc4 += in4.s3 * w; \
+            acc5 += in5.s3 * w; \
+            acc6 += in6.s3 * w; \
+            acc7 += in7.s3 * w; \
+        } \
+    } while (0)
+
+    const int kb_count = hidden_dim >> 5;
+    for (int kb = 0; kb < kb_count; ++kb) {
+        const ulong d_base = (ulong) kb * (ulong) src_rows;
+        const half sc = d[d_base + row];
+        const int k4_base = kb << 3;
+        for (int kk = 0; kk < 8; ++kk) {
+            INDEXED_AB_BI_8X1_ACCUM_K4(k4_base + kk, sc);
+        }
+    }
+
+#undef INDEXED_AB_BI_8X1_ACCUM_K4
+
+    if (out < out_rows) {
+        __global float * outp = dst + out_off;
+        if (out_b_idx + 0 < n_rows) outp[0*out_rows] = convert_float(acc0);
+        if (out_b_idx + 1 < n_rows) outp[1*out_rows] = convert_float(acc1);
+        if (out_b_idx + 2 < n_rows) outp[2*out_rows] = convert_float(acc2);
+        if (out_b_idx + 3 < n_rows) outp[3*out_rows] = convert_float(acc3);
+        if (out_b_idx + 4 < n_rows) outp[4*out_rows] = convert_float(acc4);
+        if (out_b_idx + 5 < n_rows) outp[5*out_rows] = convert_float(acc5);
+        if (out_b_idx + 6 < n_rows) outp[6*out_rows] = convert_float(acc6);
+        if (out_b_idx + 7 < n_rows) outp[7*out_rows] = convert_float(acc7);
+    }
+}
+
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_128
+#endif
 kernel void kernel_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit(
     global const ushort * q,
     global const half   * d,

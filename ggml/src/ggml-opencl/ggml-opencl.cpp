@@ -698,6 +698,8 @@ struct ggml_backend_opencl_context {
     cl_program program_CL_gemm_indexed_q4_0_Ab_Bi;
     cl_kernel CL_mul_mat_Ab_Bi_8x4;
     cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit;
+    cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit;
+    cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit;
     cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit;
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_general;
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_4096_1_11008;
@@ -2185,6 +2187,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_CL_gemm_indexed.c_str(), compile_opts);
         CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit =
                 clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit", &err), err));
+        CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit =
+                clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit", &err), err));
+        CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit =
+                clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit", &err), err));
         CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit =
                 clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit", &err), err));
         GGML_LOG_CONT(".");
@@ -3684,6 +3690,8 @@ static bool ggml_opencl_supports_indexed_mul_mat_q4_0_impl(
     }
     if (backend_ctx->gpu_family != ADRENO ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit == nullptr ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit == nullptr) {
         return false;
     }
@@ -5065,12 +5073,18 @@ bool ggml_backend_opencl_indexed_mul_mat_q4_0(
     CL_CHECK(status);
 
     cl_mem ids_buffer = (cl_mem) device_row_indices;
-    cl_kernel kernel = batch_size >= 8
-            ? backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit
-            : backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit;
-    const size_t tile_n = 8;
-    const size_t tile_m = batch_size >= 8 ? 2 : 4;
-    const size_t wi_m = 64;
+    cl_kernel kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit;
+    size_t tile_n = 8;
+    size_t tile_m = 2;
+    size_t wi_m = 64;
+    if (batch_size == 1) {
+        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit;
+        tile_m = 1;
+    } else if (batch_size <= 4) {
+        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit;
+        tile_n = 4;
+        wi_m = batch_size == 4 ? 64 : 128;
+    }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_extra->q));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &src_extra->d));
@@ -5171,6 +5185,8 @@ static bool ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(
     if (backend_ctx == nullptr ||
         backend_ctx->gpu_family != ADRENO ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit == nullptr ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit == nullptr ||
         backend_ctx->B_d_max == nullptr) {
         return false;
@@ -5305,12 +5321,18 @@ static bool ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(
             &status);
     CL_CHECK(status);
 
-    cl_kernel kernel = batch_size >= 8
-            ? backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit
-            : backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit;
-    const size_t tile_n = 8;
-    const size_t tile_m = batch_size >= 8 ? 2 : 4;
-    const size_t wi_m = 64;
+    cl_kernel kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit;
+    size_t tile_n = 8;
+    size_t tile_m = 2;
+    size_t wi_m = 64;
+    if (batch_size == 1) {
+        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit;
+        tile_m = 1;
+    } else if (batch_size <= 4) {
+        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit;
+        tile_n = 4;
+        wi_m = batch_size == 4 ? 64 : 128;
+    }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_extra->q));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &src_extra->d));
