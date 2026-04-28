@@ -698,7 +698,11 @@ struct ggml_backend_opencl_context {
     cl_program program_CL_gemm_indexed_q4_0_Ab_Bi;
     cl_kernel CL_mul_mat_Ab_Bi_8x4;
     cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit;
+    cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_4x4_nosplit;
+    cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_4x1_nosplit;
+    cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_4x8_nosplit;
     cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit;
+    cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_1x1_nosplit;
     cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit;
     cl_kernel CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit;
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_general;
@@ -2187,8 +2191,16 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_CL_gemm_indexed.c_str(), compile_opts);
         CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit =
                 clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit", &err), err));
+        CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x4_nosplit =
+                clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_4x4_nosplit", &err), err));
+        CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x1_nosplit =
+                clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_4x1_nosplit", &err), err));
+        CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x8_nosplit =
+                clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_4x8_nosplit", &err), err));
         CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit =
                 clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit", &err), err));
+        CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_1x1_nosplit =
+                clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_1x1_nosplit", &err), err));
         CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit =
                 clCreateKernel(backend_ctx->program_CL_gemm_indexed_q4_0_Ab_Bi, "kernel_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit", &err), err));
         CL_CHECK((backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit =
@@ -3690,7 +3702,11 @@ static bool ggml_opencl_supports_indexed_mul_mat_q4_0_impl(
     }
     if (backend_ctx->gpu_family != ADRENO ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x4_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x1_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x8_nosplit == nullptr ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_1x1_nosplit == nullptr ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit == nullptr ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit == nullptr) {
         return false;
@@ -4984,7 +5000,6 @@ bool ggml_backend_opencl_indexed_mul_mat_q4_0(
     cl_buffer_region region;
 
     cl_mem hidden_sub_buffer = nullptr;
-    cl_mem hidden_half_buffer = nullptr;
     cl_mem hidden_input_image = nullptr;
     cl_mem hidden_half_image = nullptr;
     cl_mem dst_sub_buffer = nullptr;
@@ -4996,16 +5011,6 @@ bool ggml_backend_opencl_indexed_mul_mat_q4_0(
     region.size = (size_t) hidden_dim * (size_t) batch_size * sizeof(float);
     hidden_sub_buffer = clCreateSubBuffer(
             hidden_extra->data_device,
-            0,
-            CL_BUFFER_CREATE_TYPE_REGION,
-            &region,
-            &status);
-    CL_CHECK(status);
-
-    region.origin = 0;
-    region.size = (size_t) hidden_dim * (size_t) padded_batch * sizeof(float) / 2;
-    hidden_half_buffer = clCreateSubBuffer(
-            backend_ctx->B_d_max,
             0,
             CL_BUFFER_CREATE_TYPE_REGION,
             &region,
@@ -5032,7 +5037,7 @@ bool ggml_backend_opencl_indexed_mul_mat_q4_0(
     memset(&half_desc, 0, sizeof(half_desc));
     half_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
     half_desc.image_width = (size_t) hidden_dim * (size_t) padded_batch / 4;
-    half_desc.buffer = hidden_half_buffer;
+    half_desc.buffer = backend_ctx->B_d_max;
     hidden_half_image = clCreateImage(
             backend_ctx->context,
             0,
@@ -5078,12 +5083,19 @@ bool ggml_backend_opencl_indexed_mul_mat_q4_0(
     size_t tile_m = 2;
     size_t wi_m = 64;
     if (batch_size == 1) {
-        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit;
+        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_1x1_nosplit;
+        tile_n = 1;
         tile_m = 1;
-    } else if (batch_size <= 4) {
+        wi_m = 96;
+    } else if (batch_size < 4) {
         kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit;
         tile_n = 4;
-        wi_m = batch_size == 4 ? 64 : 128;
+        wi_m = 128;
+    } else if (batch_size == 4) {
+        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x1_nosplit;
+        tile_n = 4;
+        tile_m = 1;
+        wi_m = 128;
     }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_extra->q));
@@ -5105,7 +5117,6 @@ bool ggml_backend_opencl_indexed_mul_mat_q4_0(
     backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
 
     CL_CHECK(clReleaseMemObject(hidden_sub_buffer));
-    CL_CHECK(clReleaseMemObject(hidden_half_buffer));
     CL_CHECK(clReleaseMemObject(hidden_input_image));
     CL_CHECK(clReleaseMemObject(hidden_half_image));
     CL_CHECK(clReleaseMemObject(dst_sub_buffer));
@@ -5185,7 +5196,11 @@ static bool ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(
     if (backend_ctx == nullptr ||
         backend_ctx->gpu_family != ADRENO ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x4_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x4_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x1_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x8_nosplit == nullptr ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit == nullptr ||
+        backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_1x1_nosplit == nullptr ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit == nullptr ||
         backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x2_nosplit == nullptr ||
         backend_ctx->B_d_max == nullptr) {
@@ -5222,7 +5237,6 @@ static bool ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(
     cl_buffer_region region;
 
     cl_mem hidden_sub_buffer = nullptr;
-    cl_mem hidden_half_buffer = nullptr;
     cl_mem hidden_input_image = nullptr;
     cl_mem hidden_half_image = nullptr;
     cl_mem ids_sub_buffer = nullptr;
@@ -5235,16 +5249,6 @@ static bool ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(
     region.size = (size_t) hidden_dim * (size_t) batch_size * sizeof(float);
     hidden_sub_buffer = clCreateSubBuffer(
             hidden_extra->data_device,
-            0,
-            CL_BUFFER_CREATE_TYPE_REGION,
-            &region,
-            &status);
-    CL_CHECK(status);
-
-    region.origin = 0;
-    region.size = (size_t) hidden_dim * (size_t) padded_batch * sizeof(float) / 2;
-    hidden_half_buffer = clCreateSubBuffer(
-            backend_ctx->B_d_max,
             0,
             CL_BUFFER_CREATE_TYPE_REGION,
             &region,
@@ -5271,7 +5275,7 @@ static bool ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(
     memset(&half_desc, 0, sizeof(half_desc));
     half_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
     half_desc.image_width = (size_t) hidden_dim * (size_t) padded_batch / 4;
-    half_desc.buffer = hidden_half_buffer;
+    half_desc.buffer = backend_ctx->B_d_max;
     hidden_half_image = clCreateImage(
             backend_ctx->context,
             0,
@@ -5326,12 +5330,19 @@ static bool ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(
     size_t tile_m = 2;
     size_t wi_m = 64;
     if (batch_size == 1) {
-        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_8x1_nosplit;
+        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_1x1_nosplit;
+        tile_n = 1;
         tile_m = 1;
-    } else if (batch_size <= 4) {
+        wi_m = 96;
+    } else if (batch_size < 4) {
         kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x2_nosplit;
         tile_n = 4;
-        wi_m = batch_size == 4 ? 64 : 128;
+        wi_m = 128;
+    } else if (batch_size == 4) {
+        kernel = backend_ctx->CL_mul_mat_indexed_q4_0_Ab_Bi_4x1_nosplit;
+        tile_n = 4;
+        tile_m = 1;
+        wi_m = 128;
     }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_extra->q));
@@ -5353,7 +5364,6 @@ static bool ggml_cl_try_mul_mat_id_indexed_lmhead_q4_0(
     backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
 
     CL_CHECK(clReleaseMemObject(hidden_sub_buffer));
-    CL_CHECK(clReleaseMemObject(hidden_half_buffer));
     CL_CHECK(clReleaseMemObject(hidden_input_image));
     CL_CHECK(clReleaseMemObject(hidden_half_image));
     CL_CHECK(clReleaseMemObject(ids_sub_buffer));

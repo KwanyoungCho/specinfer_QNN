@@ -49,6 +49,7 @@ struct Options {
     bool tune_id_sort = true;
     bool tune_gather = true;
     bool tune_indexed = true;
+    bool tune_indexed_probe = false;
     bool allow_non_power_of_two_local = false;
     bool verbose = false;
     bool show_help = false;
@@ -98,6 +99,13 @@ struct IndexedMatvecTuningConfig {
 struct MatvecResult {
     std::string label;
     IndexedMatvecTuningConfig indexed_config;
+    double avg_ms = std::numeric_limits<double>::infinity();
+    double min_ms = std::numeric_limits<double>::infinity();
+};
+
+struct IndexedProbeResult {
+    std::string label;
+    size_t wi_m = 0;
     double avg_ms = std::numeric_limits<double>::infinity();
     double min_ms = std::numeric_limits<double>::infinity();
 };
@@ -415,6 +423,9 @@ static const char * kQ4MatvecKernels = R"CLC(
 #define Q4_N_DST 8
 #ifndef INDEXED_ROWS_PER_SG
 #define INDEXED_ROWS_PER_SG 8
+#endif
+#ifndef INDEXED_AB_BI4X1_PROBE_MODE
+#define INDEXED_AB_BI4X1_PROBE_MODE 0
 #endif
 #ifdef cl_intel_required_subgroup_size
 #define Q4_SIMD_HALF_WIDTH 8
@@ -1442,11 +1453,14 @@ kernel void kernel_indexed_q4_0_matvec_Ab_Bi_4x4_nosplit(
     const int out_b_idx = gid_n << 2;
     const int out4 = (gid_m * lsz_m + lid_m) << 2;
     const int out_off = out4 + out_b_idx * out_rows;
+    if (out4 + 3 >= out_rows) {
+        return;
+    }
 
-    const int row0 = out4 + 0 < out_rows ? ids[out4 + 0] : 0;
-    const int row1 = out4 + 1 < out_rows ? ids[out4 + 1] : 0;
-    const int row2 = out4 + 2 < out_rows ? ids[out4 + 2] : 0;
-    const int row3 = out4 + 3 < out_rows ? ids[out4 + 3] : 0;
+    const int row0 = ids[out4 + 0];
+    const int row1 = ids[out4 + 1];
+    const int row2 = ids[out4 + 2];
+    const int row3 = ids[out4 + 3];
 
     const int b_row0_pix = out_b_idx * k4_count;
 
@@ -1513,12 +1527,222 @@ kernel void kernel_indexed_q4_0_matvec_Ab_Bi_4x4_nosplit(
 
     #undef INDEXED_AB_BI4_NOSPLIT_ACCUM_K4
 
-    if (out4 + 3 < out_rows) {
-        __global float * outp = dst + out_off;
+    __global float * outp = dst + out_off;
+    if (out_b_idx + 3 < n_rows) {
+        vstore4(convert_float4(acc0), 0, outp + 0*out_rows);
+        vstore4(convert_float4(acc1), 0, outp + 1*out_rows);
+        vstore4(convert_float4(acc2), 0, outp + 2*out_rows);
+        vstore4(convert_float4(acc3), 0, outp + 3*out_rows);
+    } else {
         if (out_b_idx + 0 < n_rows) vstore4(convert_float4(acc0), 0, outp + 0*out_rows);
         if (out_b_idx + 1 < n_rows) vstore4(convert_float4(acc1), 0, outp + 1*out_rows);
         if (out_b_idx + 2 < n_rows) vstore4(convert_float4(acc2), 0, outp + 2*out_rows);
         if (out_b_idx + 3 < n_rows) vstore4(convert_float4(acc3), 0, outp + 3*out_rows);
+    }
+}
+
+#ifdef cl_qcom_reqd_sub_group_size
+REQD_SUBGROUP_SIZE_128
+#endif
+kernel void kernel_indexed_q4_0_matvec_Ab_Bi_4x1_nosplit(
+    global const ushort * q,
+    global const half   * d,
+    __read_only image1d_buffer_t src1,
+    global const int    * ids,
+    global float        * dst,
+    int                   src_rows,
+    int                   out_rows,
+    int                   hidden_dim,
+    int                   n_rows) {
+    const int gid_n = get_global_id(0);
+    const int gid_m = get_group_id(1);
+    const int lid_m = get_local_id(1);
+    const int lsz_m = get_local_size(1);
+
+    const int k4_count = hidden_dim >> 2;
+    const int out_b_idx = gid_n << 2;
+    const int out = gid_m * lsz_m + lid_m;
+    if (out >= out_rows) {
+        return;
+    }
+    const int out_off = out + out_b_idx * out_rows;
+
+    const int row = ids[out];
+    const int b_row0_pix = out_b_idx * k4_count;
+
+    half acc0 = (half)0, acc1 = (half)0, acc2 = (half)0, acc3 = (half)0;
+
+    #define INDEXED_AB_BI4X1_NOSPLIT_ACCUM_K4(k4_value, sc_value) do { \
+        const int k4_idx = (k4_value); \
+        const half sc1 = (sc_value); \
+        const ulong q_base = (ulong) k4_idx * (ulong) src_rows; \
+        const ushort bits = q[q_base + row]; \
+        const int p = b_row0_pix + k4_idx; \
+        const half4 in0 = read_imageh(src1, p + 0*k4_count); \
+        const half4 in1 = read_imageh(src1, p + 1*k4_count); \
+        const half4 in2 = read_imageh(src1, p + 2*k4_count); \
+        const half4 in3 = read_imageh(src1, p + 3*k4_count); \
+        half w; \
+        w = ((bits & 0x000F) - 8) * sc1; \
+        acc0 += in0.s0 * w; \
+        acc1 += in1.s0 * w; \
+        acc2 += in2.s0 * w; \
+        acc3 += in3.s0 * w; \
+        w = (((bits & 0x00F0) >> 4) - 8) * sc1; \
+        acc0 += in0.s1 * w; \
+        acc1 += in1.s1 * w; \
+        acc2 += in2.s1 * w; \
+        acc3 += in3.s1 * w; \
+        w = (((bits & 0x0F00) >> 8) - 8) * sc1; \
+        acc0 += in0.s2 * w; \
+        acc1 += in1.s2 * w; \
+        acc2 += in2.s2 * w; \
+        acc3 += in3.s2 * w; \
+        w = (((bits & 0xF000) >> 12) - 8) * sc1; \
+        acc0 += in0.s3 * w; \
+        acc1 += in1.s3 * w; \
+        acc2 += in2.s3 * w; \
+        acc3 += in3.s3 * w; \
+    } while (0)
+
+    const int kb_count = hidden_dim >> 5;
+    for (int kb = 0; kb < kb_count; ++kb) {
+        const ulong d_base = (ulong) kb * (ulong) src_rows;
+        const half sc = d[d_base + row];
+        const int k4_base = kb << 3;
+        for (int kk = 0; kk < 8; ++kk) {
+            INDEXED_AB_BI4X1_NOSPLIT_ACCUM_K4(k4_base + kk, sc);
+        }
+    }
+
+    #undef INDEXED_AB_BI4X1_NOSPLIT_ACCUM_K4
+
+    __global float * outp = dst + out_off;
+    if (out_b_idx + 3 < n_rows) {
+        outp[0*out_rows] = convert_float(acc0);
+        outp[1*out_rows] = convert_float(acc1);
+        outp[2*out_rows] = convert_float(acc2);
+        outp[3*out_rows] = convert_float(acc3);
+    } else {
+        if (out_b_idx + 0 < n_rows) outp[0*out_rows] = convert_float(acc0);
+        if (out_b_idx + 1 < n_rows) outp[1*out_rows] = convert_float(acc1);
+        if (out_b_idx + 2 < n_rows) outp[2*out_rows] = convert_float(acc2);
+        if (out_b_idx + 3 < n_rows) outp[3*out_rows] = convert_float(acc3);
+    }
+}
+
+#ifdef cl_qcom_reqd_sub_group_size
+REQD_SUBGROUP_SIZE_128
+#endif
+kernel void kernel_indexed_q4_0_matvec_Ab_Bi_4x1_probe(
+    global const ushort * q,
+    global const half   * d,
+    __read_only image1d_buffer_t src1,
+    global const int    * ids,
+    global float        * dst,
+    int                   src_rows,
+    int                   out_rows,
+    int                   hidden_dim,
+    int                   n_rows) {
+    const int gid_n = get_global_id(0);
+    const int gid_m = get_group_id(1);
+    const int lid_m = get_local_id(1);
+    const int lsz_m = get_local_size(1);
+
+    const int k4_count = hidden_dim >> 2;
+    const int out_b_idx = gid_n << 2;
+    const int out = gid_m * lsz_m + lid_m;
+    if (out >= out_rows) {
+        return;
+    }
+    const int out_off = out + out_b_idx * out_rows;
+    const int row = ids[out];
+    const int b_row0_pix = out_b_idx * k4_count;
+
+    half acc0 = (half)0, acc1 = (half)0, acc2 = (half)0, acc3 = (half)0;
+
+    #define INDEXED_AB_BI4X1_PROBE_ACCUM_K4(k4_value, sc_value) do { \
+        const int k4_idx = (k4_value); \
+        ushort bits; \
+        half sc1; \
+        /* mode 1 removes indexed q/d reads and keeps B image + multiply pressure. */ \
+        if (INDEXED_AB_BI4X1_PROBE_MODE == 1) { \
+            bits = (ushort)0x9abcu; \
+            sc1 = (half)0.125f; \
+        } else { \
+            const ulong q_base = (ulong) k4_idx * (ulong) src_rows; \
+            bits = q[q_base + row]; \
+            sc1 = (sc_value); \
+        } \
+        half4 in0, in1, in2, in3; \
+        /* mode 2 removes B image reads and keeps q/d dequant + multiply pressure. */ \
+        if (INDEXED_AB_BI4X1_PROBE_MODE == 2) { \
+            in0 = (half4)((half)0.125f, (half)0.250f, (half)0.375f, (half)0.500f); \
+            in1 = (half4)((half)0.625f, (half)0.750f, (half)0.875f, (half)1.000f); \
+            in2 = (half4)((half)1.125f, (half)1.250f, (half)1.375f, (half)1.500f); \
+            in3 = (half4)((half)1.625f, (half)1.750f, (half)1.875f, (half)2.000f); \
+        } else { \
+            const int p = b_row0_pix + k4_idx; \
+            in0 = read_imageh(src1, p + 0*k4_count); \
+            in1 = read_imageh(src1, p + 1*k4_count); \
+            in2 = read_imageh(src1, p + 2*k4_count); \
+            in3 = read_imageh(src1, p + 3*k4_count); \
+        } \
+        if (INDEXED_AB_BI4X1_PROBE_MODE == 3) { \
+            const half use_bits = ((bits & (ushort)1u) ? (half)1.0f : (half)0.0f) * sc1; \
+            acc0 += in0.s0 + use_bits; \
+            acc1 += in1.s1 + use_bits; \
+            acc2 += in2.s2 + use_bits; \
+            acc3 += in3.s3 + use_bits; \
+        } else { \
+            half w; \
+            w = ((bits & 0x000F) - 8) * sc1; \
+            acc0 += in0.s0 * w; \
+            acc1 += in1.s0 * w; \
+            acc2 += in2.s0 * w; \
+            acc3 += in3.s0 * w; \
+            w = (((bits & 0x00F0) >> 4) - 8) * sc1; \
+            acc0 += in0.s1 * w; \
+            acc1 += in1.s1 * w; \
+            acc2 += in2.s1 * w; \
+            acc3 += in3.s1 * w; \
+            w = (((bits & 0x0F00) >> 8) - 8) * sc1; \
+            acc0 += in0.s2 * w; \
+            acc1 += in1.s2 * w; \
+            acc2 += in2.s2 * w; \
+            acc3 += in3.s2 * w; \
+            w = (((bits & 0xF000) >> 12) - 8) * sc1; \
+            acc0 += in0.s3 * w; \
+            acc1 += in1.s3 * w; \
+            acc2 += in2.s3 * w; \
+            acc3 += in3.s3 * w; \
+        } \
+    } while (0)
+
+    const int kb_count = hidden_dim >> 5;
+    for (int kb = 0; kb < kb_count; ++kb) {
+        const half sc = INDEXED_AB_BI4X1_PROBE_MODE == 1
+                ? (half)0.125f
+                : d[(ulong) kb * (ulong) src_rows + row];
+        const int k4_base = kb << 3;
+        for (int kk = 0; kk < 8; ++kk) {
+            INDEXED_AB_BI4X1_PROBE_ACCUM_K4(k4_base + kk, sc);
+        }
+    }
+
+    #undef INDEXED_AB_BI4X1_PROBE_ACCUM_K4
+
+    __global float * outp = dst + out_off;
+    if (out_b_idx + 3 < n_rows) {
+        outp[0*out_rows] = convert_float(acc0);
+        outp[1*out_rows] = convert_float(acc1);
+        outp[2*out_rows] = convert_float(acc2);
+        outp[3*out_rows] = convert_float(acc3);
+    } else {
+        if (out_b_idx + 0 < n_rows) outp[0*out_rows] = convert_float(acc0);
+        if (out_b_idx + 1 < n_rows) outp[1*out_rows] = convert_float(acc1);
+        if (out_b_idx + 2 < n_rows) outp[2*out_rows] = convert_float(acc2);
+        if (out_b_idx + 3 < n_rows) outp[3*out_rows] = convert_float(acc3);
     }
 }
 
@@ -1543,10 +1767,13 @@ kernel void kernel_indexed_q4_0_matvec_Ab_Bi_4x2_nosplit(
     const int k4_count = hidden_dim >> 2;
     const int out_b_idx = gid_n << 2;
     const int out2 = (gid_m * lsz_m + lid_m) << 1;
+    if (out2 + 1 >= out_rows) {
+        return;
+    }
     const int out_off = out2 + out_b_idx * out_rows;
 
-    const int row0 = out2 + 0 < out_rows ? ids[out2 + 0] : 0;
-    const int row1 = out2 + 1 < out_rows ? ids[out2 + 1] : 0;
+    const int row0 = ids[out2 + 0];
+    const int row1 = ids[out2 + 1];
 
     const int b_row0_pix = out_b_idx * k4_count;
 
@@ -1601,8 +1828,13 @@ kernel void kernel_indexed_q4_0_matvec_Ab_Bi_4x2_nosplit(
 
     #undef INDEXED_AB_BI4X2_NOSPLIT_ACCUM_K4
 
-    if (out2 + 1 < out_rows) {
-        __global float * outp = dst + out_off;
+    __global float * outp = dst + out_off;
+    if (out_b_idx + 3 < n_rows) {
+        vstore2(convert_float2(acc0), 0, outp + 0*out_rows);
+        vstore2(convert_float2(acc1), 0, outp + 1*out_rows);
+        vstore2(convert_float2(acc2), 0, outp + 2*out_rows);
+        vstore2(convert_float2(acc3), 0, outp + 3*out_rows);
+    } else {
         if (out_b_idx + 0 < n_rows) vstore2(convert_float2(acc0), 0, outp + 0*out_rows);
         if (out_b_idx + 1 < n_rows) vstore2(convert_float2(acc1), 0, outp + 1*out_rows);
         if (out_b_idx + 2 < n_rows) vstore2(convert_float2(acc2), 0, outp + 2*out_rows);
@@ -2314,6 +2546,30 @@ std::vector<size_t> make_linear_values(size_t limit) {
     return values;
 }
 
+std::vector<size_t> make_indexed_abi_wi_m_values(size_t limit, bool allow_all_non_power) {
+    if (allow_all_non_power) {
+        return make_linear_values(limit);
+    }
+
+    std::vector<size_t> values = make_power_of_two_values(limit);
+    // The direct indexed path is sensitive to row-tile occupancy; these catch
+    // measured Adreno local minima without paying for a full linear sweep.
+    static constexpr size_t kExtraCandidates[] = {
+        24, 27, 31, 40, 47, 48, 56, 63, 80, 95, 96, 97, 98, 99, 103,
+        112, 120, 122, 127, 160, 192, 200, 203, 216, 224, 240, 244,
+    };
+
+    for (const size_t value : kExtraCandidates) {
+        if (value <= limit) {
+            values.push_back(value);
+        }
+    }
+
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+    return values;
+}
+
 void print_usage(const char * argv0) {
     std::cout
         << "Usage: " << argv0 << " [options]\n\n"
@@ -2336,7 +2592,7 @@ void print_usage(const char * argv0) {
         << "  --seed N              RNG seed for synthetic score generation (default: 42)\n"
         << "  --kernel-dir PATH     Optional directory containing argsort.cl and set_rows.cl\n"
         << "  --ids-file PATH       Optional JSON/text int list to use as gather/indexed row ids\n"
-        << "  --search MODE         all | topk | bucket-topk | id-sort | gather | indexed (default: all)\n"
+        << "  --search MODE         all | topk | bucket-topk | id-sort | gather | indexed | indexed-probe (default: all)\n"
         << "  --allow-non-power-local\n"
         << "                        Also try exploratory non-power-of-two indexed Ab_Bi local sizes\n"
         << "  --verbose             Print every candidate result\n"
@@ -2418,6 +2674,7 @@ Options parse_options(int argc, char ** argv) {
             options.tune_id_sort = false;
             options.tune_gather = false;
             options.tune_indexed = false;
+            options.tune_indexed_probe = false;
 
             if (mode == "all") {
                 options.tune_topk = true;
@@ -2425,6 +2682,7 @@ Options parse_options(int argc, char ** argv) {
                 options.tune_id_sort = true;
                 options.tune_gather = true;
                 options.tune_indexed = true;
+                options.tune_indexed_probe = false;
             } else if (mode == "topk") {
                 options.tune_topk = true;
             } else if (mode == "bucket-topk") {
@@ -2435,6 +2693,8 @@ Options parse_options(int argc, char ** argv) {
                 options.tune_gather = true;
             } else if (mode == "indexed") {
                 options.tune_indexed = true;
+            } else if (mode == "indexed-probe") {
+                options.tune_indexed_probe = true;
             } else {
                 fail("invalid value for --search: " + mode);
             }
@@ -2566,6 +2826,7 @@ public:
         release_cl_handle(indexed_abi4_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi_nosplit_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi4_nosplit_matvec_kernel_, clReleaseKernel);
+        release_cl_handle(indexed_abi4_n1_nosplit_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi4_n2_nosplit_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi_lbtile_matvec_kernel_, clReleaseKernel);
         release_cl_handle(indexed_abi_prefetch_matvec_kernel_, clReleaseKernel);
@@ -2635,6 +2896,7 @@ public:
                   << " indexed-Ab_Bi4=" << indexed_abi4_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi-nosplit=" << indexed_abi_nosplit_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi4-nosplit=" << indexed_abi4_nosplit_matvec_kernel_max_wgs_
+                  << " indexed-Ab_Bi4-n1-nosplit=" << indexed_abi4_n1_nosplit_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi4-n2-nosplit=" << indexed_abi4_n2_nosplit_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi-localB=" << indexed_abi_lbtile_matvec_kernel_max_wgs_
                   << " indexed-Ab_Bi-prefetch=" << indexed_abi_prefetch_matvec_kernel_max_wgs_
@@ -2937,6 +3199,104 @@ public:
         return { dense_result, indexed_result };
     }
 
+    std::vector<IndexedProbeResult> search_indexed_probe() {
+        std::cout << "\n[indexed-probe] Decomposing Ab_Bi_4x1 direct indexed cost\n";
+        if (options_.lmhead_batch != 4) {
+            fail("--search indexed-probe currently expects --lmhead-batch 4");
+        }
+
+        const std::pair<int, const char *> modes[] = {
+            { 0, "full" },
+            { 1, "no-q-d-load" },
+            { 2, "no-B-image" },
+            { 3, "load-only" },
+        };
+
+        std::vector<IndexedProbeResult> all_results;
+        for (const auto & mode : modes) {
+            cl_program program = nullptr;
+            cl_kernel kernel = nullptr;
+
+            try {
+                std::ostringstream build_options;
+                build_options << "-cl-std=CL2.0"
+                              << " -cl-mad-enable -cl-unsafe-math-optimizations"
+                              << " -cl-finite-math-only -cl-fast-relaxed-math"
+                              << " -D INDEXED_AB_BI4X1_PROBE_MODE=" << mode.first;
+
+                program = build_program({ std::string(kQ4MatvecKernels) }, "indexed-probe", build_options.str().c_str());
+                kernel = create_kernel(program, "kernel_indexed_q4_0_matvec_Ab_Bi_4x1_probe");
+
+                const size_t kernel_limit = query_kernel_wgs(kernel);
+                const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : kernel_limit;
+                const size_t max_wi_m = std::min({ kernel_limit, device_max_work_group_size_, max_m, size_t(512) });
+                const std::vector<size_t> wi_m_values =
+                        make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
+
+                std::vector<IndexedProbeResult> mode_results;
+                for (size_t wi_m : wi_m_values) {
+                    try {
+                        const auto [avg_ms, min_ms] = benchmark_iterations(options_.warmup, options_.iters, [&]() {
+                            return run_indexed_abi_probe_once(kernel, wi_m);
+                        });
+                        const std::string label = std::string(mode.second) + " local=1x" + std::to_string(wi_m);
+                        mode_results.push_back({ label, wi_m, avg_ms, min_ms });
+                        if (options_.verbose) {
+                            std::cout << "  mode=" << mode.second
+                                      << " wi_m=" << wi_m
+                                      << " avg_ms=" << std::fixed << std::setprecision(3) << avg_ms
+                                      << " min_ms=" << min_ms << "\n";
+                        }
+                    } catch (const std::exception & e) {
+                        if (options_.verbose) {
+                            std::cout << "  mode=" << mode.second
+                                      << " wi_m=" << wi_m
+                                      << " invalid (" << e.what() << ")\n";
+                        }
+                    }
+                }
+
+                if (mode_results.empty()) {
+                    fail(std::string("no valid indexed probe candidates for mode ") + mode.second);
+                }
+
+                std::sort(mode_results.begin(), mode_results.end(),
+                          [](const IndexedProbeResult & lhs, const IndexedProbeResult & rhs) {
+                              return lhs.avg_ms < rhs.avg_ms;
+                          });
+
+                std::cout << "  Best " << mode.second
+                          << " : local=1x" << mode_results.front().wi_m
+                          << " avg_ms=" << std::fixed << std::setprecision(3) << mode_results.front().avg_ms
+                          << " min_ms=" << mode_results.front().min_ms << "\n";
+
+                all_results.insert(all_results.end(), mode_results.begin(), mode_results.end());
+                release_cl_handle(kernel, clReleaseKernel);
+                release_cl_handle(program, clReleaseProgram);
+            } catch (...) {
+                release_cl_handle(kernel, clReleaseKernel);
+                release_cl_handle(program, clReleaseProgram);
+                throw;
+            }
+        }
+
+        std::sort(all_results.begin(), all_results.end(),
+                  [](const IndexedProbeResult & lhs, const IndexedProbeResult & rhs) {
+                      return lhs.avg_ms < rhs.avg_ms;
+                  });
+
+        std::cout << "  Best indexed probe configs:\n";
+        const size_t topn = std::min<size_t>(8, all_results.size());
+        for (size_t i = 0; i < topn; ++i) {
+            std::cout << "    " << std::setw(2) << (i + 1)
+                      << ". " << all_results[i].label
+                      << " avg_ms=" << std::fixed << std::setprecision(3) << all_results[i].avg_ms
+                      << " min_ms=" << all_results[i].min_ms << "\n";
+        }
+
+        return all_results;
+    }
+
 private:
     void initialize_host_data() {
         std::mt19937 rng(static_cast<uint32_t>(options_.seed));
@@ -3108,6 +3468,7 @@ private:
         indexed_abi4_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_4x4");
         indexed_abi_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_8x4_nosplit");
         indexed_abi4_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_4x4_nosplit");
+        indexed_abi4_n1_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_4x1_nosplit");
         indexed_abi4_n2_nosplit_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_4x2_nosplit");
         indexed_abi_lbtile_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_8x4_lbtile");
         indexed_abi_prefetch_matvec_kernel_ = create_kernel(matvec_program_, "kernel_indexed_q4_0_matvec_Ab_Bi_8x4_nosplit_prefetch");
@@ -3128,6 +3489,7 @@ private:
         indexed_abi4_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi4_matvec_kernel_);
         indexed_abi_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi_nosplit_matvec_kernel_);
         indexed_abi4_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi4_nosplit_matvec_kernel_);
+        indexed_abi4_n1_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi4_n1_nosplit_matvec_kernel_);
         indexed_abi4_n2_nosplit_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi4_n2_nosplit_matvec_kernel_);
         indexed_abi_lbtile_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi_lbtile_matvec_kernel_);
         indexed_abi_prefetch_matvec_kernel_max_wgs_ = query_kernel_wgs(indexed_abi_prefetch_matvec_kernel_);
@@ -3733,7 +4095,9 @@ private:
         } else if (config.abi_prefetch) {
             kernel = indexed_abi_prefetch_matvec_kernel_;
         } else if (config.abi_no_split) {
-            kernel = config.abi_n_tile == 4 && config.abi_m_tile == 2
+            kernel = config.abi_n_tile == 4 && config.abi_m_tile == 1
+                    ? indexed_abi4_n1_nosplit_matvec_kernel_
+                    : (config.abi_n_tile == 4 && config.abi_m_tile == 2
                     ? indexed_abi4_n2_nosplit_matvec_kernel_
                     : (config.abi_m_tile == 8
                     ? indexed_abi_n8m8_nosplit_matvec_kernel_
@@ -3743,7 +4107,7 @@ private:
                     ? indexed_abi_n8m2_nosplit_matvec_kernel_
                     : (config.abi_n_tile == 4
                     ? indexed_abi4_nosplit_matvec_kernel_
-                    : indexed_abi_nosplit_matvec_kernel_))));
+                    : indexed_abi_nosplit_matvec_kernel_)))));
         } else {
             kernel = config.abi_n_tile == 4
                     ? indexed_abi4_matvec_kernel_
@@ -3791,6 +4155,44 @@ private:
                                                  global, local, 0, nullptr, nullptr),
                           "clEnqueueNDRangeKernel(indexed Ab_Bi matvec)");
         throw_on_cl_error(clFinish(queue_), "clFinish(indexed Ab_Bi matvec)");
+        const auto end = std::chrono::steady_clock::now();
+
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    }
+
+    double run_indexed_abi_probe_once(cl_kernel kernel, size_t wi_m) {
+        const int32_t hidden_dim = options_.hidden_dim;
+        const int32_t src_rows = src_rows_;
+        const int32_t out_rows = gather_rows_;
+        const int32_t n_rows = options_.lmhead_batch;
+
+        throw_on_cl_error(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_q_buffer_), "clSetKernelArg(indexed probe arg0)");
+        throw_on_cl_error(clSetKernelArg(kernel, 1, sizeof(cl_mem), &src_d_buffer_), "clSetKernelArg(indexed probe arg1)");
+        throw_on_cl_error(clSetKernelArg(kernel, 2, sizeof(cl_mem), &dense_b_image_), "clSetKernelArg(indexed probe arg2)");
+        throw_on_cl_error(clSetKernelArg(kernel, 3, sizeof(cl_mem), &gather_ids_buffer_), "clSetKernelArg(indexed probe arg3)");
+        throw_on_cl_error(clSetKernelArg(kernel, 4, sizeof(cl_mem), &indexed_out_buffer_), "clSetKernelArg(indexed probe arg4)");
+        throw_on_cl_error(clSetKernelArg(kernel, 5, sizeof(int32_t), &src_rows), "clSetKernelArg(indexed probe arg5)");
+        throw_on_cl_error(clSetKernelArg(kernel, 6, sizeof(int32_t), &out_rows), "clSetKernelArg(indexed probe arg6)");
+        throw_on_cl_error(clSetKernelArg(kernel, 7, sizeof(int32_t), &hidden_dim), "clSetKernelArg(indexed probe arg7)");
+        throw_on_cl_error(clSetKernelArg(kernel, 8, sizeof(int32_t), &n_rows), "clSetKernelArg(indexed probe arg8)");
+
+        constexpr size_t tile_n = 4;
+        constexpr size_t tile_m = 1;
+        const size_t wg_n = (static_cast<size_t>(n_rows) + tile_n - 1) / tile_n;
+        const size_t row_tiles = (static_cast<size_t>(out_rows) + tile_m - 1) / tile_m;
+        const size_t wg_m = (row_tiles + wi_m - 1) / wi_m;
+        if (wg_n == 0 || wg_m == 0) {
+            fail("indexed probe work size collapsed");
+        }
+
+        const size_t local[] = { 1, wi_m };
+        const size_t global[] = { wg_n, wg_m * wi_m };
+
+        const auto start = std::chrono::steady_clock::now();
+        throw_on_cl_error(clEnqueueNDRangeKernel(queue_, kernel, 2, nullptr,
+                                                 global, local, 0, nullptr, nullptr),
+                          "clEnqueueNDRangeKernel(indexed probe)");
+        throw_on_cl_error(clFinish(queue_), "clFinish(indexed probe)");
         const auto end = std::chrono::steady_clock::now();
 
         return std::chrono::duration<double, std::milli>(end - start).count();
@@ -4107,9 +4509,8 @@ private:
 
             for (size_t wi_k = 1; wi_k <= std::min(limit, max_k); wi_k <<= 1) {
                 const size_t max_wi_m = std::min({ limit / wi_k, max_m, size_t(256) });
-                const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
-                        ? make_linear_values(max_wi_m)
-                        : make_power_of_two_values(max_wi_m);
+                const std::vector<size_t> wi_m_values =
+                        make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
                 for (size_t wi_m : wi_m_values) {
                     if (wi_m * wi_k > limit) {
                         continue;
@@ -4126,11 +4527,23 @@ private:
             const size_t limit = std::min({ kernel_limit, device_max_work_group_size_, size_t(512) });
             const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
             const size_t max_wi_m = std::min(limit, max_m);
-            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
-                    ? make_linear_values(max_wi_m)
-                    : make_power_of_two_values(max_wi_m);
+            const std::vector<size_t> wi_m_values =
+                    make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
             for (size_t wi_m : wi_m_values) {
                 configs.push_back({ wi_m, 0, true, wi_m, 1, n_tile, true });
+            }
+        }
+
+        if (std::find(n_tiles.begin(), n_tiles.end(), 4) != n_tiles.end()) {
+            const size_t limit = std::min({ indexed_abi4_n1_nosplit_matvec_kernel_max_wgs_,
+                                            device_max_work_group_size_,
+                                            size_t(512) });
+            const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
+            const size_t max_wi_m = std::min(limit, max_m);
+            const std::vector<size_t> wi_m_values =
+                    make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
+            for (size_t wi_m : wi_m_values) {
+                configs.push_back({ wi_m, 0, true, wi_m, 1, 4, true, 1 });
             }
         }
 
@@ -4140,9 +4553,8 @@ private:
                                             size_t(512) });
             const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
             const size_t max_wi_m = std::min(limit, max_m);
-            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
-                    ? make_linear_values(max_wi_m)
-                    : make_power_of_two_values(max_wi_m);
+            const std::vector<size_t> wi_m_values =
+                    make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
             for (size_t wi_m : wi_m_values) {
                 configs.push_back({ wi_m, 0, true, wi_m, 1, 4, true, 2 });
             }
@@ -4154,9 +4566,8 @@ private:
                                             size_t(512) });
             const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
             const size_t max_wi_m = std::min(limit, max_m);
-            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
-                    ? make_linear_values(max_wi_m)
-                    : make_power_of_two_values(max_wi_m);
+            const std::vector<size_t> wi_m_values =
+                    make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
             for (size_t wi_m : wi_m_values) {
                 configs.push_back({ wi_m, 0, true, wi_m, 1, 8, true, 4, false, true });
             }
@@ -4168,9 +4579,8 @@ private:
                                             size_t(512) });
             const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
             const size_t max_wi_m = std::min(limit, max_m);
-            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
-                    ? make_linear_values(max_wi_m)
-                    : make_power_of_two_values(max_wi_m);
+            const std::vector<size_t> wi_m_values =
+                    make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
             for (size_t wi_m : wi_m_values) {
                 configs.push_back({ wi_m, 0, true, wi_m, 1, 8, true, 1 });
             }
@@ -4182,9 +4592,8 @@ private:
                                             size_t(512) });
             const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
             const size_t max_wi_m = std::min(limit, max_m);
-            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
-                    ? make_linear_values(max_wi_m)
-                    : make_power_of_two_values(max_wi_m);
+            const std::vector<size_t> wi_m_values =
+                    make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
             for (size_t wi_m : wi_m_values) {
                 configs.push_back({ wi_m, 0, true, wi_m, 1, 8, true, 2 });
             }
@@ -4196,23 +4605,21 @@ private:
                                             size_t(512) });
             const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
             const size_t max_wi_m = std::min(limit, max_m);
-            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
-                    ? make_linear_values(max_wi_m)
-                    : make_power_of_two_values(max_wi_m);
+            const std::vector<size_t> wi_m_values =
+                    make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
             for (size_t wi_m : wi_m_values) {
                 configs.push_back({ wi_m, 0, true, wi_m, 1, 8, true, 4, true });
             }
         }
 
-        if (options_.lmhead_batch >= 8) {
+        if (std::find(n_tiles.begin(), n_tiles.end(), 8) != n_tiles.end()) {
             const size_t limit = std::min({ indexed_abi_n8m8_nosplit_matvec_kernel_max_wgs_,
                                             device_max_work_group_size_,
                                             size_t(512) });
             const size_t max_m = device_max_work_item_sizes_.size() >= 2 ? device_max_work_item_sizes_[1] : limit;
             const size_t max_wi_m = std::min(limit, max_m);
-            const std::vector<size_t> wi_m_values = options_.allow_non_power_of_two_local
-                    ? make_linear_values(max_wi_m)
-                    : make_power_of_two_values(max_wi_m);
+            const std::vector<size_t> wi_m_values =
+                    make_indexed_abi_wi_m_values(max_wi_m, options_.allow_non_power_of_two_local);
             for (size_t wi_m : wi_m_values) {
                 configs.push_back({ wi_m, 0, true, wi_m, 1, 8, true, 8 });
             }
@@ -4450,7 +4857,9 @@ private:
                 : (config.abi_prefetch
                 ? indexed_abi_prefetch_matvec_kernel_max_wgs_
                 : (config.abi_no_split
-                ? (config.abi_n_tile == 4 && config.abi_m_tile == 2
+                ? (config.abi_n_tile == 4 && config.abi_m_tile == 1
+                    ? indexed_abi4_n1_nosplit_matvec_kernel_max_wgs_
+                    : (config.abi_n_tile == 4 && config.abi_m_tile == 2
                     ? indexed_abi4_n2_nosplit_matvec_kernel_max_wgs_
                     : (config.abi_m_tile == 8
                     ? indexed_abi_n8m8_nosplit_matvec_kernel_max_wgs_
@@ -4460,7 +4869,7 @@ private:
                     ? indexed_abi_n8m2_nosplit_matvec_kernel_max_wgs_
                     : (config.abi_n_tile == 4
                     ? indexed_abi4_nosplit_matvec_kernel_max_wgs_
-                    : indexed_abi_nosplit_matvec_kernel_max_wgs_)))))
+                    : indexed_abi_nosplit_matvec_kernel_max_wgs_))))))
                 : (config.abi_n_tile == 4
                 ? indexed_abi4_matvec_kernel_max_wgs_
                 : indexed_abi_matvec_kernel_max_wgs_)));
@@ -4478,14 +4887,26 @@ private:
         // the tuner permissive so we can see timing for those exploratory shapes.
         validate_indexed_matvec_output(dense_out_buffer_, "dense-Ab_Bi", 16.0f, options_.lmhead_batch);
 
-        return { config.abi_local_b ? "indexed-Ab_Bi-8x4-localB" :
-                 (config.abi_prefetch ? "indexed-Ab_Bi-8x4-nosplit-prefetch" :
-                 (config.abi_no_split ? (config.abi_m_tile == 8 ? "indexed-Ab_Bi-8x8-nosplit" :
-                                        (config.abi_m_tile == 1 ? "indexed-Ab_Bi-8x1-nosplit" :
-                                        (config.abi_m_tile == 2 ? (config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x2-nosplit" : "indexed-Ab_Bi-8x2-nosplit") :
-                                        (config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x4-nosplit" : "indexed-Ab_Bi-8x4-nosplit"))))
-                                     : (config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x4" : "indexed-Ab_Bi-8x4"))),
-                 config, avg_ms, min_ms };
+        std::string label;
+        if (config.abi_local_b) {
+            label = "indexed-Ab_Bi-8x4-localB";
+        } else if (config.abi_prefetch) {
+            label = "indexed-Ab_Bi-8x4-nosplit-prefetch";
+        } else if (config.abi_no_split) {
+            if (config.abi_m_tile == 8) {
+                label = "indexed-Ab_Bi-8x8-nosplit";
+            } else if (config.abi_m_tile == 1) {
+                label = config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x1-nosplit" : "indexed-Ab_Bi-8x1-nosplit";
+            } else if (config.abi_m_tile == 2) {
+                label = config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x2-nosplit" : "indexed-Ab_Bi-8x2-nosplit";
+            } else {
+                label = config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x4-nosplit" : "indexed-Ab_Bi-8x4-nosplit";
+            }
+        } else {
+            label = config.abi_n_tile == 4 ? "indexed-Ab_Bi-4x4" : "indexed-Ab_Bi-8x4";
+        }
+
+        return { label, config, avg_ms, min_ms };
     }
 
     cl_kernel create_kernel(cl_program program, const char * name) {
@@ -4598,6 +5019,7 @@ private:
     cl_kernel indexed_abi4_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi_nosplit_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi4_nosplit_matvec_kernel_ = nullptr;
+    cl_kernel indexed_abi4_n1_nosplit_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi4_n2_nosplit_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi_lbtile_matvec_kernel_ = nullptr;
     cl_kernel indexed_abi_prefetch_matvec_kernel_ = nullptr;
@@ -4618,6 +5040,7 @@ private:
     size_t indexed_abi4_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi_nosplit_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi4_nosplit_matvec_kernel_max_wgs_ = 0;
+    size_t indexed_abi4_n1_nosplit_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi4_n2_nosplit_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi_lbtile_matvec_kernel_max_wgs_ = 0;
     size_t indexed_abi_prefetch_matvec_kernel_max_wgs_ = 0;
@@ -4670,6 +5093,7 @@ int main(int argc, char ** argv) {
         std::optional<GatherResult> best_gather;
         std::optional<MatvecResult> dense_matvec;
         std::optional<MatvecResult> indexed_matvec;
+        std::optional<IndexedProbeResult> indexed_probe;
 
         if (options.tune_topk) {
             best_topk = tuner.search_topk();
@@ -4687,6 +5111,10 @@ int main(int argc, char ** argv) {
             const auto results = tuner.search_indexed_matvec();
             dense_matvec = results.first;
             indexed_matvec = results.second;
+        }
+        if (options.tune_indexed_probe) {
+            const auto results = tuner.search_indexed_probe();
+            indexed_probe = results.front();
         }
 
         std::cout << "\nRecommendation:\n";
@@ -4718,6 +5146,10 @@ int main(int argc, char ** argv) {
                       << " vs " << dense_matvec->label
                       << " avg_ms=" << dense_matvec->avg_ms
                       << " slowdown=" << (indexed_matvec->avg_ms / dense_matvec->avg_ms) << "x\n";
+        }
+        if (indexed_probe.has_value()) {
+            std::cout << "  indexed probe best  : " << indexed_probe->label
+                      << " avg_ms=" << std::fixed << std::setprecision(3) << indexed_probe->avg_ms << "\n";
         }
 
         return 0;
