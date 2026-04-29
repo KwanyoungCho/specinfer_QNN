@@ -2557,7 +2557,7 @@ int main(int argc, char ** argv) {
 
     if (bench_file.empty()) {
         fprintf(stderr, "Usage: %s --bench-file <prompts.jsonl> [speculative-eagle args...]\n", argv[0]);
-        fprintf(stderr, "\nRun EAGLE speculative decoding on multiple prompts (models loaded once).\n");
+        fprintf(stderr, "\nRun EAGLE-2 speculative decoding on multiple prompts (models loaded once).\n");
         fprintf(stderr, "  --bench-file FILE        JSONL file with prompts (Spec-Bench format) or plain text\n");
         fprintf(stderr, "  --chat-template TMPL     Chat template: llama3 (default), vicuna, none\n");
         fprintf(stderr, "  --no-chat-template       Same as --chat-template none\n");

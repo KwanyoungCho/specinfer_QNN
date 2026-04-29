@@ -4224,6 +4224,7 @@ int main(int argc, char ** argv) {
     int draft_target_delay_ms = 0;
     int target_draft_delay_ms = 0;
     DynamicSelectorConfig selector_config;
+    bool selector_top_k_explicit = false;
     std::string debug_compare_trimmed_gguf_path;
 
     std::vector<char *> new_argv;
@@ -4253,6 +4254,7 @@ int main(int argc, char ** argv) {
             rerank = true;
         } else if (arg == "--selector-top-k" && i + 1 < argc) {
             selector_config.top_k = std::stoi(argv[++i]);
+            selector_top_k_explicit = true;
         } else if ((arg == "--selector-softmax-threshold" || arg == "--selector-top-p") && i + 1 < argc) {
             selector_config.selector_softmax_threshold = std::stof(argv[++i]);
             selector_config.selector_softmax_threshold_enabled = true;
@@ -4340,8 +4342,8 @@ int main(int argc, char ** argv) {
             printf("  --target-draft-delay-ms N Sleep N ms after NPU verify before next GPU draft (default: 0)\n");
             printf("  --no-rerank        Disable token-level reranking\n\n");
             printf("Dynamic Selector / Reduced LM Head Options:\n");
-            printf("  --selector-top-k N                      Shortlist size/cap for selector output; 0 means uncapped with --selector-top-p (default: 64)\n");
-            printf("  --selector-top-p P                      Select ids with softmax(score) >= P; --selector-top-k is the optional cap\n");
+            printf("  --selector-top-k N                      Shortlist size/cap for selector output; 0 means uncapped with --selector-top-p (default: uncapped for top-p, otherwise 64)\n");
+            printf("  --selector-top-p P                      Select ids with softmax(score) >= P; pass --selector-top-k to cap\n");
             printf("  --selector-softmax-threshold P          Alias for --selector-top-p\n");
             printf("  --selector-runtime-buckets CSV|auto|off Bucket runtime LMHead rows to reduce realloc/init churn (default: off)\n");
             printf("  --selector-runtime-bucket-shrink-ratio R Shrink bucket after selected_rows <= current*R (default: 0.5)\n");
@@ -4382,6 +4384,10 @@ int main(int argc, char ** argv) {
 
     if (!common_params_parse(new_argc, new_argv_ptr, params, LLAMA_EXAMPLE_SPECULATIVE)) {
         return 1;
+    }
+
+    if (selector_config.selector_softmax_threshold_enabled && !selector_top_k_explicit) {
+        selector_config.top_k = 0;
     }
 
     if (params.n_predict < -1) {

@@ -75,6 +75,21 @@ static std::vector<int> parse_positive_int_list(const std::string & text) {
     return values;
 }
 
+static std::vector<std::string> parse_string_list(const std::string & text) {
+    std::vector<std::string> values;
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        const size_t first = item.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) {
+            continue;
+        }
+        const size_t last = item.find_last_not_of(" \t\r\n");
+        values.push_back(item.substr(first, last - first + 1));
+    }
+    return values;
+}
+
 static std::string join_int_list(const std::vector<int> & values) {
     std::ostringstream oss;
     for (size_t i = 0; i < values.size(); ++i) {
@@ -4869,8 +4884,10 @@ struct DraftSelectorDataConfig {
     std::string output_dir;
     int64_t max_samples = -1;
     int max_samples_per_prompt = -1;
-    int pos_cap = 8;
-    int neg_cap = 8;
+    int future_window = 8;
+    int draft_top_k = 32;
+    int target_top_k = 32;
+    int target_union_top_k = 128;
     bool save_hidden_fp16 = true;
     bool collect_generated_only = true;
 };
@@ -4878,9 +4895,79 @@ struct DraftSelectorDataConfig {
 struct PendingDraftSelectorSample {
     bool valid = false;
     std::vector<float> hidden;
+    std::vector<int32_t> draft_top32_ids;
     int32_t prompt_index = -1;
     int32_t decode_step = -1;
 };
+
+struct DraftSelectorRoundData {
+    std::vector<int32_t> future_used_ids;
+    std::vector<int32_t> accepted_ids;
+    std::vector<int32_t> bonus_accepted_ids;
+    std::vector<int32_t> rejected_ids;
+    std::vector<std::vector<int32_t>> target_top32_by_pos;
+    std::vector<int32_t> target_top128_union;
+};
+
+static std::vector<int32_t> top_token_ids_from_logits(const float * logits, int n_logits, int top_k) {
+    std::vector<int32_t> result;
+    if (logits == nullptr || n_logits <= 0 || top_k <= 0) {
+        return result;
+    }
+
+    const int limit = std::min(top_k, n_logits);
+    std::vector<int32_t> indices(n_logits);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::partial_sort(
+            indices.begin(),
+            indices.begin() + limit,
+            indices.end(),
+            [logits](int32_t a, int32_t b) {
+                return logits[a] > logits[b];
+            });
+    indices.resize(limit);
+    return indices;
+}
+
+static std::vector<int32_t> top_token_ids_from_candidates(
+        const std::vector<llama_token_data> & candidates,
+        int top_k) {
+    std::vector<int32_t> result;
+    if (candidates.empty() || top_k <= 0) {
+        return result;
+    }
+
+    const int limit = std::min<int>(top_k, candidates.size());
+    std::vector<int> indices(candidates.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::partial_sort(
+            indices.begin(),
+            indices.begin() + limit,
+            indices.end(),
+            [&candidates](int a, int b) {
+                const auto & ca = candidates[a];
+                const auto & cb = candidates[b];
+                if (ca.p != cb.p) {
+                    return ca.p > cb.p;
+                }
+                return ca.logit > cb.logit;
+            });
+
+    result.reserve(limit);
+    for (int i = 0; i < limit; ++i) {
+        const llama_token token = candidates[indices[i]].id;
+        if (token >= 0) {
+            result.push_back(static_cast<int32_t>(token));
+        }
+    }
+    return result;
+}
+
+static void append_unique_i32(std::vector<int32_t> & values, int32_t value) {
+    if (std::find(values.begin(), values.end(), value) == values.end()) {
+        values.push_back(value);
+    }
+}
 
 class DraftSelectorDataWriter {
 public:
@@ -4902,30 +4989,13 @@ public:
 
         const auto dir = std::filesystem::path(config_.output_dir);
         hidden_path_ = (dir / "hidden.fp16.bin").string();
-        pos_ids_path_ = (dir / "pos_ids.i32.bin").string();
-        pos_count_path_ = (dir / "pos_count.i32.bin").string();
-        neg_ids_path_ = (dir / "neg_ids.i32.bin").string();
-        neg_count_path_ = (dir / "neg_count.i32.bin").string();
-        draft_depth_path_ = (dir / "draft_depth.u8.bin").string();
-        accepted_flag_path_ = (dir / "accepted_flag.u8.bin").string();
-        prompt_index_path_ = (dir / "prompt_index.i32.bin").string();
-        decode_step_path_ = (dir / "decode_step.i32.bin").string();
-        branch_id_path_ = (dir / "branch_id.i32.bin").string();
+        samples_path_ = (dir / "samples.jsonl").string();
         meta_path_ = (dir / "meta.json").string();
 
         hidden_.open(hidden_path_, std::ios::binary);
-        pos_ids_.open(pos_ids_path_, std::ios::binary);
-        pos_count_.open(pos_count_path_, std::ios::binary);
-        neg_ids_.open(neg_ids_path_, std::ios::binary);
-        neg_count_.open(neg_count_path_, std::ios::binary);
-        draft_depth_.open(draft_depth_path_, std::ios::binary);
-        accepted_flag_.open(accepted_flag_path_, std::ios::binary);
-        prompt_index_.open(prompt_index_path_, std::ios::binary);
-        decode_step_.open(decode_step_path_, std::ios::binary);
-        branch_id_.open(branch_id_path_, std::ios::binary);
+        samples_.open(samples_path_, std::ios::out | std::ios::trunc);
 
-        if (!hidden_ || !pos_ids_ || !pos_count_ || !neg_ids_ || !neg_count_ ||
-            !draft_depth_ || !accepted_flag_ || !prompt_index_ || !decode_step_ || !branch_id_) {
+        if (!hidden_ || !samples_) {
             fprintf(stderr, "Error: failed to open draft selector data outputs under %s\n",
                     config_.output_dir.c_str());
             return false;
@@ -4950,13 +5020,10 @@ public:
     bool write_sample(
             const float * hidden,
             int hidden_dim,
-            const std::vector<int32_t> & pos_ids,
-            const std::vector<int32_t> & neg_ids,
-            uint8_t draft_depth,
-            uint8_t accepted_flag,
+            const DraftSelectorRoundData & round_data,
+            const std::vector<int32_t> & draft_top32_ids,
             int32_t prompt_index,
-            int32_t decode_step,
-            int32_t branch_id) {
+            int32_t decode_step) {
         if (!opened_) {
             return true;
         }
@@ -4973,20 +5040,29 @@ public:
         ggml_fp32_to_fp16_row(hidden, hidden_fp16.data(), hidden_dim_);
         hidden_.write(reinterpret_cast<const char *>(hidden_fp16.data()), hidden_fp16.size() * sizeof(ggml_fp16_t));
 
-        const int32_t pos_count_value = static_cast<int32_t>(std::min<int>(config_.pos_cap, pos_ids.size()));
-        const int32_t neg_count_value = static_cast<int32_t>(std::min<int>(config_.neg_cap, neg_ids.size()));
-        write_padded_i32_array(pos_ids_, pos_ids, config_.pos_cap);
-        write_scalar(pos_count_, pos_count_value);
-        write_padded_i32_array(neg_ids_, neg_ids, config_.neg_cap);
-        write_scalar(neg_count_, neg_count_value);
-        write_scalar(draft_depth_, draft_depth);
-        write_scalar(accepted_flag_, accepted_flag);
-        write_scalar(prompt_index_, prompt_index);
-        write_scalar(decode_step_, decode_step);
-        write_scalar(branch_id_, branch_id);
+        samples_ << "{";
+        samples_ << "\"sample_id\":" << num_samples_ << ",";
+        samples_ << "\"prompt_index\":" << prompt_index << ",";
+        samples_ << "\"decode_step\":" << decode_step << ",";
+        samples_ << "\"hidden_offset_elements\":" << (num_samples_ * hidden_dim_) << ",";
+        samples_ << "\"hidden_count\":" << hidden_dim_ << ",";
+        samples_ << "\"future_used_ids\":";
+        write_json_i32_array(samples_, round_data.future_used_ids);
+        samples_ << ",\"accepted_ids\":";
+        write_json_i32_array(samples_, round_data.accepted_ids);
+        samples_ << ",\"bonus_accepted_ids\":";
+        write_json_i32_array(samples_, round_data.bonus_accepted_ids);
+        samples_ << ",\"rejected_ids\":";
+        write_json_i32_array(samples_, round_data.rejected_ids);
+        samples_ << ",\"draft_top32_ids\":";
+        write_json_i32_array(samples_, draft_top32_ids);
+        samples_ << ",\"target_top32_by_pos\":";
+        write_json_i32_matrix(samples_, round_data.target_top32_by_pos);
+        samples_ << ",\"target_top128_union\":";
+        write_json_i32_array(samples_, round_data.target_top128_union);
+        samples_ << "}\n";
 
-        if (!hidden_ || !pos_ids_ || !pos_count_ || !neg_ids_ || !neg_count_ ||
-            !draft_depth_ || !accepted_flag_ || !prompt_index_ || !decode_step_ || !branch_id_) {
+        if (!hidden_ || !samples_) {
             fprintf(stderr, "Warning: failed while writing draft selector sample %lld\n",
                     (long long) num_samples_);
             return false;
@@ -5002,44 +5078,40 @@ public:
         }
 
         hidden_.flush();
-        pos_ids_.flush();
-        pos_count_.flush();
-        neg_ids_.flush();
-        neg_count_.flush();
-        draft_depth_.flush();
-        accepted_flag_.flush();
-        prompt_index_.flush();
-        decode_step_.flush();
-        branch_id_.flush();
+        samples_.flush();
 
         std::ofstream meta(meta_path_);
         if (meta.is_open()) {
             meta << "{\n";
-            meta << "  \"format\": \"draft_selector_data_v0\",\n";
+            meta << "  \"format\": \"draft_selector_data_v1\",\n";
             meta << "  \"collection_source\": \"eagle2_qnn_runtime\",\n";
-            meta << "  \"hidden_source\": \"temp3_last_verified_hidden\",\n";
-            meta << "  \"data_meaning_description\": \"Each sample stores the temp3 hidden used to start one EAGLE2 draft round, with compact positive token ids kept by target verification and hard negative draft token ids rejected by verification.\",\n";
+            meta << "  \"hidden_source\": \"h_t_temp3_last_verified_hidden\",\n";
+            meta << "  \"data_meaning_description\": \"Each sample stores the fp16 h_t hidden used to start one EAGLE2 draft round. samples.jsonl stores future used token ids, accepted/rejected speculative ids, draft top-32 ids, target per-position top-32 ids, and the de-duplicated union of target per-position top-128 ids.\",\n";
             meta << "  \"num_samples\": " << num_samples_ << ",\n";
             meta << "  \"hidden_dim\": " << hidden_dim_ << ",\n";
-            meta << "  \"pos_cap\": " << config_.pos_cap << ",\n";
-            meta << "  \"neg_cap\": " << config_.neg_cap << ",\n";
-            meta << "  \"hidden_dtype\": \"" << (config_.save_hidden_fp16 ? "float16" : "float32") << "\",\n";
+            meta << "  \"future_window\": " << config_.future_window << ",\n";
+            meta << "  \"draft_top_k\": " << config_.draft_top_k << ",\n";
+            meta << "  \"target_top_k\": " << config_.target_top_k << ",\n";
+            meta << "  \"target_union_top_k_per_pos\": " << config_.target_union_top_k << ",\n";
+            meta << "  \"hidden_dtype\": \"float16\",\n";
             meta << "  \"prompt_prefill_collected\": " << (config_.collect_generated_only ? "false" : "true") << ",\n";
             meta << "  \"files\": {\n";
             meta << "    \"hidden\": \"hidden.fp16.bin\",\n";
-            meta << "    \"pos_ids\": \"pos_ids.i32.bin\",\n";
-            meta << "    \"pos_count\": \"pos_count.i32.bin\",\n";
-            meta << "    \"neg_ids\": \"neg_ids.i32.bin\",\n";
-            meta << "    \"neg_count\": \"neg_count.i32.bin\",\n";
-            meta << "    \"draft_depth\": \"draft_depth.u8.bin\",\n";
-            meta << "    \"accepted_flag\": \"accepted_flag.u8.bin\",\n";
-            meta << "    \"prompt_index\": \"prompt_index.i32.bin\",\n";
-            meta << "    \"decode_step\": \"decode_step.i32.bin\",\n";
-            meta << "    \"branch_id\": \"branch_id.i32.bin\"\n";
+            meta << "    \"samples\": \"samples.jsonl\"\n";
+            meta << "  },\n";
+            meta << "  \"sample_schema\": {\n";
+            meta << "    \"future_used_ids\": \"actual generated token ids from t through t+W-1, truncated by future_window\",\n";
+            meta << "    \"accepted_ids\": \"draft token ids accepted by speculative verification within the future window\",\n";
+            meta << "    \"bonus_accepted_ids\": \"bonus token ids if a bonus-token path is used; empty for this runner\",\n";
+            meta << "    \"rejected_ids\": \"unique draft token ids rejected by verification within the future window\",\n";
+            meta << "    \"draft_top32_ids\": \"draft top-32 token ids from h_t\",\n";
+            meta << "    \"target_top32_by_pos\": \"target top-32 token ids for each captured future position\",\n";
+            meta << "    \"target_top128_union\": \"de-duplicated union of per-position target top-128 ids\"\n";
             meta << "  },\n";
             meta << "  \"collection_settings\": {\n";
             meta << "    \"max_samples\": " << config_.max_samples << ",\n";
             meta << "    \"max_samples_per_prompt\": " << config_.max_samples_per_prompt << ",\n";
+            meta << "    \"future_window\": " << config_.future_window << ",\n";
             meta << "    \"save_hidden_fp16\": " << (config_.save_hidden_fp16 ? "true" : "false") << ",\n";
             meta << "    \"collect_generated_only\": " << (config_.collect_generated_only ? "true" : "false") << "\n";
             meta << "  }\n";
@@ -5050,16 +5122,26 @@ public:
     }
 
 private:
-    template <typename T>
-    static void write_scalar(std::ofstream & ofs, const T & value) {
-        ofs.write(reinterpret_cast<const char *>(&value), sizeof(T));
+    static void write_json_i32_array(std::ofstream & ofs, const std::vector<int32_t> & values) {
+        ofs << "[";
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (i > 0) {
+                ofs << ",";
+            }
+            ofs << values[i];
+        }
+        ofs << "]";
     }
 
-    static void write_padded_i32_array(std::ofstream & ofs, const std::vector<int32_t> & values, int cap) {
-        for (int i = 0; i < cap; ++i) {
-            const int32_t value = i < static_cast<int>(values.size()) ? values[i] : -1;
-            write_scalar(ofs, value);
+    static void write_json_i32_matrix(std::ofstream & ofs, const std::vector<std::vector<int32_t>> & rows) {
+        ofs << "[";
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (i > 0) {
+                ofs << ",";
+            }
+            write_json_i32_array(ofs, rows[i]);
         }
+        ofs << "]";
     }
 
     DraftSelectorDataConfig config_;
@@ -5069,27 +5151,11 @@ private:
     int64_t num_samples_ = 0;
 
     std::string hidden_path_;
-    std::string pos_ids_path_;
-    std::string pos_count_path_;
-    std::string neg_ids_path_;
-    std::string neg_count_path_;
-    std::string draft_depth_path_;
-    std::string accepted_flag_path_;
-    std::string prompt_index_path_;
-    std::string decode_step_path_;
-    std::string branch_id_path_;
+    std::string samples_path_;
     std::string meta_path_;
 
     std::ofstream hidden_;
-    std::ofstream pos_ids_;
-    std::ofstream pos_count_;
-    std::ofstream neg_ids_;
-    std::ofstream neg_count_;
-    std::ofstream draft_depth_;
-    std::ofstream accepted_flag_;
-    std::ofstream prompt_index_;
-    std::ofstream decode_step_;
-    std::ofstream branch_id_;
+    std::ofstream samples_;
 };
 
 static void print_bench_eagle2_help(const char * argv0) {
@@ -5101,15 +5167,17 @@ static void print_bench_eagle2_help(const char * argv0) {
     printf("  --dataset-type TYPE           auto, specbench, sharegpt (default: auto)\n");
     printf("  --chat-template TYPE          llama3, vicuna, none (default: llama3)\n");
     printf("  --no-chat-template            Alias for --chat-template none\n");
+    printf("  --exclude-category CAT[,CAT]  Skip prompts whose category matches; repeatable\n");
     printf("  --bench-start N               Zero-based prompt start index (default: 0)\n");
     printf("  --bench-count N               Number of prompts to run (default: all)\n");
-    printf("  --collect-draft-selector-data Enable compact draft selector data collection\n");
-    printf("  --draft-selector-data-dir DIR Output directory for compact draft selector data\n");
-    printf("  --selector-max-samples N      Max compact samples to save (default: -1)\n");
-    printf("  --selector-max-samples-per-prompt N Max compact samples per prompt (default: -1)\n");
-    printf("  --selector-pos-cap N          Positive token id slots per sample (default: 8)\n");
-    printf("  --selector-neg-cap N          Negative token id slots per sample (default: 8)\n");
-    printf("  --selector-save-hidden-fp16   Save compact hidden states as fp16 (default: true)\n");
+    printf("  --collect-draft-selector-data Enable draft selector data collection\n");
+    printf("  --draft-selector-data-dir DIR Output directory for draft selector data\n");
+    printf("  --selector-max-samples N      Max samples to save (default: -1)\n");
+    printf("  --selector-max-samples-per-prompt N Max samples per prompt (default: -1)\n");
+    printf("  --selector-future-window N    Future token window W per sample (default: 8)\n");
+    printf("  --selector-pos-cap N          Legacy no-op; kept for old scripts\n");
+    printf("  --selector-neg-cap N          Legacy no-op; kept for old scripts\n");
+    printf("  --selector-save-hidden-fp16   Save hidden states as fp16 (default: true)\n");
     printf("  --selector-collect-generated-only Collect generated speculative steps only (default: true)\n");
     printf("  --dynamic-vocab               Enable dynamic reduced LM head path\n");
     printf("  --dry-run                     Parse prompts and options without loading models\n\n");
@@ -5130,6 +5198,7 @@ int main(int argc, char ** argv) {
     std::string results_dir;
     std::string dataset_type = "auto";
     std::string chat_template = "llama3";
+    std::set<std::string> excluded_categories;
     int bench_start = 0;
     int bench_count = -1;
     bool dry_run = false;
@@ -5150,6 +5219,10 @@ int main(int argc, char ** argv) {
             chat_template = argv[++i];
         } else if (arg == "--no-chat-template") {
             chat_template = "none";
+        } else if ((arg == "--exclude-category" || arg == "--skip-category") && i + 1 < argc) {
+            for (const auto & category : parse_string_list(argv[++i])) {
+                excluded_categories.insert(category);
+            }
         } else if (arg == "--bench-start" && i + 1 < argc) {
             bench_start = std::atoi(argv[++i]);
         } else if (arg == "--bench-count" && i + 1 < argc) {
@@ -5162,10 +5235,10 @@ int main(int argc, char ** argv) {
             draft_selector_data_config.max_samples = std::stoll(argv[++i]);
         } else if (arg == "--selector-max-samples-per-prompt" && i + 1 < argc) {
             draft_selector_data_config.max_samples_per_prompt = std::stoi(argv[++i]);
-        } else if (arg == "--selector-pos-cap" && i + 1 < argc) {
-            draft_selector_data_config.pos_cap = std::max(1, std::stoi(argv[++i]));
-        } else if (arg == "--selector-neg-cap" && i + 1 < argc) {
-            draft_selector_data_config.neg_cap = std::max(1, std::stoi(argv[++i]));
+        } else if ((arg == "--selector-pos-cap" || arg == "--selector-neg-cap") && i + 1 < argc) {
+            ++i;
+        } else if (arg == "--selector-future-window" && i + 1 < argc) {
+            draft_selector_data_config.future_window = std::max(1, std::stoi(argv[++i]));
         } else if (arg == "--selector-save-hidden-fp16") {
             draft_selector_data_config.save_hidden_fp16 = true;
         } else if (arg == "--selector-collect-generated-only") {
@@ -5346,12 +5419,12 @@ int main(int argc, char ** argv) {
             LOG_ERR("%s: --draft-selector-data-dir is required with --collect-draft-selector-data\n", __func__);
             return 1;
         }
-        if (draft_selector_data_config.pos_cap <= 0 || draft_selector_data_config.neg_cap <= 0) {
-            LOG_ERR("%s: --selector-pos-cap and --selector-neg-cap must be > 0\n", __func__);
+        if (draft_selector_data_config.future_window <= 0) {
+            LOG_ERR("%s: --selector-future-window must be > 0\n", __func__);
             return 1;
         }
         if (!draft_selector_data_config.collect_generated_only) {
-            LOG_ERR("%s: compact collector currently supports generated/speculative steps only\n", __func__);
+            LOG_ERR("%s: draft selector data collector currently supports generated/speculative steps only\n", __func__);
             return 1;
         }
     }
@@ -5394,6 +5467,26 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Error: no prompts loaded from %s\n", bench_file.c_str());
         return 1;
     }
+    if (!excluded_categories.empty()) {
+        const size_t before_filter = prompts.size();
+        prompts.erase(
+            std::remove_if(prompts.begin(), prompts.end(), [&](const bench_prompt & prompt) {
+                return excluded_categories.find(prompt.category) != excluded_categories.end();
+            }),
+            prompts.end());
+        fprintf(stderr,
+                "[%s] excluded %zu prompts by category",
+                SPEC_BENCH_EAGLE2_BACKEND_LABEL,
+                before_filter - prompts.size());
+        for (const auto & category : excluded_categories) {
+            fprintf(stderr, " %s", category.c_str());
+        }
+        fprintf(stderr, "\n");
+        if (prompts.empty()) {
+            fprintf(stderr, "Error: no prompts left after category exclusion\n");
+            return 1;
+        }
+    }
     const size_t idx_start = std::min<size_t>((size_t) bench_start, prompts.size());
     const size_t idx_end = bench_count < 0
             ? prompts.size()
@@ -5409,11 +5502,10 @@ int main(int argc, char ** argv) {
                 results_dir.c_str(),
                 selector_config.use_reduced_lmhead ? "enabled" : "disabled");
         if (draft_selector_data_config.enabled) {
-            fprintf(stderr, "[%s] compact draft selector data would be written under %s (pos_cap=%d neg_cap=%d max_samples=%lld max_per_prompt=%d)\n",
+            fprintf(stderr, "[%s] draft selector data would be written under %s (W=%d max_samples=%lld max_per_prompt=%d)\n",
                     SPEC_BENCH_EAGLE2_BACKEND_LABEL,
                     draft_selector_data_config.output_dir.c_str(),
-                    draft_selector_data_config.pos_cap,
-                    draft_selector_data_config.neg_cap,
+                    draft_selector_data_config.future_window,
                     (long long) draft_selector_data_config.max_samples,
                     draft_selector_data_config.max_samples_per_prompt);
         }
@@ -5564,10 +5656,12 @@ int main(int argc, char ** argv) {
         if (!draft_selector_data_writer.open(draft_selector_data_config, hidden_dim)) {
             return 1;
         }
-        LOG_INF("[draft-selector-data] compact collection enabled under '%s' (pos_cap=%d neg_cap=%d)\n",
+        LOG_INF("[draft-selector-data] collection enabled under '%s' (W=%d draft_top_k=%d target_top_k=%d target_union_top_k=%d)\n",
                 draft_selector_data_config.output_dir.c_str(),
-                draft_selector_data_config.pos_cap,
-                draft_selector_data_config.neg_cap);
+                draft_selector_data_config.future_window,
+                draft_selector_data_config.draft_top_k,
+                draft_selector_data_config.target_top_k,
+                draft_selector_data_config.target_union_top_k);
     }
 
     ReducedLmHeadContext lm_head_ctx;
@@ -6025,13 +6119,14 @@ int main(int argc, char ** argv) {
 
     auto verification_start = ggml_time_us();
 
-    PendingDraftSelectorSample pending_draft_selector_sample;
-    int32_t draft_selector_samples_this_prompt = 0;
-    int64_t draft_selector_generated_steps_processed = 0;
-    auto draft_selector_can_collect_for_prompt = [&]() -> bool {
-        if (!draft_selector_data_writer.enabled()) {
-            return false;
-        }
+	    PendingDraftSelectorSample pending_draft_selector_sample;
+	    int32_t draft_selector_samples_this_prompt = 0;
+	    int64_t draft_selector_generated_steps_processed = 0;
+	    const int target_vocab_size = llama_vocab_n_tokens(vocab_tgt);
+	    auto draft_selector_can_collect_for_prompt = [&]() -> bool {
+	        if (!draft_selector_data_writer.enabled()) {
+	            return false;
+	        }
         if (!draft_selector_data_writer.can_write_more()) {
             return false;
         }
@@ -6533,46 +6628,67 @@ int main(int argc, char ** argv) {
         ++main_selector_rounds_launched;
     };
 
-    while (true) {
-        int64_t step_fallback_sampling_us = 0;
-        const auto step_verify_logic_start = ggml_time_us();
-        std::vector<int32_t> draft_selector_pos_ids;
-        std::vector<int32_t> draft_selector_neg_ids;
-        uint8_t draft_selector_depth = 0;
-        uint8_t draft_selector_accepted_flag = 0;
-        int32_t draft_selector_branch_id = -1;
-        bool draft_selector_has_label = false;
-        auto draft_selector_add_unique = [](std::vector<int32_t> & ids, llama_token token) {
-            if (token < 0) {
-                return;
-            }
-            const int32_t value = static_cast<int32_t>(token);
-            if (std::find(ids.begin(), ids.end(), value) == ids.end()) {
-                ids.push_back(value);
-            }
-        };
-        auto draft_selector_note_position = [&](llama_token verified_token, int depth, int branch_id, bool accepted) {
-            draft_selector_add_unique(draft_selector_pos_ids, verified_token);
-            if (!draft_selector_has_label) {
-                draft_selector_depth = static_cast<uint8_t>(std::max(0, std::min(depth, 255)));
-                draft_selector_branch_id = branch_id;
-                draft_selector_has_label = true;
-            }
-            if (accepted) {
-                draft_selector_accepted_flag = 1;
-                if (draft_selector_branch_id < 0) {
-                    draft_selector_branch_id = branch_id;
-                }
-            }
-        };
-        auto draft_selector_note_negative = [&](llama_token rejected_token, int depth, int branch_id) {
-            draft_selector_add_unique(draft_selector_neg_ids, rejected_token);
-            if (!draft_selector_has_label) {
-                draft_selector_depth = static_cast<uint8_t>(std::max(0, std::min(depth, 255)));
-                draft_selector_branch_id = branch_id;
-                draft_selector_has_label = true;
-            }
-        };
+	    while (true) {
+	        int64_t step_fallback_sampling_us = 0;
+	        const auto step_verify_logic_start = ggml_time_us();
+	        DraftSelectorRoundData draft_selector_round_data;
+	        auto draft_selector_add_unique = [](std::vector<int32_t> & ids, llama_token token) {
+	            if (token < 0) {
+	                return;
+	            }
+	            const int32_t value = static_cast<int32_t>(token);
+	            append_unique_i32(ids, value);
+	        };
+	        auto draft_selector_should_capture_depth = [&](int depth) -> bool {
+	            return draft_selector_data_writer.enabled() &&
+	                   pending_draft_selector_sample.valid &&
+	                   depth >= 0 &&
+	                   depth < draft_selector_data_config.future_window;
+	        };
+	        auto draft_selector_capture_target_topk = [&](int sampled_tgt_batch_idx, int depth) {
+	            if (!draft_selector_should_capture_depth(depth) ||
+	                static_cast<int>(draft_selector_round_data.target_top32_by_pos.size()) >= draft_selector_data_config.future_window) {
+	                return;
+	            }
+
+	            const float * target_logits = llama_get_logits_ith(ctx_tgt, sampled_tgt_batch_idx);
+	            if (target_logits == nullptr) {
+	                draft_selector_round_data.target_top32_by_pos.push_back({});
+	                return;
+	            }
+
+	            draft_selector_round_data.target_top32_by_pos.push_back(
+	                    top_token_ids_from_logits(target_logits, target_vocab_size, draft_selector_data_config.target_top_k));
+
+	            const std::vector<int32_t> target_top128 =
+	                    top_token_ids_from_logits(target_logits, target_vocab_size, draft_selector_data_config.target_union_top_k);
+	            for (const int32_t token : target_top128) {
+	                append_unique_i32(draft_selector_round_data.target_top128_union, token);
+	            }
+	        };
+	        auto draft_selector_note_position = [&](llama_token verified_token, int depth, int branch_id, bool accepted) {
+	            (void) branch_id;
+	            if (!draft_selector_should_capture_depth(depth) ||
+	                static_cast<int>(draft_selector_round_data.future_used_ids.size()) >= draft_selector_data_config.future_window) {
+	                return;
+	            }
+
+	            if (verified_token >= 0) {
+	                draft_selector_round_data.future_used_ids.push_back(static_cast<int32_t>(verified_token));
+	            }
+	            if (accepted) {
+	                if (verified_token >= 0) {
+	                    draft_selector_round_data.accepted_ids.push_back(static_cast<int32_t>(verified_token));
+	                }
+	            }
+	        };
+	        auto draft_selector_note_negative = [&](llama_token rejected_token, int depth, int branch_id) {
+	            (void) branch_id;
+	            if (!draft_selector_should_capture_depth(depth)) {
+	                return;
+	            }
+	            draft_selector_add_unique(draft_selector_round_data.rejected_ids, rejected_token);
+	        };
         std::set<int> active_seqs = {};
 
         // print current draft sequences
@@ -6600,9 +6716,10 @@ int main(int argc, char ** argv) {
             // check if the target token matches any of the drafts
             // for stochastic sampling, attempt to match the token with the drafted tokens
             {
-                bool accept = false;
-                const int sampled_tgt_batch_idx = drafts[s_keep].i_batch_tgt[i_dft];
-                if (params.sampling.temp > 0) {
+	                bool accept = false;
+	                const int sampled_tgt_batch_idx = drafts[s_keep].i_batch_tgt[i_dft];
+	                draft_selector_capture_target_topk(sampled_tgt_batch_idx, i_dft);
+	                if (params.sampling.temp > 0) {
                     // stochastic verification
                     common_sampler_sample(smpl, ctx_tgt, sampled_tgt_batch_idx, true);
                     auto & dist_tgt = *common_sampler_get_candidates(smpl, true);
@@ -6836,25 +6953,21 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        if (draft_selector_data_writer.enabled()) {
-            if (pending_draft_selector_sample.valid) {
-                ++draft_selector_generated_steps_processed;
-                if (draft_selector_has_label &&
-                    !draft_selector_pos_ids.empty() &&
-                    draft_selector_can_collect_for_prompt()) {
-                    if (!draft_selector_data_writer.write_sample(
-                                pending_draft_selector_sample.hidden.data(),
-                                hidden_dim,
-                                draft_selector_pos_ids,
-                                draft_selector_neg_ids,
-                                draft_selector_depth,
-                                draft_selector_accepted_flag,
-                                pending_draft_selector_sample.prompt_index,
-                                pending_draft_selector_sample.decode_step,
-                                draft_selector_branch_id)) {
-                        return 1;
-                    }
-                    ++draft_selector_samples_this_prompt;
+	        if (draft_selector_data_writer.enabled()) {
+	            if (pending_draft_selector_sample.valid) {
+	                ++draft_selector_generated_steps_processed;
+	                if (!draft_selector_round_data.future_used_ids.empty() &&
+	                    draft_selector_can_collect_for_prompt()) {
+	                    if (!draft_selector_data_writer.write_sample(
+	                                pending_draft_selector_sample.hidden.data(),
+	                                hidden_dim,
+	                                draft_selector_round_data,
+	                                pending_draft_selector_sample.draft_top32_ids,
+	                                pending_draft_selector_sample.prompt_index,
+	                                pending_draft_selector_sample.decode_step)) {
+	                        return 1;
+	                    }
+	                    ++draft_selector_samples_this_prompt;
 
                     if ((draft_selector_data_writer.num_samples() % 100) == 0 ||
                         !draft_selector_data_writer.can_write_more()) {
@@ -7245,13 +7358,22 @@ int main(int argc, char ** argv) {
                     total_expansion_sampling_us += (t_samp_end - t_samp_start);
                 }
 
-                if (cur_candidates.empty()) {
-                    LOG_ERR("%s: no draft candidates available for seq=%d depth=%d (reduced=%s)\n",
-                            __func__, s, i, selector_config.use_reduced_lmhead ? "true" : "false");
-                    return 1;
-                }
+	                if (cur_candidates.empty()) {
+	                    LOG_ERR("%s: no draft candidates available for seq=%d depth=%d (reduced=%s)\n",
+	                            __func__, s, i, selector_config.use_reduced_lmhead ? "true" : "false");
+	                    return 1;
+	                }
 
-                const auto candidate_bookkeeping_start = ggml_time_us();
+	                if (draft_selector_data_writer.enabled() &&
+	                    pending_draft_selector_sample.valid &&
+	                    i == 0 &&
+	                    s == 0 &&
+	                    pending_draft_selector_sample.draft_top32_ids.empty()) {
+	                    pending_draft_selector_sample.draft_top32_ids =
+	                            top_token_ids_from_candidates(cur_candidates, draft_selector_data_config.draft_top_k);
+	                }
+	
+	                const auto candidate_bookkeeping_start = ggml_time_us();
                 // for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
                 //     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
                 //             k, s, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
