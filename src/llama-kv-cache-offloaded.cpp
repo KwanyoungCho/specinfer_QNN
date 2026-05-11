@@ -103,8 +103,11 @@ llama_kv_cache_offloaded::llama_kv_cache_offloaded(
         m_slots.emplace_back();
     }
 
-    // Allocate host buffers
+    // Allocate host buffers (LOAD-only: SSD -> host -> GPU)
     alloc_host_buffers();
+
+    // Allocate staging buffers (SAVE-only: GPU -> staging -> SSD)
+    alloc_staging_buffers();
 
     // Open SSD files
     open_ssd_files();
@@ -126,6 +129,7 @@ llama_kv_cache_offloaded::~llama_kv_cache_offloaded() {
     }
 
     close_ssd_files();
+    free_staging_buffers();
     free_host_buffers();
 }
 
@@ -163,6 +167,48 @@ void llama_kv_cache_offloaded::free_host_buffers() {
     for (auto & buf : m_host_bufs) {
         free(buf.k_data); buf.k_data = nullptr;
         free(buf.v_data); buf.v_data = nullptr;
+    }
+}
+
+// ============================================================================
+// Staging Buffer Management (SAVE-only: GPU → staging → SSD)
+// ============================================================================
+
+void llama_kv_cache_offloaded::alloc_staging_buffers() {
+    m_staging_bufs.resize(m_total_layers);
+
+    const auto & hp = get_hparams();
+
+    for (uint32_t il = 0; il < m_total_layers; il++) {
+        uint32_t n_embd_k = hp.n_embd_k_gqa(il);
+        uint32_t n_embd_v = hp.n_embd_v_gqa(il);  // non-transposed only
+
+        size_t k_row = (size_t)n_embd_k * ggml_type_size(m_type_k) / ggml_blck_size(m_type_k);
+        size_t v_row = (size_t)n_embd_v * ggml_type_size(m_type_v) / ggml_blck_size(m_type_v);
+
+        size_t k_cap = k_row * MAX_STAGING_TOKENS;
+        size_t v_cap = v_row * MAX_STAGING_TOKENS;
+
+        m_staging_bufs[il].k_data     = malloc(k_cap);
+        m_staging_bufs[il].v_data     = malloc(v_cap);
+        m_staging_bufs[il].k_capacity = k_cap;
+        m_staging_bufs[il].v_capacity = v_cap;
+
+        if (!m_staging_bufs[il].k_data || !m_staging_bufs[il].v_data) {
+            throw std::runtime_error("[KV-Offload] Failed to allocate staging buffers");
+        }
+    }
+
+    size_t total_staging = 0;
+    for (auto & sb : m_staging_bufs) total_staging += sb.k_capacity + sb.v_capacity;
+    printf("[KV-Offload] Allocated %u staging buffers (%.2f MB total, max %u tokens)\n",
+           m_total_layers, total_staging / (1024.0 * 1024.0), MAX_STAGING_TOKENS);
+}
+
+void llama_kv_cache_offloaded::free_staging_buffers() {
+    for (auto & sb : m_staging_bufs) {
+        free(sb.k_data); sb.k_data = nullptr;
+        free(sb.v_data); sb.v_data = nullptr;
     }
 }
 
@@ -218,20 +264,14 @@ void llama_kv_cache_offloaded::io_worker_loop() {
             m_io_queue.pop();
         }
 
-        if (task.op == io_op::LOAD) {
-            execute_load(task);
-        } else {
-            execute_save(task);
-        }
+        execute_load(task);
     }
 }
 
 void llama_kv_cache_offloaded::execute_load(const io_task & task) {
-    // SSD -> host buffer
     KV_DBG("[KV-DBG] worker: LOAD layer=%u slot=%u\n", task.model_layer, task.slot_id);
     ssd_read_layer(task.model_layer, task.slot_id);
 
-    // Signal completion
     auto & slot = m_slots[task.slot_id];
     {
         std::lock_guard<std::mutex> lock(slot.mtx);
@@ -241,22 +281,6 @@ void llama_kv_cache_offloaded::execute_load(const io_task & task) {
     }
     slot.cv.notify_all();
     m_stats.loads++;
-}
-
-void llama_kv_cache_offloaded::execute_save(const io_task & task) {
-    // host buffer -> SSD (delta only)
-    KV_DBG("[KV-DBG] worker: SAVE layer=%u slot=%u cells=[%u..%u)\n",
-           task.model_layer, task.slot_id, task.cell_start, task.cell_start + task.cell_count);
-    ssd_write_delta(task.model_layer, task.slot_id, task.cell_start, task.cell_count);
-    m_stats.saves++;
-
-    // Signal that host buffer is no longer needed (prefill reuse safety)
-    auto & slot = m_slots[task.slot_id];
-    {
-        std::lock_guard<std::mutex> lock(slot.mtx);
-        slot.save_pending.store(false);
-    }
-    slot.cv.notify_all();
 }
 
 // ============================================================================
@@ -276,56 +300,51 @@ void llama_kv_cache_offloaded::ssd_read_layer(uint32_t model_layer, uint32_t slo
     }
 }
 
-void llama_kv_cache_offloaded::ssd_write_delta(uint32_t model_layer, uint32_t slot_id,
-                                                 uint32_t cell_start, uint32_t cell_count) {
-    if (cell_count == 0) return;
-
+void llama_kv_cache_offloaded::ssd_write_full_layer(uint32_t model_layer, uint32_t slot_id) {
     auto & sl  = m_ssd_layers[model_layer];
     auto & buf = m_host_bufs[slot_id];
+
+    ssize_t kw = pwrite(sl.fd_k, buf.k_data, sl.k_total_bytes, 0);
+    ssize_t vw = pwrite(sl.fd_v, buf.v_data, sl.v_total_bytes, 0);
+
+    if (kw < (ssize_t)sl.k_total_bytes || vw < (ssize_t)sl.v_total_bytes) {
+        fprintf(stderr, "[KV-Offload] WARNING: pwrite full layer %u: k=%zd/%zu v=%zd/%zu\n",
+                model_layer, kw, sl.k_total_bytes, vw, sl.v_total_bytes);
+    }
+}
+
+void llama_kv_cache_offloaded::ssd_write_staging_delta(uint32_t model_layer) {
+    if (m_staging_delta_count == 0) return;
+
+    auto & sl  = m_ssd_layers[model_layer];
+    auto & stg = m_staging_bufs[model_layer];
 
     const auto & hp = get_hparams();
     uint32_t n_embd_k = hp.n_embd_k_gqa(model_layer);
 
-    // K: row-major, contiguous delta
+    // K: staging stores compact [0, delta_count * k_row), write at SSD offset
     {
-        size_t k_row_bytes = (size_t)n_embd_k * ggml_type_size(m_type_k) / ggml_blck_size(m_type_k);
-        size_t k_offset = (size_t)cell_start * k_row_bytes;
-        size_t k_delta  = (size_t)cell_count * k_row_bytes;
+        size_t k_row = (size_t)n_embd_k * ggml_type_size(m_type_k) / ggml_blck_size(m_type_k);
+        size_t k_off = (size_t)m_staging_delta_head * k_row;
+        size_t k_len = (size_t)m_staging_delta_count * k_row;
 
-        ssize_t w = pwrite(sl.fd_k, (char *)buf.k_data + k_offset, k_delta, (off_t)k_offset);
+        ssize_t w = pwrite(sl.fd_k, stg.k_data, k_len, (off_t)k_off);
         if (w < 0) {
-            printf("[KV-Offload] WARNING: pwrite K failed for layer %u\n", model_layer);
+            printf("[KV-Offload] WARNING: pwrite staging K failed for layer %u\n", model_layer);
         }
     }
 
-    // V: depends on v_trans
+    // V: only when !v_trans (cells contiguous).  When v_trans, V is saved
+    // directly in eval_callback via save_v_full() (full tensor → SSD).
     if (!m_v_trans) {
-        // Non-transposed: same as K
         uint32_t n_embd_v = hp.n_embd_v_gqa(model_layer);
-        size_t v_row_bytes = (size_t)n_embd_v * ggml_type_size(m_type_v) / ggml_blck_size(m_type_v);
-        size_t v_offset = (size_t)cell_start * v_row_bytes;
-        size_t v_delta  = (size_t)cell_count * v_row_bytes;
+        size_t v_row = (size_t)n_embd_v * ggml_type_size(m_type_v) / ggml_blck_size(m_type_v);
+        size_t v_off = (size_t)m_staging_delta_head * v_row;
+        size_t v_len = (size_t)m_staging_delta_count * v_row;
 
-        ssize_t w = pwrite(sl.fd_v, (char *)buf.v_data + v_offset, v_delta, (off_t)v_offset);
+        ssize_t w = pwrite(sl.fd_v, stg.v_data, v_len, (off_t)v_off);
         if (w < 0) {
-            printf("[KV-Offload] WARNING: pwrite V failed for layer %u\n", model_layer);
-        }
-    } else {
-        // Transposed V: data is [n_embd_v_gqa, kv_size] with strided layout
-        // For each embedding dimension, the cells are contiguous
-        uint32_t n_embd_v = hp.n_embd_v_gqa_max();
-        size_t el_size = ggml_type_size(m_type_v) / ggml_blck_size(m_type_v);
-
-        for (uint32_t j = 0; j < n_embd_v; j++) {
-            size_t offset = ((size_t)cell_start + (size_t)j * m_kv_size) * el_size;
-            size_t delta  = (size_t)cell_count * el_size;
-
-            ssize_t w = pwrite(sl.fd_v, (char *)buf.v_data + offset, delta, (off_t)offset);
-            if (w < 0) {
-                printf("[KV-Offload] WARNING: pwrite V (trans) failed for layer %u dim %u\n",
-                       model_layer, j);
-                break;
-            }
+            printf("[KV-Offload] WARNING: pwrite staging V failed for layer %u\n", model_layer);
         }
     }
 }
@@ -334,56 +353,75 @@ void llama_kv_cache_offloaded::ssd_write_delta(uint32_t model_layer, uint32_t sl
 // Tensor <-> Host Buffer (main thread only, backend must be synchronized)
 // ============================================================================
 
-void llama_kv_cache_offloaded::tensor_to_host(uint32_t /*model_layer*/, uint32_t slot_id) {
+void llama_kv_cache_offloaded::tensor_to_host(uint32_t model_layer, uint32_t slot_id) {
     ggml_tensor * k = get_layer_k(slot_id);
     ggml_tensor * v = get_layer_v(slot_id);
     auto & buf = m_host_bufs[slot_id];
+    auto & sl  = m_ssd_layers[model_layer];
 
-    ggml_backend_tensor_get(k, buf.k_data, 0, buf.k_size);
-    ggml_backend_tensor_get(v, buf.v_data, 0, buf.v_size);
+    ggml_backend_tensor_get(k, buf.k_data, 0, sl.k_total_bytes);
+    ggml_backend_tensor_get(v, buf.v_data, 0, sl.v_total_bytes);
 }
 
-void llama_kv_cache_offloaded::tensor_to_host_delta(uint32_t model_layer, uint32_t slot_id,
-                                                      uint32_t cell_start, uint32_t cell_count) {
+void llama_kv_cache_offloaded::capture_delta_to_staging(uint32_t model_layer, uint32_t slot_id) {
+    uint32_t cell_start = m_delta_head;
+    uint32_t cell_count = m_delta_count;
     if (cell_count == 0) return;
 
+    assert(cell_count <= MAX_STAGING_TOKENS);
+
     ggml_tensor * k = get_layer_k(slot_id);
-    ggml_tensor * v = get_layer_v(slot_id);
-    auto & buf = m_host_bufs[slot_id];
+    auto & stg = m_staging_bufs[model_layer];
 
     const auto & hp = get_hparams();
     uint32_t n_embd_k = hp.n_embd_k_gqa(model_layer);
 
-    // K: [n_embd_k_gqa, kv_size] — rows are contiguous, delta is a contiguous slice
+    // K: read from GPU at [cell_start, cell_start+cell_count) → staging compact [0, k_len)
     {
         size_t k_row = (size_t)n_embd_k * ggml_type_size(m_type_k) / ggml_blck_size(m_type_k);
         size_t k_off = (size_t)cell_start * k_row;
         size_t k_len = (size_t)cell_count * k_row;
-        ggml_backend_tensor_get(k, (char *)buf.k_data + k_off, k_off, k_len);
+        ggml_backend_tensor_get(k, stg.k_data, k_off, k_len);
     }
 
-    // V: layout depends on v_trans
+    // V: only when !v_trans (cells contiguous).  When v_trans, V is saved
+    // directly from GPU → host_buf → SSD via save_v_full() in eval_callback.
     if (!m_v_trans) {
-        // Non-transposed: same layout as K
+        ggml_tensor * v = get_layer_v(slot_id);
         uint32_t n_embd_v = hp.n_embd_v_gqa(model_layer);
         size_t v_row = (size_t)n_embd_v * ggml_type_size(m_type_v) / ggml_blck_size(m_type_v);
         size_t v_off = (size_t)cell_start * v_row;
         size_t v_len = (size_t)cell_count * v_row;
-        ggml_backend_tensor_get(v, (char *)buf.v_data + v_off, v_off, v_len);
-    } else {
-        // Transposed V: [n_embd_v_gqa, kv_size] — cells are strided per embedding dim
-        // Copy full tensor in one DMA call to avoid n_embd_v separate GPU→CPU transfers
-        ggml_backend_tensor_get(v, buf.v_data, 0, buf.v_size);
+        ggml_backend_tensor_get(v, stg.v_data, v_off, v_len);
     }
 }
 
-void llama_kv_cache_offloaded::host_to_tensor(uint32_t /*model_layer*/, uint32_t slot_id) {
+void llama_kv_cache_offloaded::host_to_tensor(uint32_t model_layer, uint32_t slot_id) {
     ggml_tensor * k = get_layer_k(slot_id);
     ggml_tensor * v = get_layer_v(slot_id);
     auto & buf = m_host_bufs[slot_id];
+    auto & sl  = m_ssd_layers[model_layer];
 
-    ggml_backend_tensor_set(k, buf.k_data, 0, buf.k_size);
-    ggml_backend_tensor_set(v, buf.v_data, 0, buf.v_size);
+    ggml_backend_tensor_set(k, buf.k_data, 0, sl.k_total_bytes);
+    ggml_backend_tensor_set(v, buf.v_data, 0, sl.v_total_bytes);
+}
+
+// Full V save for v_trans mode: GPU → host_buf → SSD (synchronous).
+// When v_trans=true the V cells are scattered (column-major), so the
+// compact staging delta path cannot be used.  Instead we copy the entire
+// V tensor through the host buffer each time a layer completes.
+void llama_kv_cache_offloaded::save_v_full(uint32_t model_layer, uint32_t slot_id) {
+    ggml_tensor * v = get_layer_v(slot_id);
+    auto & buf = m_host_bufs[slot_id];
+    auto & sl  = m_ssd_layers[model_layer];
+
+    ggml_backend_tensor_get(v, buf.v_data, 0, sl.v_total_bytes);
+
+    ssize_t w = pwrite(sl.fd_v, buf.v_data, sl.v_total_bytes, 0);
+    if (w < (ssize_t)sl.v_total_bytes) {
+        fprintf(stderr, "[KV-Offload] WARNING: save_v_full layer %u: %zd/%zu\n",
+                model_layer, w, sl.v_total_bytes);
+    }
 }
 
 // ============================================================================
@@ -396,11 +434,9 @@ void llama_kv_cache_offloaded::queue_prefetch(uint32_t model_layer) {
     uint32_t slot = layer_to_slot(model_layer);
     auto & s = m_slots[slot];
 
-    // Don't queue if already pending or complete for this layer
     if (s.prefetch_pending.load() && s.prefetch_target_layer == (int32_t)model_layer) return;
     if (s.prefetch_complete.load() && s.prefetch_target_layer == (int32_t)model_layer) return;
 
-    // Reset slot state
     {
         std::lock_guard<std::mutex> lock(s.mtx);
         s.prefetch_pending.store(true);
@@ -409,7 +445,6 @@ void llama_kv_cache_offloaded::queue_prefetch(uint32_t model_layer) {
     }
 
     io_task task;
-    task.op          = io_op::LOAD;
     task.model_layer = model_layer;
     task.slot_id     = slot;
 
@@ -430,17 +465,14 @@ void llama_kv_cache_offloaded::wait_and_load_layer(uint32_t model_layer) {
     uint32_t slot = layer_to_slot(model_layer);
     auto & s = m_slots[slot];
 
-    // If already resident with correct layer, nothing to do
     if (s.resident_layer == (int32_t)model_layer && !s.prefetch_pending.load()) {
         m_stats.prefetch_hits++;
         KV_DBG("[KV-DBG] wait_and_load: layer=%u slot=%u HIT (resident)\n", model_layer, slot);
         return;
     }
 
-    // Wait for prefetch to complete
     if (s.prefetch_pending.load() || !s.prefetch_complete.load()) {
-        KV_DBG("[KV-DBG] wait_and_load: layer=%u slot=%u WAITING (pending=%d complete=%d)\n",
-               model_layer, slot, s.prefetch_pending.load(), s.prefetch_complete.load());
+        KV_DBG("[KV-DBG] wait_and_load: layer=%u slot=%u WAITING\n", model_layer, slot);
         std::unique_lock<std::mutex> lock(s.mtx);
         s.cv.wait(lock, [&] {
             return s.prefetch_complete.load() || m_shutdown.load();
@@ -453,55 +485,70 @@ void llama_kv_cache_offloaded::wait_and_load_layer(uint32_t model_layer) {
     if (m_shutdown.load()) return;
 
     KV_DBG("[KV-DBG] wait_and_load: layer=%u slot=%u -> host_to_tensor\n", model_layer, slot);
-
-    // Host buffer -> tensor (main thread, backend synchronized)
     host_to_tensor(model_layer, slot);
 
     s.resident_layer = (int32_t)model_layer;
     s.prefetch_complete.store(false);
 }
 
-void llama_kv_cache_offloaded::save_layer_delta(uint32_t model_layer,
-                                                  uint32_t cell_start, uint32_t cell_count) {
-    uint32_t slot = layer_to_slot(model_layer);
+void llama_kv_cache_offloaded::flush_saves() {
+    if (!m_staging_dirty) return;
 
-    // First: tensor -> host buffer (delta only, main thread, backend synchronized)
-    tensor_to_host_delta(model_layer, slot, cell_start, cell_count);
+    KV_DBG("[KV-DBG] flush_saves: delta=[%u+%u] for %u layers\n",
+           m_staging_delta_head, m_staging_delta_count, m_total_layers);
 
-    // Then: async host buffer -> SSD
-    io_task task;
-    task.op          = io_op::SAVE;
-    task.model_layer = model_layer;
-    task.slot_id     = slot;
-    task.cell_start  = cell_start;
-    task.cell_count  = cell_count;
-
-    {
-        std::lock_guard<std::mutex> lock(m_io_mutex);
-        m_io_queue.push(task);
+    for (uint32_t il = 0; il < m_total_layers; il++) {
+        ssd_write_staging_delta(il);
     }
-    m_io_cv.notify_one();
+    m_staging_dirty = false;
+    m_stats.saves += m_total_layers;
 }
 
 void llama_kv_cache_offloaded::prepare_target_pass() {
-    // Pre-warm: queue prefetch for layers 0..m-1 during draft phase
     reset_layer_tracking();
 
     if (m_is_prefill) {
-        KV_DBG("[KV-DBG] prepare_target_pass: PREFILL mode, skipping prefetch\n");
+        KV_DBG("[KV-DBG] prepare_target_pass: PREFILL mode, skipping\n");
         return;
     }
 
-    KV_DBG("[KV-DBG] prepare_target_pass: queuing prefetch for layers 0..%u\n", m_pool_slots - 1);
-    for (uint32_t il = 0; il < m_pool_slots && il < m_total_layers; il++) {
+    // 1. Flush staging deltas to SSD (synchronous, tiny)
+    flush_saves();
+
+    // 2. Queue async prefetch for layers 0..m-1 (all pool slots)
+    uint32_t n_prefetch = std::min(m_pool_slots, m_total_layers);
+
+    KV_DBG("[KV-DBG] prepare_target_pass: flush done, queuing prefetch for layers 0..%u\n",
+           n_prefetch - 1);
+
+    for (uint32_t il = 0; il < n_prefetch; il++) {
         queue_prefetch(il);
+    }
+    // Returns immediately — I/O proceeds in parallel with draft phase.
+}
+
+void llama_kv_cache_offloaded::begin_target_verify() {
+    if (m_is_prefill) return;
+
+    // 1. Wait for layers 0..m-2 and load into GPU tensors
+    uint32_t n_preload = (m_pool_slots > 1) ? (m_pool_slots - 1) : 1;
+    if (n_preload > m_total_layers) n_preload = m_total_layers;
+
+    KV_DBG("[KV-DBG] begin_target_verify: wait+load layers 0..%u\n", n_preload - 1);
+
+    for (uint32_t il = 0; il < n_preload; il++) {
+        wait_and_load_layer(il);
+    }
+
+    // 2. Queue prefetch for layer m-1 so it loads while GPU computes 0..m-2
+    if (n_preload < m_total_layers) {
+        queue_prefetch(n_preload);
     }
 }
 
 void llama_kv_cache_offloaded::on_verify_complete(uint32_t n_accepted) {
-    // After first target pass, we're no longer in prefill mode
     m_is_prefill = false;
-    (void)n_accepted; // delta save already handled per-layer in cb_eval
+    (void)n_accepted;
 }
 
 // ============================================================================
@@ -512,17 +559,12 @@ bool llama_kv_cache_offloaded::eval_callback(struct ggml_tensor * tensor, bool a
     auto * cb_data = static_cast<kv_offload_cb_data *>(user_data);
     auto * off = cb_data->offloader;
 
-    // Parse layer index from tensor name "kqv_out-{il}"
     int il = -1;
     bool is_kqv_out = (sscanf(tensor->name, "kqv_out-%d", &il) == 1);
-
-    // Also check for result_norm (for user callback composition)
     bool is_result_norm = (strcmp(tensor->name, "result_norm") == 0);
 
     if (ask) {
-        // We want to intercept kqv_out-{il} for layer boundary control
         if (is_kqv_out) return true;
-        // Forward to user callback
         if (off->m_user_cb) {
             return off->m_user_cb(tensor, true, cb_data->user_data);
         }
@@ -531,7 +573,6 @@ bool llama_kv_cache_offloaded::eval_callback(struct ggml_tensor * tensor, bool a
 
     // ask == false: node just finished computing
 
-    // Forward to user callback first (e.g., for hidden state capture)
     if (is_result_norm && off->m_user_cb) {
         off->m_user_cb(tensor, false, cb_data->user_data);
         return true;
@@ -550,69 +591,43 @@ bool llama_kv_cache_offloaded::eval_callback(struct ggml_tensor * tensor, bool a
            il, slot, off->m_is_prefill, off->m_delta_head, off->m_delta_count);
 
     if (!off->m_is_prefill) {
-        // Wait for any previous SAVE on this slot to complete before overwriting host_buf
-        {
-            auto & ss = off->m_slots[slot];
-            std::unique_lock<std::mutex> lock(ss.mtx);
-            ss.cv.wait(lock, [&ss] { return !ss.save_pending.load(); });
-            ss.save_pending.store(true);
+        // -----------------------------------------------------------------
+        // DECODE path: capture delta to staging (tiny), queue next prefetch
+        // -----------------------------------------------------------------
+
+        // ① Capture K delta to staging (V too when !v_trans)
+        off->capture_delta_to_staging((uint32_t)il, slot);
+        off->m_staging_dirty = true;
+        off->m_staging_delta_head  = off->m_delta_head;
+        off->m_staging_delta_count = off->m_delta_count;
+
+        // ①b v_trans: V cells are scattered (column-major) so staging can't
+        //    handle them.  Save the full V tensor synchronously instead.
+        //    host_buf[slot].v_data is used as scratch — queue_prefetch below
+        //    will overwrite it with the next layer's data anyway.
+        if (off->m_v_trans) {
+            off->save_v_full((uint32_t)il, slot);
         }
 
-        // Delta save: only copy the newly written cells (GPU -> host buf -> async SSD)
-        uint32_t delta_head  = off->m_delta_head;
-        uint32_t delta_count = off->m_delta_count;
-        off->tensor_to_host_delta((uint32_t)il, slot, delta_head, delta_count);
-
-        io_task save_task;
-        save_task.op          = io_op::SAVE;
-        save_task.model_layer = (uint32_t)il;
-        save_task.slot_id     = slot;
-        save_task.cell_start  = delta_head;
-        save_task.cell_count  = delta_count;
-        {
-            std::lock_guard<std::mutex> lock(off->m_io_mutex);
-            off->m_io_queue.push(save_task);
-        }
-        off->m_io_cv.notify_one();
-
-        // Queue prefetch for next layer that will use this slot
-        uint32_t next_il = (uint32_t)il + off->m_pool_slots;
-        if (next_il < off->m_total_layers) {
-            off->queue_prefetch(next_il);
-        }
-    } else {
-        // Prefill: data was just computed fresh. Save it to SSD.
-        // Wait for any previous SAVE on this slot to complete before overwriting host_buf.
-        {
-            auto & ss = off->m_slots[slot];
-            std::unique_lock<std::mutex> lock(ss.mtx);
-            ss.cv.wait(lock, [&ss] { return !ss.save_pending.load(); });
-            ss.save_pending.store(true);
+        // ② Queue prefetch for next layer that will reuse this slot
+        uint32_t future_il = (uint32_t)il + off->m_pool_slots;
+        if (future_il < off->m_total_layers) {
+            off->queue_prefetch(future_il);
         }
 
-        off->tensor_to_host((uint32_t)il, slot);
-
-        io_task save_task;
-        save_task.op          = io_op::SAVE;
-        save_task.model_layer = (uint32_t)il;
-        save_task.slot_id     = slot;
-        save_task.cell_start  = 0;
-        save_task.cell_count  = off->m_kv_size;
-        {
-            std::lock_guard<std::mutex> lock(off->m_io_mutex);
-            off->m_io_queue.push(save_task);
-        }
-        off->m_io_cv.notify_one();
-    }
-
-    // Wait and load next layer (if it exists and needs loading)
-    uint32_t next_layer = (uint32_t)il + 1;
-    if (next_layer < off->m_total_layers) {
-        if (!off->m_is_prefill) {
-            // Need to ensure next layer's data is in the tensor
+        // ③ Wait and load next layer into GPU tensor (if needed)
+        uint32_t next_layer = (uint32_t)il + 1;
+        if (next_layer < off->m_total_layers) {
             off->wait_and_load_layer(next_layer);
         }
-        // During prefill, next layer will be computed fresh, no load needed
+    } else {
+        // -----------------------------------------------------------------
+        // PREFILL path: synchronous full save (GPU → host_buf → SSD)
+        // No loading needed — all layers computed fresh.
+        // -----------------------------------------------------------------
+        off->tensor_to_host((uint32_t)il, slot);
+        off->ssd_write_full_layer((uint32_t)il, slot);
+        off->m_stats.saves++;
     }
 
     return true;

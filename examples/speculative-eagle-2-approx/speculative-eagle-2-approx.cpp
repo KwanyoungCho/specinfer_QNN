@@ -128,6 +128,7 @@ int main(int argc, char ** argv) {
     int expand_k = 10;
     bool rerank = true;
     int rerank_k = 59;
+    int accept_top_k = 3;            // approximate sampling: target top-k 안에 있으면 accept
     std::string tbt_csv_path = "";   // per-step TBT 측정 결과 저장 경로
 
     std::vector<char *> new_argv;
@@ -147,6 +148,8 @@ int main(int argc, char ** argv) {
             rerank = false;
         } else if (arg == "--rerank") {
             rerank = true;
+        } else if (arg == "--accept-top-k" && i + 1 < argc) {
+            accept_top_k = std::stoi(argv[++i]);
         } else if (arg == "--tbt-csv" && i + 1 < argc) {
             tbt_csv_path = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
@@ -156,6 +159,7 @@ int main(int argc, char ** argv) {
             printf("  --expand-k N       Draft tree Expand-K (default: 10)\n");
             printf("  --rerank-k N       Token-level Reranking K (default: 59)\n");
             printf("  --no-rerank        Disable token-level reranking\n");
+            printf("  --accept-top-k N   Approximate accept top-K (default: 3, 1 = exact greedy)\n");
             printf("  --tbt-csv PATH     Write per-step time-between-token CSV to PATH\n\n");
             new_argv.push_back(argv[i]); // pass to base parser
         } else {
@@ -553,6 +557,8 @@ int main(int argc, char ** argv) {
     int num_steps = 0;
 
     // Per-step TBT (time-between-tokens) logging.
+    // step_total_us 는 verification 시작부터 다음 target decode 종료까지의 wall-clock.
+    // n_tokens 는 해당 step 에서 새로 commit 된 토큰 수 (i_dft + 1).
     struct step_log_entry {
         int64_t step_total_us;
         int     n_tokens;
@@ -561,10 +567,10 @@ int main(int argc, char ** argv) {
     };
     std::vector<step_log_entry> step_log;
     step_log.reserve(2048);
-    int64_t cum_tbt_us     = 0;
-    int     cum_tbt_tokens = 0;
-    int     step_n_tokens  = 0;
-    int64_t step_start_us  = 0;
+    int64_t cum_tbt_us       = 0;
+    int     cum_tbt_tokens   = 0;
+    int     step_n_tokens    = 0;
+    int64_t step_start_us    = 0;
 
     while (true) {
         int64_t step_fallback_sampling_us = 0;
@@ -729,10 +735,21 @@ int main(int argc, char ** argv) {
                         step_fallback_sampling_us += (ggml_time_us() - fallback_start);
                     }
                 } else {
-                    // greedy verification
+                    // approximate greedy verification (top-k accept)
+                    //
+                    // 동작: target logits에서 top-k 후보를 추출한 뒤,
+                    //   모든 active draft sequence의 i_dft 위치 token이 top-k 안에
+                    //   몇 번째 rank로 들어있는지 검사한다. 가장 낮은 rank (top-1에
+                    //   가장 가까운) 매칭을 가진 sequence를 s_keep으로 골라 accept.
+                    //   accept_top_k = 1이면 기존 exact greedy와 동일.
 
-                    // sample from the target model
-                    LOG_DBG("sampling target: s_keep = %3d, i_dft = %3d, i_batch_tgt = %3d\n", s_keep, i_dft, drafts[s_keep].i_batch_tgt[i_dft]);
+                    // approximate greedy verification.
+                    // 핵심: 기존 exact greedy 와 동일한 sample / temp2.insert / recompute 순서를
+                    //   유지하여 k=1 일 때 baseline 과 byte-exact 한 동작을 보장한다.
+                    //   k > 1 일 때만, top-1 매칭 실패 시 top-k 후보 안에서 추가 매칭을 시도한다.
+                    LOG_DBG("approx-verifying target: s_keep = %3d, i_dft = %3d, i_batch_tgt = %3d, accept_top_k = %d\n",
+                            s_keep, i_dft, drafts[s_keep].i_batch_tgt[i_dft], accept_top_k);
+
                     const auto fallback_start = ggml_time_us();
                     token_id = common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft]);
 
@@ -741,24 +758,88 @@ int main(int argc, char ** argv) {
                     token_str = common_token_to_piece(ctx_tgt, token_id);
                     step_fallback_sampling_us += (ggml_time_us() - fallback_start);
 
+                    // ▼ temp2/recompute 는 OLD s_keep 기준 — 기존 코드와 정확히 동일
                     temp2.insert(temp2.end(),
                                  backup_data.begin() + (hidden_dim * (drafts[s_keep].i_batch_tgt[i_dft])),
                                  backup_data.begin() + (hidden_dim * (drafts[s_keep].i_batch_tgt[i_dft] + 1)));
                     recompute.push_back(token_id);
 
+                    // top-k 매칭을 위해 현재 active 상태를 1차 루프 전에 캡처
+                    std::vector<int> active_before_match;
+                    active_before_match.reserve(n_seq_dft);
+                    for (int s = 0; s < n_seq_dft; ++s) {
+                        if (drafts[s].active) active_before_match.push_back(s);
+                    }
+
+                    // 1차: target top-1 (== token_id) 매칭 — 기존 동작 그대로
                     for (int s = 0; s < n_seq_dft; ++s) {
                         if (!drafts[s].active) {
                             continue;
                         }
 
                         if (i_dft < (int) drafts[s].tokens.size() && token_id == drafts[s].tokens[i_dft]) {
-                            LOG_DBG("the sampled target token matches the %dth drafted token of sequence %d (%d, '%s') - accepted\n", i_dft, s, token_id, token_str.c_str());
+                            LOG_DBG("the sampled target token matches the %dth drafted token of sequence %d (%d, '%s') - accepted (rank 1)\n",
+                                    i_dft, s, token_id, token_str.c_str());
                             accept_counts[s][i_dft]++;
 
                             s_keep = s;
                             accept = true;
                         } else {
                             drafts[s].active = false;
+                        }
+                    }
+
+                    // 2차: top-1 매칭 실패 시 top-k 안에서 approximate 매칭 시도 (k > 1 일 때만)
+                    if (!accept && accept_top_k > 1) {
+                        auto * dist_tgt = common_sampler_get_candidates(smpl, true);
+                        if (dist_tgt != nullptr && dist_tgt->size > 0) {
+                            const int k_eff = std::min((int) dist_tgt->size, accept_top_k);
+
+                            int          best_rank  = k_eff + 1;
+                            int          best_s     = -1;
+                            llama_token  best_token = -1;
+
+                            for (int s : active_before_match) {
+                                if (i_dft >= (int) drafts[s].tokens.size()) continue;
+                                const llama_token cand = drafts[s].tokens[i_dft];
+                                // rank 2..k_eff (rank 1 은 이미 1차에서 실패했으므로 skip)
+                                for (int r = 1; r < k_eff; ++r) {
+                                    if (dist_tgt->data[r].id == cand) {
+                                        if (r + 1 <= best_rank) {
+                                            best_rank  = r + 1;
+                                            best_s     = s;
+                                            best_token = cand;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (best_s >= 0) {
+                                // approximate accept: best_token 으로 token_id 교체
+                                accept_counts[best_s][i_dft]++;
+                                s_keep = best_s;
+                                accept = true;
+
+                                // sampler history 에는 이미 tgt_top1 이 accept 된 상태 —
+                                // temp=0 deterministic 경로에서는 후속 sample 결과에 영향 없음.
+                                if (best_token != token_id) {
+                                    token_id = best_token;
+                                    token_str = common_token_to_piece(ctx_tgt, token_id);
+                                    recompute.back() = token_id;
+                                }
+
+                                // best_token 과 동일 token 을 갖는 sequence 들을 살린다
+                                for (int s : active_before_match) {
+                                    if (i_dft < (int) drafts[s].tokens.size() &&
+                                        drafts[s].tokens[i_dft] == token_id) {
+                                        drafts[s].active = true;
+                                    }
+                                }
+
+                                LOG_DBG("approx-accept: rank %d, seq %d, token (%d, '%s')\n",
+                                        best_rank, best_s, token_id, token_str.c_str());
+                            }
                         }
                     }
                 }
@@ -1374,7 +1455,7 @@ int main(int argc, char ** argv) {
         }
         num_steps++;
 
-        // Per-step TBT 기록
+        // Per-step TBT 기록 (verification 시작 ~ 다음 target decode 직후)
         {
             const int64_t step_end_us   = ggml_time_us();
             const int64_t step_total_us = step_end_us - step_start_us;
@@ -1466,6 +1547,7 @@ int main(int argc, char ** argv) {
 
     // ---- Per-step TBT 통계 / CSV 출력 ----
     if (!step_log.empty()) {
+        // 첫 step 은 prompt prefill 이후 첫 토큰까지의 시간이 섞여 있으므로 mean/std 계산에서 제외
         const size_t start_idx = step_log.size() > 1 ? 1 : 0;
         double sum_tbt = 0.0;
         double sum_sq  = 0.0;

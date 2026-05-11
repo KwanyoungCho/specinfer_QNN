@@ -340,8 +340,8 @@ int main(int argc, char ** argv) {
     // last layer that mapped to each slot.  Switch to decode mode so the
     // eval_callback restores each layer's data from SSD before it is reused.
     offloader->set_prefill(false);
-    offloader->prepare_target_pass();      // queue LOADs for layers 0..m-1
-    offloader->wait_and_load_layer(0);     // ensure layer 0 is ready
+    offloader->prepare_target_pass();      // flush + queue prefetch 0..m-1 (async)
+    offloader->begin_target_verify();      // wait + load 0..m-2, queue m-1
 
     llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1));
     std::vector<float> backup_data(cb_data.data.begin(), cb_data.data.end());
@@ -565,9 +565,9 @@ int main(int argc, char ** argv) {
         const auto drafting_start = ggml_time_us();
 
         // -----------------------------------------------------------------
-        // KV offload: start prefetching layers 0..m-2 during draft phase
+        // KV offload: flush staging→SSD, queue prefetch 0..m-1 (async)
+        // I/O proceeds in parallel with draft compute below.
         // -----------------------------------------------------------------
-        offloader->reset_layer_tracking();
         offloader->prepare_target_pass();
 
         const auto recompute_start = ggml_time_us();
@@ -854,8 +854,8 @@ int main(int argc, char ** argv) {
 
         // =====================================================================
         // Target verification
-        // KV offload: wait_and_load_layer(0) for cold start, then eval_callback
-        // handles layers 1..L-1 automatically.
+        // KV offload: wait for prefetched layers, load into GPU.
+        // eval_callback handles remaining layers automatically.
         // =====================================================================
         {
             llama_memory_seq_keep(mem_tgt, 0);
@@ -863,9 +863,8 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_cp(mem_tgt, 0, s, -1, -1);
             }
 
-            // Ensure layer 0 is loaded into its tensor slot before graph compute starts
-            offloader->wait_and_load_layer(0);
-
+            // Wait for prefetched layers 0..m-2, load to GPU, queue m-1
+            offloader->begin_target_verify();
             const auto t_dec_s = ggml_time_us();
             llama_decode(ctx_tgt, batch_tgt);
             ctx_tgt->synchronize();

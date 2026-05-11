@@ -51,28 +51,32 @@ public:
     uint32_t get_total_layers() const { return m_total_layers; }
 
     // =========================================================================
-    // Prefetch / save orchestration (called from cb_eval or externally)
+    // Orchestration API (called from example code)
     // =========================================================================
 
-    // Pre-warm pool during draft phase: async load layers 0..m-2 into host buffers
+    // Flush staging deltas to SSD (sync), then queue async prefetch for
+    // layers 0..m-1.  Returns immediately — call at the start of the draft
+    // phase so I/O overlaps with draft compute.
     void prepare_target_pass();
 
-    // Wait for a specific layer's prefetch to complete, then tensor_set from host buffer
-    // Must be called from main thread (backend synchronized)
+    // Wait for prefetched layers 0..m-2, load into GPU tensors, then queue
+    // prefetch for layer m-1.  Call right before target verification decode.
+    void begin_target_verify();
+
+    // Wait for a specific layer's prefetch to complete, then tensor_set.
     void wait_and_load_layer(uint32_t model_layer);
 
-    // Save delta for a layer after its compute completes
-    // Reads from tensor to host buffer, then async writes to SSD
-    void save_layer_delta(uint32_t model_layer, uint32_t cell_start, uint32_t cell_count);
-
-    // Notify that target verification is complete with accepted token count
+    // Notify that target verification is complete.
     void on_verify_complete(uint32_t n_accepted);
 
-    // Queue an async prefetch: SSD -> host buffer for a given model layer
+    // Queue an async prefetch: SSD -> host buffer.
     void queue_prefetch(uint32_t model_layer);
 
-    // Check if a layer's prefetch is complete (non-blocking)
+    // Check if a layer's prefetch is complete (non-blocking).
     bool is_prefetch_ready(uint32_t model_layer) const;
+
+    // Flush all dirty staging deltas to SSD (synchronous).
+    void flush_saves();
 
     // =========================================================================
     // cb_eval callback (static, to be registered with ggml_backend_sched)
@@ -143,36 +147,58 @@ private:
     void free_host_buffers();
 
     // =========================================================================
-    // Slot state tracking
+    // Staging buffers (one per model layer, SAVE-only: GPU → staging → SSD)
+    // Small buffers sized for max delta (MAX_STAGING_TOKENS × row_bytes).
+    // K: always uses staging (cells contiguous regardless of v_trans).
+    // V: staging only when !v_trans (cells contiguous).  When v_trans the V
+    //    cache is column-major and cells are scattered, so save_v_full()
+    //    bypasses staging and writes the full V tensor via host_buf → SSD.
+    // =========================================================================
+
+    struct staging_buffer {
+        void *  k_data = nullptr;
+        void *  v_data = nullptr;
+        size_t  k_capacity = 0;
+        size_t  v_capacity = 0;
+    };
+
+    std::vector<staging_buffer> m_staging_bufs; // [L]
+
+    // Delta info saved across layers for flush_saves()
+    uint32_t m_staging_delta_head  = 0;
+    uint32_t m_staging_delta_count = 0;
+    bool     m_staging_dirty       = false;
+
+    static constexpr uint32_t MAX_STAGING_TOKENS = 128;
+
+    void alloc_staging_buffers();
+    void free_staging_buffers();
+    void capture_delta_to_staging(uint32_t model_layer, uint32_t slot_id);
+
+    // =========================================================================
+    // Slot state tracking (LOAD-only, no save_pending needed)
     // =========================================================================
 
     struct slot_state {
-        int32_t             resident_layer = -1;  // which model layer's data is currently in this slot (-1 = empty)
+        int32_t             resident_layer = -1;
         std::atomic<bool>   prefetch_pending{false};
         std::atomic<bool>   prefetch_complete{false};
-        int32_t             prefetch_target_layer = -1; // which layer is being prefetched
-        std::atomic<bool>   save_pending{false};  // true while host_buf is being read by worker (SSD write in progress)
+        int32_t             prefetch_target_layer = -1;
         std::mutex          mtx;
         std::condition_variable cv;
     };
 
-    std::deque<slot_state> m_slots; // [m]  (deque: no realloc, supports non-movable types)
+    std::deque<slot_state> m_slots; // [m]
 
     uint32_t layer_to_slot(uint32_t model_layer) const { return model_layer % m_pool_slots; }
 
     // =========================================================================
-    // Async I/O engine
+    // Async I/O engine (LOAD-only during verification)
     // =========================================================================
 
-    enum class io_op { LOAD, SAVE };
-
     struct io_task {
-        io_op    op;
         uint32_t model_layer;
         uint32_t slot_id;
-        // For delta save
-        uint32_t cell_start;
-        uint32_t cell_count;
     };
 
     std::thread              m_io_thread;
@@ -182,19 +208,17 @@ private:
     std::atomic<bool>        m_shutdown{false};
 
     void io_worker_loop();
-
-    // I/O operations (run on worker thread)
     void execute_load(const io_task & task);
-    void execute_save(const io_task & task);
 
-    // Synchronous tensor read/write (must be called from main thread when backend is sync'd)
+    // Synchronous tensor <-> host buffer (main thread only, backend must be sync'd)
     void tensor_to_host(uint32_t model_layer, uint32_t slot_id);
-    void tensor_to_host_delta(uint32_t model_layer, uint32_t slot_id, uint32_t cell_start, uint32_t cell_count);
     void host_to_tensor(uint32_t model_layer, uint32_t slot_id);
 
-    // SSD file I/O (can be called from any thread)
+    // SSD file I/O
     void ssd_read_layer(uint32_t model_layer, uint32_t slot_id);
-    void ssd_write_delta(uint32_t model_layer, uint32_t slot_id, uint32_t cell_start, uint32_t cell_count);
+    void ssd_write_full_layer(uint32_t model_layer, uint32_t slot_id);  // prefill: host_buf -> SSD
+    void ssd_write_staging_delta(uint32_t model_layer);                 // decode:  staging -> SSD
+    void save_v_full(uint32_t model_layer, uint32_t slot_id);          // decode:  full V save (v_trans)
 
     // =========================================================================
     // Callback state (for compose with existing callbacks)
@@ -213,6 +237,9 @@ private:
     // Delta info for current ubatch (set before graph compute, used in eval_callback)
     uint32_t m_delta_head  = 0;  // cell index where new tokens start
     uint32_t m_delta_count = 0;  // number of new tokens written
+
+    // Number of valid KV cells (for partial I/O optimization)
+    uint32_t m_n_kv_used = 0;
 
     // =========================================================================
     // Stats
@@ -234,6 +261,8 @@ public:
     void set_delta_info(uint32_t head, uint32_t count) {
         m_delta_head  = head;
         m_delta_count = count;
+        uint32_t end = head + count;
+        if (end > m_n_kv_used) m_n_kv_used = end;
     }
 };
 

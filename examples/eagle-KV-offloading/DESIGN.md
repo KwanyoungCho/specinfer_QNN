@@ -5,13 +5,13 @@
 1. [개요 및 핵심 아이디어](#1-개요-및-핵심-아이디어)
 2. [아키텍처 전체 흐름도](#2-아키텍처-전체-흐름도)
 3. [Memory Pool 설계 (m-slot Circular Buffer)](#3-memory-pool-설계)
-4. [3-Tier 데이터 파이프라인](#4-3-tier-데이터-파이프라인)
+4. [데이터 파이프라인 (LOAD / SAVE 분리)](#4-데이터-파이프라인-load--save-분리)
 5. [클래스 구조 — llama_kv_cache_offloaded](#5-클래스-구조)
 6. [API 상세 설명](#6-api-상세-설명)
 7. [eval_callback 동작 흐름](#7-eval_callback-동작-흐름)
 8. [애플리케이션 흐름 — eagle-KV-offloading.cpp](#8-애플리케이션-흐름)
 9. [Tree Decoding 로직 (Budget-7 / Budget-25)](#9-tree-decoding-로직)
-10. [Delta Save 최적화](#10-delta-save-최적화)
+10. [Delta Save 최적화 (Staging Buffer 방식)](#10-delta-save-최적화-staging-buffer-방식)
 11. [동기화 메커니즘](#11-동기화-메커니즘)
 12. [알려진 이슈 및 주의사항](#12-알려진-이슈-및-주의사항)
 
@@ -40,16 +40,20 @@ EAGLE 기반 Speculative Decoding에서 **target 모델**은 L개의 transformer
 ┌─────────────▼───────────────────────▼────────────┐
 │         llama_kv_cache_offloaded (클래스)          │
 │                                                   │
-│  ┌──────────┐  ┌────────────┐  ┌───────────────┐ │
-│  │ GPU Pool │  │ Host Bufs  │  │  SSD Files    │ │
-│  │ (m slots)│  │ (m buffers)│  │ (L×2 files)   │ │
-│  │ K,V 텐서 │←→│ k_data     │←→│ layer_X_K.bin │ │
-│  │          │  │ v_data     │  │ layer_X_V.bin │ │
-│  └──────────┘  └────────────┘  └───────────────┘ │
-│        ↑ eval_callback가 layer별 save/load 제어   │
-│        │                                          │
+│  ┌──────────┐  ┌────────────────┐  ┌───────────┐ │
+│  │ GPU Pool │  │ Host Bufs [m]  │  │ SSD Files │ │
+│  │ (m slots)│←─│ (LOAD 전용)     │←─│ (L×2)     │ │
+│  │ K,V 텐서 │  │ full-layer 크기 │  │           │ │
+│  └─────┬────┘  └────────────────┘  └─────┬─────┘ │
+│        │                                  ↑       │
+│        │  ┌─────────────────────┐         │       │
+│        └─→│ Staging Bufs [L]    │─────────┘       │
+│           │ (SAVE 전용, delta)   │  flush_saves()  │
+│           │ MAX_STAGING_TOKENS  │  (동기, SSD 쓰기)│
+│           └─────────────────────┘                 │
+│        ↑ eval_callback가 layer별 staging/load 제어 │
 │  ┌─────┴───────────────────────────────────────┐  │
-│  │  I/O Worker Thread (비동기 SSD ↔ Host)       │  │
+│  │  I/O Worker Thread (LOAD 전용: SSD → Host)   │  │
 │  └─────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────┘
 ```
@@ -73,10 +77,10 @@ EAGLE 기반 Speculative Decoding에서 **target 모델**은 L개의 transformer
  ┌─────────────── Speculation Loop (매 스텝 반복) ────────────────┐
  │                                                                 │
  │  1. Verification (이전 스텝의 draft 토큰 검증)                    │
- │     ├─ offloader->wait_and_load_layer(0)                        │
+ │     ├─ (layers 0..m-2는 prepare_target_pass()에서 이미 로딩됨)   │
  │     ├─ llama_decode(ctx_tgt, batch_tgt)                         │
  │     │    └─ eval_callback이 매 layer마다:                        │
- │     │         ├─ 현재 layer SAVE (GPU→Host→SSD)                  │
+ │     │         ├─ 현재 layer delta → staging_buf (GPU→staging)    │
  │     │         ├─ il+m번째 layer PREFETCH 큐잉 (SSD→Host)         │
  │     │         └─ il+1번째 layer LOAD (Host→GPU)                  │
  │     └─ backup_data = cb_data.data (hidden state 추출)            │
@@ -86,8 +90,11 @@ EAGLE 기반 Speculative Decoding에서 **target 모델**은 L개의 transformer
  │     └─ stochastic: p_tgt/p_dft 비율 검증                         │
  │                                                                  │
  │  3. Recompute (draft 모델 KV cache 정리 + 재계산)                 │
- │     ├─ offloader->reset_layer_tracking()                         │
- │     ├─ offloader->prepare_target_pass()   ← 다음 verify용 prefetch│
+ │     ├─ offloader->prepare_target_pass():                         │
+ │     │    ├─ flush_saves() (staging→SSD 동기 쓰기)                │
+ │     │    ├─ prefetch layers 0..m-2 (SSD→Host 비동기)             │
+ │     │    ├─ wait + host_to_tensor (Host→GPU)                     │
+ │     │    └─ queue prefetch layer m-1                             │
  │     ├─ llama_memory_seq_rm/keep/cp (target & draft KV 정리)      │
  │     └─ llama_decode_eagle(ctx_dft, ...) (draft 모델 재계산)       │
  │                                                                  │
@@ -166,27 +173,45 @@ Graph 실행 순서:
 
 ---
 
-## 4. 3-Tier 데이터 파이프라인
+## 4. 데이터 파이프라인 (LOAD / SAVE 분리)
 
-데이터는 3개의 저장소 계층을 거친다:
+LOAD와 SAVE 경로를 **완전히 분리**하여 I/O 큐 경합을 제거하고 compute-IO overlap을 극대화한다.
+
+### LOAD 경로 (SSD → Host Buffer → GPU Tensor)
 
 ```
-GPU Tensor (빠름, 용량 제한)
-     ↕  ggml_backend_tensor_get/set  (동기, 메인 스레드)
-Host Buffer (CPU RAM, 중간 속도)
-     ↕  pread/pwrite                 (비동기, I/O 워커 스레드)
-SSD File (느림, 무제한 용량)
+SSD File ──pread──→ Host Buffer [m개, full-layer 크기]
+                         │
+                    host_to_tensor (ggml_backend_tensor_set, 메인 스레드)
+                         ↓
+                    GPU Tensor [slot]
 ```
 
-### 왜 2단계로 나눌까?
+- **I/O 워커 스레드**가 `pread`로 SSD → Host Buffer 복사 (비동기)
+- **메인 스레드**가 `host_to_tensor()`로 Host Buffer → GPU 복사 (동기)
+- Host Buffer는 **m개** (slot당 1개), full-layer 크기
 
-**스레드 안전성** 때문이다:
-- `ggml_backend_tensor_get/set`은 GPU 동기화가 필요하므로 **메인 스레드**에서만 호출 가능
-- `pread/pwrite`는 별도 스레드에서 호출 가능
+### SAVE 경로 (GPU Tensor → Staging Buffer → SSD File)
 
-따라서:
-1. **SAVE**: `tensor_to_host_delta()` (메인 스레드, 동기) → I/O 큐에 SAVE 태스크 push → `ssd_write_delta()` (워커 스레드, 비동기)
-2. **LOAD**: `queue_prefetch()` → I/O 큐에 LOAD 태스크 push → `ssd_read_layer()` (워커 스레드, 비동기) → `host_to_tensor()` (메인 스레드, 동기)
+```
+GPU Tensor [slot]
+     │
+     │  capture_delta_to_staging (ggml_backend_tensor_get, 메인 스레드)
+     ↓
+Staging Buffer [L개, delta 크기] ──pwrite──→ SSD File
+                                   flush_saves() (메인 스레드, 동기)
+```
+
+- **eval_callback**이 `capture_delta_to_staging()`으로 GPU → Staging Buffer 복사 (delta만, 메인 스레드)
+- **`flush_saves()`**가 모든 L개 layer의 Staging Buffer → SSD 일괄 기록 (동기, draft phase 시작 시)
+- Staging Buffer는 **L개** (layer당 1개), `MAX_STAGING_TOKENS × row_bytes` 크기 (작음)
+
+### 왜 이렇게 분리하는가?
+
+1. **I/O 워커는 LOAD만 처리**: SAVE 태스크가 LOAD를 블로킹하지 않아 prefetch 지연 없음
+2. **Staging Buffer는 host_buf과 독립**: SAVE 중에도 host_buf로 LOAD를 수행할 수 있음 (save_pending 동기화 불필요)
+3. **Delta 크기가 작음**: staging → SSD 쓰기가 매우 빠르므로 동기 flush로도 overhead 미미
+4. **UMA 환경 최적화**: staging buffer는 delta 크기만큼만 할당하므로 메모리 사용량 최소화
 
 ---
 
@@ -207,10 +232,14 @@ SSD File (느림, 무제한 용량)
 | `m_type_k`, `m_type_v` | `ggml_type` | K, V 캐시의 양자화 타입 |
 | `m_v_trans` | `bool` | V 캐시가 전치(transposed) 상태인지. `!flash_attn`일 때 true |
 | `m_ssd_layers` | `vector<ssd_layer>` | 각 layer의 SSD 파일 디스크립터 및 크기 정보 [L개] |
-| `m_host_bufs` | `vector<host_buffer>` | 각 slot의 Host RAM 버퍼 [m개] |
-| `m_slots` | `deque<slot_state>` | 각 slot의 상태 추적 (resident layer, prefetch 상태 등) [m개] |
-| `m_io_thread` | `thread` | 비동기 I/O 워커 스레드 |
-| `m_io_queue` | `queue<io_task>` | I/O 태스크 큐 (LOAD/SAVE) |
+| `m_host_bufs` | `vector<host_buffer>` | 각 slot의 Host RAM 버퍼 [m개] — **LOAD 전용** |
+| `m_staging_bufs` | `vector<staging_buffer>` | 각 layer의 Staging 버퍼 [L개] — **SAVE 전용** |
+| `m_staging_delta_head` | `uint32_t` | staging에 기록된 delta 시작 cell index |
+| `m_staging_delta_count` | `uint32_t` | staging에 기록된 delta cell 수 |
+| `m_staging_dirty` | `bool` | staging에 flush 대기 중인 데이터가 있는지 |
+| `m_slots` | `deque<slot_state>` | 각 slot의 상태 추적 (resident layer, prefetch 상태) [m개] |
+| `m_io_thread` | `thread` | 비동기 I/O 워커 스레드 (**LOAD 전용**) |
+| `m_io_queue` | `queue<io_task>` | I/O 태스크 큐 (**LOAD 전용**) |
 | `m_user_cb` | `callback` | 사용자 콜백 (cb_get_hidden 등) |
 | `m_is_prefill` | `bool` | 현재 prefill 모드인지 (SSD에 이전 데이터 없음) |
 | `m_delta_head` | `uint32_t` | 현재 ubatch의 delta 시작 cell index |
@@ -225,20 +254,31 @@ struct ssd_layer {
     size_t v_total_bytes;        // V 파일의 전체 크기
 };
 
-struct host_buffer {
+struct host_buffer {                // LOAD 전용: SSD → host → GPU
     void * k_data, * v_data;     // malloc으로 할당된 CPU RAM 버퍼
-    size_t k_size, v_size;       // 각 버퍼의 크기 (바이트)
+    size_t k_size, v_size;       // 각 버퍼의 크기 (full-layer 바이트)
 };
 
-struct slot_state {
+struct staging_buffer {             // SAVE 전용: GPU → staging → SSD
+    void * k_data, * v_data;     // malloc으로 할당된 delta 크기 버퍼
+    size_t k_capacity, v_capacity; // MAX_STAGING_TOKENS × row_bytes
+};
+
+struct slot_state {                 // LOAD 전용, save_pending 불필요
     int32_t           resident_layer;       // 현재 이 slot에 있는 layer (-1 = 비어있음)
     atomic<bool>      prefetch_pending;     // SSD→Host 작업이 큐에 있음
     atomic<bool>      prefetch_complete;    // SSD→Host 작업 완료
     int32_t           prefetch_target_layer;// prefetch 중인 target layer
-    atomic<bool>      save_pending;         // Host→SSD 작업 진행 중 (host buf 잠금)
     mutex             mtx;
     condition_variable cv;
 };
+
+struct io_task {                    // LOAD 전용 (io_op enum 제거)
+    uint32_t model_layer;
+    uint32_t slot_id;
+};
+
+static constexpr uint32_t MAX_STAGING_TOKENS = 128;
 ```
 
 ### 5.2 kv_offload_cb_data (콜백 데이터)
@@ -269,15 +309,17 @@ struct kv_offload_cb_data {
    - V (v_trans=true): `n_embd_v_gqa_max() × kv_size × type_size / blck_size`
      - **주의**: v_trans=true일 때 `n_embd_v_gqa_max()`를 사용. 이는 `llama_kv_cache`가 전치 V 텐서 생성 시 max 값을 쓰기 때문
 3. `m_slots` 초기화 (deque 사용 — mutex/atomic 등 non-movable 타입 포함)
-4. Host buffer 할당 (`alloc_host_buffers`)
-5. SSD 파일 열기 (`open_ssd_files`) — ftruncate로 사전 할당
-6. I/O 워커 스레드 시작
+4. Host buffer 할당 (`alloc_host_buffers`) — LOAD 전용, m개, full-layer 크기
+5. Staging buffer 할당 (`alloc_staging_buffers`) — SAVE 전용, L개, `MAX_STAGING_TOKENS × row_bytes` 크기
+6. SSD 파일 열기 (`open_ssd_files`) — ftruncate로 사전 할당
+7. I/O 워커 스레드 시작
 
 #### `~llama_kv_cache_offloaded()`
 
 1. `m_shutdown = true`로 설정, I/O 스레드 종료 대기
 2. SSD 파일 닫기
-3. Host buffer 해제
+3. Staging buffer 해제
+4. Host buffer 해제
 
 ### 6.2 Host Buffer 관리
 
@@ -297,7 +339,42 @@ host_buf[m-1] ← 동일
 
 모든 host buffer를 `free()`로 해제.
 
-### 6.3 SSD 파일 관리
+### 6.3 Staging Buffer 관리
+
+#### `alloc_staging_buffers()`
+
+L개의 staging buffer 할당 (layer당 1개). 각 buffer는 `MAX_STAGING_TOKENS × row_bytes` 크기.
+
+```
+staging_buf[0]  ← k_capacity: n_embd_k_gqa(0) × type_size × 128
+                   v_capacity: n_embd_v_gqa(0) × type_size × 128
+staging_buf[1]  ← 동일
+...
+staging_buf[L-1] ← 동일
+```
+
+`MAX_STAGING_TOKENS = 128`으로 설정. 일반적인 tree verification batch (~7~25 tokens)에 충분.
+
+#### `free_staging_buffers()`
+
+모든 staging buffer를 `free()`로 해제.
+
+#### `capture_delta_to_staging(model_layer, slot_id)`
+
+GPU tensor에서 delta 영역만 staging buffer로 복사 (메인 스레드, 동기).
+`m_delta_head`와 `m_delta_count`를 사용하여 복사 범위 결정.
+
+```
+GPU tensor[slot].K[cell_start..cell_start+cell_count)
+    → staging_buf[model_layer].k_data[0..k_len)  (compact)
+
+GPU tensor[slot].V[cell_start..cell_start+cell_count)
+    → staging_buf[model_layer].v_data[0..v_len)  (compact)
+```
+
+**주의**: 현재 v_trans=false만 지원. v_trans=true는 TODO.
+
+### 6.4 SSD 파일 관리
 
 #### `open_ssd_files()`
 
@@ -314,7 +391,7 @@ host_buf[m-1] ← 동일
 
 모든 파일 디스크립터 닫기.
 
-### 6.4 Tensor ↔ Host Buffer (메인 스레드 전용)
+### 6.5 Tensor ↔ Host Buffer (메인 스레드 전용)
 
 이 함수들은 **GPU 동기화가 보장된 메인 스레드**에서만 호출해야 한다.
 
@@ -325,29 +402,9 @@ GPU tensor[slot_id].K  →  host_buf[slot_id].k_data   (ggml_backend_tensor_get,
 GPU tensor[slot_id].V  →  host_buf[slot_id].v_data   (ggml_backend_tensor_get, 전체)
 ```
 
-**Prefill 모드**에서 사용: layer가 처음 계산되므로 전체 KV 데이터를 저장해야 한다.
+**Prefill 모드**에서만 사용: layer가 처음 계산되므로 전체 KV 데이터를 host_buf에 복사한 뒤 `ssd_write_full_layer()`로 SSD에 저장.
 
-#### `tensor_to_host_delta(model_layer, slot_id, cell_start, cell_count)` — Delta 복사
-
-**Decode 모드**에서 사용: 새로 추가된 cell만 복사하여 bandwidth 절약.
-
-- **K (항상 row-major)**: `[cell_start × k_row .. (cell_start + cell_count) × k_row)` 영역만 복사
-  ```
-  k_row = n_embd_k_gqa × type_size / blck_size
-  k_off = cell_start × k_row
-  k_len = cell_count × k_row
-  ggml_backend_tensor_get(k, buf.k_data + k_off, k_off, k_len)
-  ```
-
-- **V (v_trans=false)**: K와 동일한 row-major layout. delta 슬라이스만 복사.
-
-- **V (v_trans=true)**: 전치 레이아웃 `[n_embd_v, kv_size]`. cell들이 embedding 차원마다 stride되어 분산.
-  delta만 추출하려면 `n_embd_v`번의 작은 DMA 전송이 필요해서 비효율적.
-  **대신 전체 V 텐서를 한 번에 복사**:
-  ```
-  ggml_backend_tensor_get(v, buf.v_data, 0, buf.v_size)
-  ```
-  이것은 정확성을 위한 trade-off — host buffer에는 전체 데이터가 있지만, SSD에는 delta만 기록한다.
+> **참고**: 이전에 존재하던 `tensor_to_host_delta()`는 **제거**됨. Decode 모드에서의 delta 복사는 `capture_delta_to_staging()`이 담당.
 
 #### `host_to_tensor(model_layer, slot_id)` — Host → GPU 전체 복사
 
@@ -356,9 +413,9 @@ host_buf[slot_id].k_data  →  GPU tensor[slot_id].K   (ggml_backend_tensor_set,
 host_buf[slot_id].v_data  →  GPU tensor[slot_id].V   (ggml_backend_tensor_set, 전체)
 ```
 
-### 6.5 SSD I/O (워커 스레드에서 실행)
+### 6.6 SSD I/O
 
-#### `ssd_read_layer(model_layer, slot_id)` — SSD → Host 전체 읽기
+#### `ssd_read_layer(model_layer, slot_id)` — SSD → Host 전체 읽기 (워커 스레드)
 
 ```
 pread(fd_k, host_buf[slot_id].k_data, k_total_bytes, offset=0)
@@ -367,27 +424,28 @@ pread(fd_v, host_buf[slot_id].v_data, v_total_bytes, offset=0)
 
 항상 **전체 파일**을 읽는다. 파일 하나가 하나의 layer 전체 KV 데이터.
 
-#### `ssd_write_delta(model_layer, slot_id, cell_start, cell_count)` — Host → SSD Delta 쓰기
+#### `ssd_write_full_layer(model_layer, slot_id)` — Prefill 전용: Host → SSD 전체 쓰기
 
-- **K**: delta 영역만 `pwrite`
-  ```
-  k_offset = cell_start × k_row_bytes
-  k_delta  = cell_count × k_row_bytes
-  pwrite(fd_k, host_buf + k_offset, k_delta, k_offset)
-  ```
+```
+pwrite(fd_k, host_buf[slot_id].k_data, k_total_bytes, offset=0)
+pwrite(fd_v, host_buf[slot_id].v_data, v_total_bytes, offset=0)
+```
 
-- **V (v_trans=false)**: K와 동일하게 delta 영역만 기록
+Prefill 시 eval_callback에서 동기적으로 호출. 전체 layer 데이터를 SSD에 기록.
 
-- **V (v_trans=true)**: 전치 레이아웃이므로 **embedding 차원별로** delta 기록:
-  ```
-  for j = 0..n_embd_v-1:
-      offset = (cell_start + j × kv_size) × el_size
-      delta  = cell_count × el_size
-      pwrite(fd_v, host_buf + offset, delta, offset)
-  ```
-  이렇게 하면 host buffer에 전체 V 데이터가 있어도, SSD에는 **변경된 cell에 해당하는 영역만** 기록된다.
+#### `ssd_write_staging_delta(model_layer)` — Decode: Staging → SSD Delta 쓰기
 
-### 6.6 비동기 I/O 엔진
+```
+K: pwrite(fd_k, staging_buf[il].k_data, delta_count × k_row, delta_head × k_row)
+V: pwrite(fd_v, staging_buf[il].v_data, delta_count × v_row, delta_head × v_row)
+```
+
+Staging buffer의 compact delta 데이터를 SSD의 올바른 offset에 기록. `flush_saves()`에서 L개 layer에 대해 일괄 호출.
+
+> **참고**: 이전에 존재하던 `ssd_write_delta()`는 **제거**됨. host_buf 기반 delta 쓰기 대신 staging_buf 기반으로 교체.
+> **TODO**: v_trans=true 지원 (현재 non-transposed만 지원)
+
+### 6.7 비동기 I/O 엔진 (LOAD 전용)
 
 #### `io_worker_loop()` — 워커 스레드 메인 루프
 
@@ -395,12 +453,11 @@ pread(fd_v, host_buf[slot_id].v_data, v_total_bytes, offset=0)
 while (!shutdown) {
     mutex lock → wait until queue not empty
     task = queue.front(); queue.pop()
-    if task.op == LOAD: execute_load(task)
-    else:               execute_save(task)
+    execute_load(task)
 }
 ```
 
-단일 워커 스레드가 큐의 태스크를 **순차적으로** 처리한다.
+단일 워커 스레드가 큐의 **LOAD 태스크만** 순차적으로 처리한다. SAVE 태스크는 존재하지 않음 — `flush_saves()`가 메인 스레드에서 동기적으로 처리.
 
 #### `execute_load(task)`
 
@@ -409,14 +466,9 @@ while (!shutdown) {
 3. `cv.notify_all()` — 메인 스레드가 `wait_and_load_layer()`에서 대기 중이면 깨움
 4. `m_stats.loads++`
 
-#### `execute_save(task)`
+> **참고**: 이전에 존재하던 `execute_save()`는 **제거**됨. `io_op` enum도 제거.
 
-1. `ssd_write_delta(model_layer, slot_id, cell_start, cell_count)` — Host buffer → SSD
-2. 해당 slot의 `save_pending = false` 설정
-3. `cv.notify_all()` — 다음 save 대기 중인 eval_callback 깨움
-4. `m_stats.saves++`
-
-### 6.7 Prefetch / Save Orchestration
+### 6.8 Prefetch / Save Orchestration
 
 #### `queue_prefetch(model_layer)`
 
@@ -439,25 +491,40 @@ SSD → Host buffer 비동기 로딩을 큐에 추가.
 
 **중요**: 이 함수는 **메인 스레드에서만** 호출해야 한다 (`ggml_backend_tensor_set`이 GPU 동기화 필요).
 
-#### `save_layer_delta(model_layer, cell_start, cell_count)`
+#### `flush_saves()`
 
-1. `tensor_to_host_delta()` — GPU → Host (메인 스레드, 동기)
-2. SAVE 태스크를 I/O 큐에 push (비동기)
+Staging buffer에 쌓인 모든 dirty delta를 SSD에 동기적으로 기록.
+
+```
+if (!m_staging_dirty) return;
+for il = 0..L-1:
+    ssd_write_staging_delta(il)   // staging_buf[il] → SSD
+m_staging_dirty = false
+```
+
+`prepare_target_pass()` 시작 시 자동 호출. Delta 크기가 작으므로 L개 layer 전부 기록해도 매우 빠름.
+
+> **참고**: 이전에 존재하던 `save_layer_delta()`는 **제거**됨. host_buf 기반 비동기 SAVE 대신 staging_buf 기반 동기 flush로 교체.
 
 #### `prepare_target_pass()`
 
-Draft phase 시작 시 호출. 다음 target verification decode를 위해 **미리 prefetch 시작**.
+Draft phase 시작 시 호출. 다음 target verification을 위한 **전체 오케스트레이션**을 수행:
 
 1. `reset_layer_tracking()` — 이전 graph의 layer 추적 리셋
-2. Prefill 모드가 아니면: layers 0..m-1에 대해 `queue_prefetch()` 호출
+2. `flush_saves()` — staging delta를 SSD에 동기 기록
+3. layers 0..m-2에 대해 `queue_prefetch()` — SSD → Host 비동기 로딩 시작
+4. layers 0..m-2에 대해 `wait_and_load_layer()` — Host → GPU 동기 복사 (prefetch 완료 대기)
+5. layer m-1에 대해 `queue_prefetch()` — GPU가 layers 0..m-2를 처리하는 동안 비동기 로딩
 
-**왜 0..m-1만?** 이 layer들은 graph 실행 초반에 필요하다. layer m 이후는 eval_callback에서 실행 중 동적으로 prefetch가 큐잉된다.
+**왜 m-2까지 미리 로딩?** layers 0..m-2를 GPU에 올린 뒤, layer m-1은 비동기로 로딩 시작. GPU가 layer 0부터 실행하는 동안 layer m-1의 SSD→Host 전송이 완료되어 stall 없이 진행 가능.
+
+**Prefill 모드에서는**: `reset_layer_tracking()`만 수행하고 리턴 (SSD에 이전 데이터 없음).
 
 #### `on_verify_complete(n_accepted)`
 
 Target verification 완료 후 호출. `m_is_prefill = false` 설정. (첫 verify 이후부터 prefill 모드 해제)
 
-### 6.8 콜백 관련
+### 6.9 콜백 관련
 
 #### `set_user_callback(cb, data)`
 
@@ -523,59 +590,76 @@ GGML graph 스케줄러가 각 텐서 연산 전후에 이 콜백을 호출한�
 ├─ "kqv_out-{il}" (layer il 완료):
 │    │
 │    ├─ [Decode 모드] (m_is_prefill == false):
-│    │    ① save_pending 대기 (이전 SAVE가 host_buf 사용 중이면 기다림)
-│    │    ② save_pending = true (host_buf 잠금)
-│    │    ③ tensor_to_host_delta(il, slot, delta_head, delta_count)
-│    │       → GPU → Host buffer (delta만)
-│    │    ④ SAVE 태스크 큐잉 (Host → SSD, 비동기)
-│    │    ⑤ queue_prefetch(il + m)
-│    │       → il+m번째 layer (같은 slot을 다음에 사용할 layer) SSD→Host 예약
+│    │    ① capture_delta_to_staging(il, slot)
+│    │       → GPU tensor[slot] → staging_buf[il]  (delta만, 매우 빠름)
+│    │    ② m_staging_dirty = true
+│    │       m_staging_delta_head/count 업데이트
+│    │    ③ queue_prefetch(il + m)
+│    │       → il+m번째 layer SSD→Host 비동기 예약
+│    │    ④ wait_and_load_layer(il + 1)
+│    │       → Host → GPU (il+1번째 layer 데이터를 GPU 텐서에 적재)
 │    │
 │    ├─ [Prefill 모드] (m_is_prefill == true):
-│    │    ① save_pending 대기
-│    │    ② save_pending = true
-│    │    ③ tensor_to_host(il, slot)
-│    │       → GPU → Host buffer (전체)
-│    │    ④ SAVE 태스크 큐잉 (cell_start=0, cell_count=kv_size)
-│    │    ⑤ (prefetch 없음 — 다음 layer는 처음 계산되므로 load 불필요)
+│    │    ① tensor_to_host(il, slot)
+│    │       → GPU → host_buf (전체, 동기)
+│    │    ② ssd_write_full_layer(il, slot)
+│    │       → host_buf → SSD (전체, 동기)
+│    │    ③ (prefetch/load 없음 — 다음 layer는 처음 계산되므로 불필요)
 │    │
-│    └─ [공통] 다음 layer 로딩:
-│         if il+1 < L && !prefill:
-│             wait_and_load_layer(il + 1)
-│             → Host → GPU (il+1번째 layer 데이터를 GPU 텐서에 적재)
+│    └─ (Prefill은 SAVE 큐 미사용, Decode는 SSD 쓰기 미수행)
 │
 └─ 그 외: return true (무시)
 ```
 
+**핵심 변경**: Decode 모드에서 eval_callback은 **SSD I/O를 전혀 수행하지 않는다**. delta를 staging buffer에만 캡처하고, 실제 SSD 쓰기는 다음 `flush_saves()` 호출 시 일괄 처리. 이로써 eval_callback의 실행 시간이 크게 단축되고, I/O 워커는 LOAD에만 전념할 수 있다.
+
 ### 7.4 콜백 타이밍 시퀀스 (m=4, L=32, Decode 모드)
 
 ```
-prepare_target_pass() → queue LOAD(0), LOAD(1), LOAD(2), LOAD(3)
-wait_and_load_layer(0) → Host→GPU slot 0 (layer 0)
+prepare_target_pass():
+  flush_saves()            → staging → SSD (이전 verification의 delta 기록)
+  queue LOAD(0,1,2)        → SSD → Host buf (layers 0..m-2 = 0,1,2)
+  wait_and_load(0,1,2)     → Host buf → GPU tensor (동기)
+  queue LOAD(3)            → SSD → Host buf (layer m-1 = 3, 비동기)
 
-Graph 실행 시작:
-  Layer 0 attention → uses slot 0 ✓
+[Draft phase 실행 — 이 동안 layer 3의 LOAD가 비동기 진행]
+
+Graph 실행 시작 (Verification):
+  Layer 0 attention → uses slot 0 ✓ (이미 로딩됨)
   kqv_out-0 callback:
-    SAVE layer 0 delta (GPU→Host→SSD 비동기)
-    queue LOAD(4)
-    wait_and_load_layer(1) → Host→GPU slot 1 (layer 1)
+    capture_delta_to_staging(0, slot=0)  → GPU → staging_buf[0]  (delta만)
+    queue LOAD(4)                        → SSD → Host buf slot 0
+    wait_and_load_layer(1)               → slot 1 이미 로딩됨 (HIT)
   
   Layer 1 attention → uses slot 1 ✓
   kqv_out-1 callback:
-    SAVE layer 1 delta
+    capture_delta_to_staging(1, slot=1)
     queue LOAD(5)
-    wait_and_load_layer(2) → Host→GPU slot 2 (layer 2)
+    wait_and_load_layer(2) → HIT
+  
+  Layer 2 attention → uses slot 2 ✓
+  kqv_out-2 callback:
+    capture_delta_to_staging(2, slot=2)
+    queue LOAD(6)
+    wait_and_load_layer(3) → Host→GPU (LOAD(3)이 비동기로 완료되었으면 HIT)
+  
+  Layer 3 attention → uses slot 3 ✓
+  kqv_out-3 callback:
+    capture_delta_to_staging(3, slot=3)
+    queue LOAD(7)
+    wait_and_load_layer(4) → Host→GPU (LOAD(4) 완료 대기)
   
   ...계속...
   
-  Layer 31 attention → uses slot 3 ✓
-  kqv_out-31 callback:
-    SAVE layer 31 delta
-    (layer 32 없으므로 prefetch 없음)
+  Layer 31 kqv_out-31 callback:
+    capture_delta_to_staging(31, slot=3)
+    (layer 35 없으므로 prefetch 없음)
     (layer 32 없으므로 load 없음)
   
   result_norm callback:
     cb_get_hidden → hidden state 추출 → cb_data.data에 저장
+
+[다음 prepare_target_pass()에서 flush_saves()가 staging → SSD 기록]
 ```
 
 ---
@@ -627,50 +711,53 @@ offloader->set_prefill(true);                               // (1)
 
 // 프롬프트의 처음 ~ 마지막-1번째 토큰을 한 번에 decode
 llama_decode(ctx_tgt, temp_batch_tgt);                      // (2)
-// → eval_callback이 각 layer의 전체 KV를 SSD에 저장
+// → eval_callback이 각 layer마다:
+//     tensor_to_host() → ssd_write_full_layer()  (동기, 전체)
 // → result_norm 콜백으로 hidden state 추출 → sliced_data
 
 offloader->set_prefill(false);                              // (3)
 offloader->prepare_target_pass();                           // (4)
-offloader->wait_and_load_layer(0);                          // (5)
+// → flush_saves() (staging 비어있으므로 no-op)
+// → prefetch layers 0..m-2 → wait_and_load → GPU에 로딩
+// → queue prefetch layer m-1 (비동기)
 
 // 마지막 토큰 decode (1개 토큰)
-llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1)); // (6)
+llama_decode(ctx_tgt, llama_batch_get_one(&inp.back(), 1)); // (5)
 // → eval_callback이 decode 모드로 동작:
-//   각 layer: delta save → prefetch next → load next
+//   각 layer: capture_delta_to_staging → prefetch next → load next
 // → backup_data에 hidden state 저장
 
 // Draft 모델 prefill
-llama_decode_eagle(ctx_dft, ..., sliced_data.data());       // (7)
+llama_decode_eagle(ctx_dft, ..., sliced_data.data());       // (6)
 ```
 
 **단계별 설명:**
 
-1. Prefill 모드 켜기: eval_callback이 전체 tensor를 저장하고, next layer load를 건너뜀 (처음이라 모든 layer가 fresh compute)
+1. Prefill 모드 켜기: eval_callback이 `tensor_to_host()` + `ssd_write_full_layer()`로 전체 layer를 동기 저장. next layer load 건너뜀.
 2. Target 모델 prefill decode. 각 layer 실행 후 eval_callback이 KV 데이터를 SSD에 저장.
    - Prefill 완료 후, GPU slot에는 **마지막으로 각 slot을 사용한 layer의 데이터**가 남아있음 (예: slot 0 = layer 28의 데이터)
-3. Decode 모드 전환. 이후부터 eval_callback은 delta save + next layer load 수행.
-4. `prepare_target_pass()`: layers 0..m-1의 SSD→Host prefetch를 비동기로 시작
-5. `wait_and_load_layer(0)`: layer 0의 prefetch 완료를 기다리고 Host→GPU 복사. 이제 slot 0에는 layer 0의 올바른 데이터가 있음.
-6. 마지막 토큰 decode. eval_callback이 layer별 save/load를 수행하여 모든 layer를 올바르게 처리.
-7. Draft 모델 prefill (EAGLE의 hidden state 전달)
+3. Decode 모드 전환. 이후부터 eval_callback은 staging capture + next layer load 수행.
+4. `prepare_target_pass()`: 한 번에 flush + prefetch 0..m-2 + wait + load + queue m-1. 이제 layers 0..m-2가 GPU에 로딩됨.
+5. 마지막 토큰 decode. eval_callback이 layer별 staging capture/load를 수행.
+6. Draft 모델 prefill (EAGLE의 hidden state 전달)
 
 ### 8.4 Verification Loop
 
 ```cpp
-// target verification decode 전:
-offloader->wait_and_load_layer(0);         // layer 0 GPU에 로딩
+// target verification decode:
+// layers 0..m-2는 prepare_target_pass()에서 이미 GPU에 로딩됨
 llama_decode(ctx_tgt, batch_tgt);          // target 모델 decode
-// → eval_callback이 layer별 save/load 처리
+// → eval_callback이 layer별 staging capture / prefetch / load 처리
 // → result_norm → cb_get_hidden → cb_data.data
 backup_data = cb_data.data;                // hidden state 백업
 ```
 
+> **참고**: 이전에는 `wait_and_load_layer(0)`을 별도로 호출했으나, 이제 `prepare_target_pass()`가 layers 0..m-2를 모두 GPU에 로딩하므로 불필요.
+
 ### 8.5 Recompute (Verification 후 Draft 재계산)
 
 ```cpp
-offloader->reset_layer_tracking();
-offloader->prepare_target_pass();          // 다음 verification용 prefetch 시작
+offloader->prepare_target_pass();          // flush + prefetch + load + queue
 
 // Draft KV cache 정리
 llama_memory_seq_keep(mem_dft, s_keep);    // accepted 시퀀스만 보존
@@ -689,7 +776,12 @@ if (i_dft > 0) {
 llama_decode_eagle(ctx_dft, batch_dft, temp3.data());
 ```
 
-**`prepare_target_pass()`가 recompute 앞에 호출되는 이유**: Draft 모델 recompute에는 시간이 걸린다. 이 시간 동안 I/O 워커가 layers 0..m-1을 SSD에서 Host로 비동기 로딩할 수 있다. Draft phase(tree decoding)가 끝나고 target verification이 시작될 때 이미 prefetch가 완료되어 있을 가능성이 높다.
+**`prepare_target_pass()`의 역할**: 
+1. `flush_saves()` — 이전 verification의 staging delta를 SSD에 동기 기록
+2. layers 0..m-2 prefetch + wait + GPU 로딩 — verification 전에 완료
+3. layer m-1 prefetch 큐잉 — draft phase 동안 비동기 진행
+
+> **참고**: 이전에는 `reset_layer_tracking()`을 별도로 호출했으나, 이제 `prepare_target_pass()` 내부에서 자동 호출.
 
 ---
 
@@ -760,7 +852,7 @@ for each depth i = 0..n_draft-1:
 
 ---
 
-## 10. Delta Save 최적화
+## 10. Delta Save 최적화 (Staging Buffer 방식)
 
 ### 10.1 왜 필요한가
 
@@ -776,42 +868,50 @@ llama_kv_cache_context::apply()
        → m_delta_head, m_delta_count 설정
 
 eval_callback (kqv_out-{il}):
-  └─ tensor_to_host_delta(il, slot, m_delta_head, m_delta_count)
-       → GPU의 delta 영역만 Host buffer에 복사
-  └─ ssd_write_delta(il, slot, m_delta_head, m_delta_count)
-       → Host buffer의 delta 영역만 SSD에 기록
+  └─ capture_delta_to_staging(il, slot)
+       → GPU tensor[slot]의 delta 영역만 staging_buf[il]에 compact 복사
+       → m_staging_dirty = true
+       → m_staging_delta_head/count 업데이트
+
+prepare_target_pass() (다음 draft phase 시작 시):
+  └─ flush_saves()
+       → for il = 0..L-1: ssd_write_staging_delta(il)
+       → staging_buf[il]의 compact delta를 SSD의 올바른 offset에 기록
 ```
 
-### 10.3 V 전치 (v_trans=true) 시 특수 처리
+### 10.3 이전 방식과의 차이
 
-V가 전치되면 레이아웃이 `[n_embd_v, kv_size]`이다. cell `c`의 데이터가 embedding 차원마다 `kv_size`간격으로 분산되어 있어, delta 슬라이스 추출이 복잡하다.
+| 항목 | 이전 (host_buf 기반) | 현재 (staging_buf 기반) |
+|------|---------------------|----------------------|
+| GPU→CPU 복사 대상 | `host_buf[slot]` (full-layer 크기) | `staging_buf[il]` (delta 크기) |
+| GPU→CPU 복사 함수 | `tensor_to_host_delta()` | `capture_delta_to_staging()` |
+| SSD 쓰기 시점 | eval_callback 내 (비동기 I/O 큐) | `flush_saves()` (동기, draft phase 시작) |
+| SSD 쓰기 함수 | `ssd_write_delta()` (워커 스레드) | `ssd_write_staging_delta()` (메인 스레드) |
+| host_buf 경합 | save_pending으로 LOAD와 경합 | 경합 없음 (독립 버퍼) |
+| I/O 큐 경합 | SAVE가 LOAD를 블로킹 | LOAD 전용 큐 |
 
-- **GPU → Host** (`tensor_to_host_delta`): V 전체 복사 (한 번의 큰 DMA가 n_embd_v번의 작은 DMA보다 효율적)
-- **Host → SSD** (`ssd_write_delta`): embedding 차원별로 delta cell 영역만 기록 (총 n_embd_v번의 pwrite)
-- **SSD → Host** (`ssd_read_layer`): 항상 전체 읽기
+### 10.4 V 전치 (v_trans=true) 시 특수 처리
+
+**현재 상태**: v_trans=true에서의 staging delta는 **TODO**로 남겨놓았다. `flash_attn=true` (즉 `v_trans=false`)를 사용하는 것을 전제로 구현.
+
+V가 전치되면 레이아웃이 `[n_embd_v, kv_size]`이다. cell `c`의 데이터가 embedding 차원마다 `kv_size`간격으로 분산되어 있어, staging buffer에 compact하게 복사하기 어렵다.
+
+- **Prefill** (`tensor_to_host` + `ssd_write_full_layer`): V 전체 복사 → 전체 기록 (문제없음)
+- **Decode staging**: **미구현** — `capture_delta_to_staging()`과 `ssd_write_staging_delta()`가 non-transposed V만 지원
+- **SSD → Host** (`ssd_read_layer`): 항상 전체 읽기 (문제없음)
 
 ---
 
 ## 11. 동기화 메커니즘
 
-### 11.1 save_pending 플래그
+### 11.1 save_pending 제거
+
+이전 설계에서는 `save_pending` 플래그로 host_buf의 SAVE/LOAD 경합을 관리했다. 새 설계에서는 **SAVE가 staging_buf를 사용**하므로 host_buf 경합이 없어졌고, `save_pending`은 **완전히 제거**됨.
 
 ```
-eval_callback(kqv_out-{il}):
-  1. WAIT: cv.wait(lock, [&] { return !save_pending; })
-     → 이전 SAVE가 host_buf를 사용 중이면 대기
-  2. save_pending = true
-     → host_buf 잠금 (이제 tensor_to_host_delta가 host_buf에 쓸 수 있음)
-  3. tensor_to_host_delta() → host_buf에 GPU 데이터 복사
-  4. SAVE 태스크 큐잉
-
-execute_save() (워커 스레드):
-  1. ssd_write_delta() → host_buf 읽기 → SSD 기록
-  2. save_pending = false → host_buf 잠금 해제
-  3. cv.notify_all()
+이전: eval_callback → save_pending 대기 → tensor_to_host_delta(host_buf) → SAVE 큐잉
+현재: eval_callback → capture_delta_to_staging(staging_buf) → (SSD I/O 없음, 즉시 리턴)
 ```
-
-**왜 필요한가**: 같은 slot을 두 layer가 연속으로 사용할 때 (예: layer 0 → layer 4), layer 0의 SAVE가 host_buf에서 SSD로 기록하는 동안 layer 4의 eval_callback이 host_buf를 덮어쓰면 데이터 손상.
 
 ### 11.2 prefetch_pending / prefetch_complete 플래그
 
@@ -832,13 +932,29 @@ wait_and_load_layer(layer):
   resident_layer = layer
 ```
 
-### 11.3 I/O 큐 동기화
+### 11.3 I/O 큐 동기화 (LOAD 전용)
 
 ```
 m_io_mutex + m_io_cv:
   - 큐잉: lock(m_io_mutex) → push → notify_one
-  - 워커: wait(m_io_cv, [&] { !queue.empty() || shutdown }) → pop → 처리
+  - 워커: wait(m_io_cv, [&] { !queue.empty() || shutdown }) → pop → execute_load
 ```
+
+SAVE 태스크가 큐에 들어가지 않으므로, LOAD prefetch가 SAVE에 의해 블로킹되는 문제가 해결됨.
+
+### 11.4 flush_saves 동기화
+
+`flush_saves()`는 메인 스레드에서 동기적으로 실행. `prepare_target_pass()` 시작 시 호출되므로, verification 이전에 모든 delta가 SSD에 기록됨이 보장됨.
+
+```
+prepare_target_pass() (메인 스레드):
+  flush_saves()           ← staging → SSD (동기, L × pwrite)
+  queue_prefetch(0..m-2)  ← LOAD 큐잉
+  wait_and_load(0..m-2)   ← prefetch 완료 대기 + Host→GPU
+  queue_prefetch(m-1)     ← 비동기 시작
+```
+
+flush가 완료된 후에 prefetch가 시작되므로, SSD에는 항상 최신 delta가 반영된 상태에서 읽기가 수행된다.
 
 ---
 
@@ -848,13 +964,13 @@ m_io_mutex + m_io_cv:
 
 Prefill 완료 후 각 GPU slot에는 **마지막으로 해당 slot을 사용한 layer의 데이터**가 남아있다 (예: m=4이면 slot 0에 layer 28 데이터).
 
-**해결**: `set_prefill(false)` → `prepare_target_pass()` → `wait_and_load_layer(0)` 순서로 호출하여 slot 0에 layer 0의 올바른 데이터를 로딩.
+**해결**: `set_prefill(false)` → `prepare_target_pass()` 호출. `prepare_target_pass()`가 내부적으로 layers 0..m-2를 prefetch + wait + GPU 로딩까지 모두 처리.
 
-### 12.2 v_trans=true에서의 SSD Write Overhead
+### 12.2 v_trans=true 미지원 (TODO)
 
-V 전치 상태에서 `ssd_write_delta()`가 embedding 차원마다 별도 `pwrite()`를 호출 (총 n_embd_v회). n_embd_v가 크면(예: 4096) 시스템 콜 overhead 발생.
+현재 staging buffer 기반 delta 처리 (`capture_delta_to_staging`, `ssd_write_staging_delta`)는 **v_trans=false (flash_attn=true) 전용**으로 구현됨. v_trans=true 환경에서는 V 데이터의 전치 레이아웃 때문에 staging에 compact 복사가 어려움.
 
-**잠재적 개선**: host buffer에서 delta 영역을 연속 버퍼로 재배치한 뒤 한 번에 pwrite, 또는 vectored I/O (`writev`) 사용.
+**대응**: `--flash-attn` 옵션으로 flash attention을 활성화하여 사용. v_trans staging 지원은 향후 TODO.
 
 ### 12.3 output_norm 공유 미구현
 
@@ -878,11 +994,11 @@ size_t v_sz = m_ssd_layers[0].v_total_bytes;
 
 **가정**: 모든 layer의 K, V 크기가 동일 (LLaMA 계열에서 성립). 다른 아키텍처에서는 layer별 크기가 다를 수 있으므로 max를 사용해야 할 수 있음.
 
-### 12.5 단일 I/O 워커 스레드
+### 12.5 단일 I/O 워커 스레드 (LOAD 전용)
 
-현재 I/O 워커가 1개이므로 SAVE와 LOAD가 직렬 처리. SAVE가 많으면 후속 LOAD가 지연될 수 있다.
+I/O 워커는 이제 **LOAD 전용**이므로 이전의 SAVE/LOAD 경합 문제는 해결됨. SAVE는 `flush_saves()`가 메인 스레드에서 동기 처리.
 
-**잠재적 개선**: SAVE/LOAD 별도 큐 + 별도 워커, 또는 우선순위 큐 (LOAD 우선).
+**잠재적 개선**: 여러 layer의 LOAD를 병렬화하려면 멀티 워커 또는 `io_uring` 등 비동기 I/O 사용 가능.
 
 ### 12.6 SSD 파일 재사용
 
@@ -923,6 +1039,7 @@ SSD 파일은 `O_CREAT`으로 열지만 이전 실행의 데이터가 남아있�
 KV offloading: 4 pool slots, dir: ./kv_dir, tree-budget: 7
 [KV-Offload] Initializing: 4 pool slots, 32 total layers, kv_size=8192
 [KV-Offload] Allocated 4 host buffers (64.00 MB each)
+[KV-Offload] Allocated 32 staging buffers (1.00 MB total, max 128 tokens)
 [KV-Offload] Ready. Per-layer K size: 32.00 MB, V size: 32.00 MB
 KV offloader installed: 4 pool slots / 32 model layers
 LM head sharing: OK
