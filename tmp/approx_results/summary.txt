@@ -1,0 +1,13 @@
+/home/chokwans99/dev/llm/specinfer.cpp/tmp/approx_results/plot_tbt.py:100: MatplotlibDeprecationWarning: The 'labels' parameter of boxplot() has been renamed 'tick_labels' since Matplotlib 3.9; support for the old name will be dropped in 3.11.
+  bp = ax2.boxplot(data, labels=[l.split()[0] + ("\n" + l.split()[1] if len(l.split()) > 1 else "") for l in labels],
+wrote /home/chokwans99/dev/llm/specinfer.cpp/tmp/approx_results/tbt_timeseries.png
+wrote /home/chokwans99/dev/llm/specinfer.cpp/tmp/approx_results/cumulative_decode.png
+wrote /home/chokwans99/dev/llm/specinfer.cpp/tmp/approx_results/tbt_distribution.png
+
+==== summary ====
+run                                 TPS  avg_len   mean_tbt   std_tbt   max_tbt
+baseline (exact greedy, eagle-2)   11.511    2.926    114.401    64.144   259.639
+approx k=1 (= exact)             11.271    2.870    113.232    63.256   278.186
+approx k=2                       13.911    3.500     90.139    52.975   261.523
+approx k=3                       13.752    3.491     93.113    57.872   274.782
+approx k=5                       12.927    3.275     96.761    54.985   261.010

@@ -1,0 +1,124 @@
+=========== prompt 01 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 02 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 03 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 04 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 05 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 06 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 07 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 08 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 09 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 10 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 11 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 12 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 13 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 14 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 15 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 16 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 17 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 18 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 19 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+=========== prompt 20 ===========
+-- baseline
+-- approx k1
+-- approx k2
+-- approx k3
+-- approx k5
+
+pulling TBT CSVs from device...
+/data/local/tmp/chokwans99/executorch/QNN_test/tbt_out/gsm8k/: 100 files pulled. 0.6 MB/s (116440 bytes in 0.186s)
+done.
